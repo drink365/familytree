@@ -18,6 +18,7 @@
 #    第二與第三順位之代位繼承等進階狀況。請依實務需求再擴充 InheritanceRuleTW 類別。
 # 3) 本工具僅供教學與規劃初稿參考，不構成法律意見。
 
+
 import json
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
