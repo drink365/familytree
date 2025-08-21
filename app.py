@@ -1,8 +1,7 @@
-# app.py（簡化輸入 + 自動遷移修正版）
-# 重點：
-# - 使用者只輸入「名字/性別」，ID 自動產生；婚姻/親子用名字選取
-# - 台灣民法：僅直系卑親屬代位；配偶為當然繼承人
-# - 自動遷移：若 session_state 裡是舊版 FamilyDB（沒有 name_index），自動轉成新版
+# app.py（簡化輸入 + 自動遷移 + 修正 pyvis 顯示）
+# 變更重點：
+# - 將 net.show(tmp.name) 改為 net.write_html(tmp.name, notebook=False)
+# - 其餘功能維持：免ID輸入、以名字操作、JSON 匯入/匯出、台灣民法繼承（僅直系卑親屬代位）
 
 import json
 from datetime import date, datetime
@@ -140,7 +139,7 @@ class InheritanceRuleTW:
     def __init__(self, db: FamilyDB):
         self.db = db
 
-    def get_heirs(self, decedent_id: str, dod: str):
+    def get_heirs(self, decedent_id: str, dod: str) -> Tuple[pd.DataFrame, str]:
         ddate = datetime.strptime(dod, "%Y-%m-%d").date()
         if decedent_id not in self.db.persons:
             return pd.DataFrame(), "找不到被繼承人"
@@ -197,7 +196,8 @@ class InheritanceRuleTW:
             note.append("配偶為當然繼承人（依民法）")
         return df, "；".join(note)
 
-    def _find_first_order_group(self, decedent_id: str, ddate: date):
+    # helpers
+    def _find_first_order_group(self, decedent_id: str, ddate: date) -> Tuple[List[str], str]:
         branches = self._descendant_branches(decedent_id, ddate)
         if sum(len(b) for b in branches) > 0:
             return list({pid for b in branches for pid in b.keys()}), "第一順位"
@@ -212,7 +212,7 @@ class InheritanceRuleTW:
             return grands, "第四順位"
         return [], ""
 
-    def _descendant_branches(self, decedent_id: str, ddate: date):
+    def _descendant_branches(self, decedent_id: str, ddate: date) -> List[Dict[str, float]]:
         children = self.db.children_of(decedent_id)
         branches = []
         for c in children:
@@ -224,20 +224,20 @@ class InheritanceRuleTW:
                     branches.append(sub)
         return branches
 
-    def _alive_descendants_weights(self, pid: str, ddate: date):
+    def _alive_descendants_weights(self, pid: str, ddate: date) -> Dict[str, float]:
         kids = self.db.children_of(pid)
         alive = [k for k in kids if self.db.persons[k].alive_on(ddate)]
         if alive:
             w = 1 / len(alive)
             return {k: w for k in alive}
-        result = {}
+        result: Dict[str, float] = {}
         for k in kids:
             sub = self._alive_descendants_weights(k, ddate)
             for p, w in sub.items():
                 result[p] = result.get(p, 0) + w / max(1, len(kids))
         return result
 
-    def _siblings_alive(self, decedent_id: str, ddate: date):
+    def _siblings_alive(self, decedent_id: str, ddate: date) -> List[str]:
         parents = self.db.parents_of(decedent_id)
         sibs = set()
         for par in parents:
@@ -246,7 +246,7 @@ class InheritanceRuleTW:
                     sibs.add(c)
         return list(sibs)
 
-    def _grandparents_alive(self, decedent_id: str, ddate: date):
+    def _grandparents_alive(self, decedent_id: str, ddate: date) -> List[str]:
         grands = set()
         for p in self.db.parents_of(decedent_id):
             for gp in self.db.parents_of(p):
@@ -257,18 +257,18 @@ class InheritanceRuleTW:
 # ------------------ UI（含自動遷移） ------------------
 st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
 
-# 1) 讀取 / 建立資料庫
+# 讀取 / 建立資料庫
 if "db" not in st.session_state:
     st.session_state.db = FamilyDB()
 db = st.session_state.db
 
-# 2) 🔧 自動遷移：舊版 FamilyDB 轉新版（補 name_index 等方法）
+# 自動遷移：若 session 裡是舊版 FamilyDB（沒有 name_index），自動轉新版
 if not hasattr(db, "name_index"):
     try:
-        old_json = db.to_json()  # 先把舊資料撈出來
+        old_json = db.to_json()
     except Exception:
         old_json = {"persons": {}, "marriages": {}, "links": {}}
-    st.session_state.db = FamilyDB.from_json(old_json)  # 轉成新版 class
+    st.session_state.db = FamilyDB.from_json(old_json)
     db = st.session_state.db
 
 st.title("🌳 家族樹 + 法定繼承人（台灣民法・簡化輸入版）")
@@ -416,7 +416,7 @@ with tab3:
                 st.success(memo or "計算完成")
                 st.dataframe(df)
 
-# --- Tab4：家族樹 ---
+# --- Tab4：家族樹（已修正 pyvis 顯示）---
 with tab4:
     st.subheader("家族樹（互動視圖）")
     if not db.persons:
@@ -441,7 +441,8 @@ with tab4:
             if e.get("relation") == "marriage":
                 e["dashes"] = True
 
+        # ✅ 關鍵修正：用 write_html(notebook=False) 取代 show()
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-            net.show(tmp.name)
+            net.write_html(tmp.name, notebook=False)  # 這行取代原本的 net.show(tmp.name)
             html = open(tmp.name, "r", encoding="utf-8").read()
             st.components.v1.html(html, height=680, scrolling=True)
