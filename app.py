@@ -1,8 +1,4 @@
-# app.py（簡化輸入 + 自動遷移 + 修正 pyvis 顯示）
-# 變更重點：
-# - 將 net.show(tmp.name) 改為 net.write_html(tmp.name, notebook=False)
-# - 其餘功能維持：免ID輸入、以名字操作、JSON 匯入/匯出、台灣民法繼承（僅直系卑親屬代位）
-
+# app.py（簡化輸入 + 自動遷移 + 家族樹修正 + 診斷工具）
 import json
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
@@ -20,7 +16,7 @@ except ModuleNotFoundError as e:
     st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
     st.title("🌳 家族樹 + 法定繼承人（台灣民法・MVP）")
     st.error(
-        f"❗ 缺少套件：{e.name}\n請確認 requirements.txt 並於 Manage app → Restart 重建（建議 Python 3.11）。"
+        f"❗ 缺少套件：{e.name}\n請確認 requirements.txt 並於 Manage app → App actions → Restart（建議 Python 3.11）。"
     )
     st.stop()
 
@@ -254,13 +250,13 @@ class InheritanceRuleTW:
                     grands.add(gp)
         return list(grands)
 
-# ------------------ UI（含自動遷移） ------------------
+# ------------------ UI（含自動遷移 + 診斷） ------------------
 st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
 
 # 讀取 / 建立資料庫
 if "db" not in st.session_state:
     st.session_state.db = FamilyDB()
-db = st.session_state.db
+db: FamilyDB = st.session_state.db
 
 # 自動遷移：若 session 裡是舊版 FamilyDB（沒有 name_index），自動轉新版
 if not hasattr(db, "name_index"):
@@ -274,21 +270,54 @@ if not hasattr(db, "name_index"):
 st.title("🌳 家族樹 + 法定繼承人（台灣民法・簡化輸入版）")
 
 with st.sidebar:
-    st.header("資料維護 / 匯入匯出")
+    st.header("資料維護 / 匯入匯出 / 診斷")
 
+    # 診斷：即時計數
+    p_cnt = len(db.persons)
+    m_cnt = len(db.marriages)
+    l_cnt = len(db.links)
+    st.info(f"目前資料：人物 {p_cnt}｜婚姻 {m_cnt}｜親子 {l_cnt}")
+
+    # 一鍵載入示範資料（避免您手動重建）
+    if st.button("🧪 一鍵載入示範資料"):
+        demo = {
+            "persons": {
+                "p1": {"pid":"p1","name":"爸爸","gender":"male"},
+                "p2": {"pid":"p2","name":"媽媽","gender":"female"},
+                "p3": {"pid":"p3","name":"大兒子","gender":"male"},
+                "p4": {"pid":"p4","name":"小兒子","gender":"male"},
+                "p5": {"pid":"p5","name":"女兒","gender":"female"}
+            },
+            "marriages": {
+                "m1": {"mid":"m1","a":"p1","b":"p2","start":None,"end":None,"status":"married"}
+            },
+            "links": {
+                "c1":{"cid":"c1","parent":"p1","child":"p3"},
+                "c2":{"cid":"c2","parent":"p2","child":"p3"},
+                "c3":{"cid":"c3","parent":"p1","child":"p4"},
+                "c4":{"cid":"c4","parent":"p2","child":"p4"},
+                "c5":{"cid":"c5","parent":"p1","child":"p5"},
+                "c6":{"cid":"c6","parent":"p2","child":"p5"}
+            }
+        }
+        st.session_state.db = FamilyDB.from_json(demo)
+        st.success("✅ 已載入示範資料")
+        st.rerun()
+
+    # 匯入 JSON
     up = st.file_uploader("匯入 JSON（family.json）", type=["json"])
     if up:
         try:
             obj = json.load(up)
             st.session_state.db = FamilyDB.from_json(obj)
-            db = st.session_state.db
-            st.success("✅ 已匯入！")
+            st.success("✅ 已匯入！將刷新畫面")
+            st.rerun()  # 立即刷新，避免匯入後畫面仍顯示舊資料
         except Exception as e:
             st.error(f"匯入失敗：{e}")
 
+    # 匯出 JSON
     exp = json.dumps(db.to_json(), ensure_ascii=False, indent=2)
-    st.download_button("下載 JSON 備份", data=exp, file_name="family.json", mime="application/json")
-
+    st.download_button("📥 下載 JSON 備份", data=exp, file_name="family.json", mime="application/json")
     st.caption("提示：名字建議保持唯一。若重名，系統會以最後更新者為準（簡化版）。")
 
 tab1, tab2, tab3, tab4 = st.tabs(["👤 人物（免ID）", "🔗 關係（選名字）", "🧮 法定繼承試算", "🗺️ 家族樹"])
@@ -296,24 +325,22 @@ tab1, tab2, tab3, tab4 = st.tabs(["👤 人物（免ID）", "🔗 關係（選�
 # --- Tab1：人物 ---
 with tab1:
     st.subheader("新增人物（免ID）")
-    col1, col2 = st.columns([2,1])
-    with col1:
-        name = st.text_input("姓名 *")
-        gender = st.selectbox("性別", ["unknown", "female", "male"], index=0)
-        birth = st.text_input("出生日 YYYY-MM-DD（可空）", value="")
-        death = st.text_input("死亡日 YYYY-MM-DD（可空）", value="")
-        note = st.text_area("備註（可空）", value="")
-        if st.button("➕ 新增 / 覆蓋人物", type="primary"):
-            if not name.strip():
-                st.error("請輸入姓名")
+    name = st.text_input("姓名 *")
+    gender = st.selectbox("性別", ["unknown", "female", "male"], index=0)
+    birth = st.text_input("出生日 YYYY-MM-DD（可空）", value="")
+    death = st.text_input("死亡日 YYYY-MM-DD（可空）", value="")
+    note = st.text_area("備註（可空）", value="")
+    if st.button("➕ 新增 / 覆蓋人物", type="primary"):
+        if not name.strip():
+            st.error("請輸入姓名")
+        else:
+            idx = db.name_index()
+            if name in idx:
+                pid = idx[name]
             else:
-                idx = db.name_index()
-                if name in idx:
-                    pid = idx[name]
-                else:
-                    pid = new_id("p", name, set(db.persons.keys()))
-                db.upsert_person(Person(pid, name.strip(), gender, birth or None, death or None, note))
-                st.success(f"已儲存人物：{name}（ID: {pid}）")
+                pid = new_id("p", name, set(db.persons.keys()))
+            db.upsert_person(Person(pid, name.strip(), gender, birth or None, death or None, note))
+            st.success(f"已儲存人物：{name}（ID: {pid}）")
 
     st.markdown("—")
     if db.persons:
@@ -402,7 +429,7 @@ with tab3:
     st.subheader("法定繼承人試算（僅直系卑親屬代位）")
     names = list(db.name_index().keys())
     if not names:
-        st.info("請先在前兩個分頁新增人物與關係。")
+        st.info("請先在前兩個分頁新增人物與關係，或在側邊欄按『一鍵載入示範資料』。")
     else:
         pick_name = st.selectbox("被繼承人（選名字）", options=sorted(names))
         dod = st.text_input("死亡日 YYYY-MM-DD", value=str(date.today()))
@@ -416,12 +443,13 @@ with tab3:
                 st.success(memo or "計算完成")
                 st.dataframe(df)
 
-# --- Tab4：家族樹（已修正 pyvis 顯示）---
+# --- Tab4：家族樹（階層式視圖，防止空白）---
 with tab4:
     st.subheader("家族樹（互動視圖）")
     if not db.persons:
-        st.info("尚無資料。")
+        st.info("尚無資料。請先建立人物/關係或在側邊欄按『一鍵載入示範資料』。")
     else:
+        # 1) 建圖
         G = nx.DiGraph()
         for p in db.persons.values():
             label = p.name
@@ -435,14 +463,32 @@ with tab4:
         for m in db.marriages.values():
             G.add_edge(m.a, m.b, relation="marriage")
 
+        # 2) 轉 pyvis，啟用階層式版面（由上到下），關閉物理引擎避免漂移
         net = Network(height="650px", width="100%", directed=True, notebook=False)
         net.from_nx(G)
+        # 婚姻改虛線
         for e in net.edges:
             if e.get("relation") == "marriage":
                 e["dashes"] = True
+        # 階層式設定（關鍵）
+        net.set_options("""
+        var options = {
+          layout: {
+            hierarchical: {
+              enabled: true,
+              direction: 'UD',
+              levelSeparation: 120,
+              nodeSpacing: 160,
+              treeSpacing: 200,
+              sortMethod: 'hubsize'
+            }
+          },
+          physics: { enabled: false }
+        }
+        """)
 
-        # ✅ 關鍵修正：用 write_html(notebook=False) 取代 show()
+        # 3) 以 write_html(notebook=False) 產生並內嵌
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-            net.write_html(tmp.name, notebook=False)  # 這行取代原本的 net.show(tmp.name)
+            net.write_html(tmp.name, notebook=False)
             html = open(tmp.name, "r", encoding="utf-8").read()
-            st.components.v1.html(html, height=680, scrolling=True)
+            st.components.v1.html(html, height=700, scrolling=True)
