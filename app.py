@@ -1,4 +1,4 @@
-# app.py（簡化輸入 + 自動遷移 + 家族樹修正 + 診斷工具）
+# app.py（簡化輸入 + 自動遷移 + 家族樹修正 + 診斷工具 + 安全 JSON options）
 import json
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
@@ -311,7 +311,7 @@ with st.sidebar:
             obj = json.load(up)
             st.session_state.db = FamilyDB.from_json(obj)
             st.success("✅ 已匯入！將刷新畫面")
-            st.rerun()  # 立即刷新，避免匯入後畫面仍顯示舊資料
+            st.rerun()
         except Exception as e:
             st.error(f"匯入失敗：{e}")
 
@@ -443,7 +443,7 @@ with tab3:
                 st.success(memo or "計算完成")
                 st.dataframe(df)
 
-# --- Tab4：家族樹（階層式視圖，防止空白）---
+# --- Tab4：家族樹（階層式視圖，使用 json.dumps 產生 options）---
 with tab4:
     st.subheader("家族樹（互動視圖）")
     if not db.persons:
@@ -463,31 +463,31 @@ with tab4:
         for m in db.marriages.values():
             G.add_edge(m.a, m.b, relation="marriage")
 
-        # 2) 轉 pyvis，啟用階層式版面（由上到下），關閉物理引擎避免漂移
+        # 2) 轉 pyvis
         net = Network(height="650px", width="100%", directed=True, notebook=False)
         net.from_nx(G)
         # 婚姻改虛線
         for e in net.edges:
             if e.get("relation") == "marriage":
                 e["dashes"] = True
-        # ✅ 使用「純 JSON」字串設定（pyvis 需要 json.loads 可解析）
-        net.set_options("""
-{
-  "layout": {
-    "hierarchical": {
-      "enabled": true,
-      "direction": "UD",
-      "levelSeparation": 120,
-      "nodeSpacing": 160,
-      "treeSpacing": 200,
-      "sortMethod": "hubsize"
-    }
-  },
-  "physics": { "enabled": false }
-}
-""")
 
-        # 3) 以 write_html(notebook=False) 產生並內嵌（避免 show() 在雲端炸掉）
+        # ✅ 用 Python dict → json.dumps，避免 JSONDecodeError
+        options = {
+            "layout": {
+                "hierarchical": {
+                    "enabled": True,
+                    "direction": "UD",
+                    "levelSeparation": 120,
+                    "nodeSpacing": 160,
+                    "treeSpacing": 200,
+                    "sortMethod": "hubsize"
+                }
+            },
+            "physics": {"enabled": False}
+        }
+        net.set_options(json.dumps(options))
+
+        # 3) 以 write_html(notebook=False) 產生並內嵌
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
             net.write_html(tmp.name, notebook=False)
             html = open(tmp.name, "r", encoding="utf-8").read()
