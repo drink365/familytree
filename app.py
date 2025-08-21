@@ -7,8 +7,8 @@
 # - 圖形化家族樹（networkx + pyvis）
 # - 匯出 / 匯入 JSON（便於版本控管）
 #
-# 重要說明：
-# 1) 本版以台灣民法一般情境為主，配偶為當然繼承人；順位：直系卑親屬 > 父母 > 兄弟姊妹 > 祖父母。
+# 說明：
+# 1) 規則（簡化）：配偶為當然繼承人；順位：直系卑親屬 > 父母 > 兄弟姊妹 > 祖父母。
 #    配偶應繼分：與第一順位等分；與第二/第三為 1/2；與第四為 2/3；若無其他順位則全數。
 #    代位：先實作第一順位的按支分配（per stirpes）。
 # 2) 未涵蓋：喪失繼承權、特留分、遺囑/遺贈、夫妻剩餘財產、遺產債務、收養細節、旁系代位等。
@@ -21,19 +21,21 @@ import streamlit as st
 import pandas as pd
 import tempfile
 
-# 友善的套件檢查（避免沒有安裝 requirements 時直接白屏）
+# 友善的套件檢查（避免少裝套件時一片空白）
 try:
     import networkx as nx
     from pyvis.network import Network
 except ModuleNotFoundError as e:
+    st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
+    st.title("🌳 家族樹 + 法定繼承人（台灣民法・MVP）")
     st.error(
-        "❗缺少必要套件："
-        f"{e.name}\n\n"
+        "❗ 缺少必要套件："
+        f"`{e.name}`。\n\n"
         "請確認 **requirements.txt** 已包含：\n"
-        "streamlit, networkx, pyvis, pandas。\n"
-        "在 Streamlit Cloud 請到 **… → Manage app → Restart** 重新建置，"
-        "或對 repo push 一個 commit 觸發重建。\n"
-        "（建議 Python 版本使用 3.11）"
+        "- streamlit\n- networkx\n- pyvis\n- pandas\n\n"
+        "在 Streamlit Cloud：前往 **… → Manage app → App actions → Restart** 重新建置，"
+        "或在 GitHub 對專案 push 任一修改以觸發重建。\n"
+        "（我們已在 repo 放 `runtime.txt` 固定 Python 3.11，以避免相容性問題）"
     )
     raise
 
@@ -114,7 +116,8 @@ class FamilyDB:
         return {
             "persons": {pid: p.__dict__ for pid, p in self.persons.items()},
             "marriages": {mid: m.__dict__ for mid, m in self.marriages.items()},
-            "links": {cid: l.__dict__ for cid, l in self.links.items()},
+            "links": {cid: l.__dict__ for l, l in self.links.items()} if False else
+                     {cid: l.__dict__ for cid, l in self.links.items()},
         }
 
     @staticmethod
@@ -412,9 +415,3 @@ with tab4:
     if db.links:
         st.markdown("**親子**")
         st.dataframe(pd.DataFrame([{**vars(l)} for l in db.links.values()]))
-
-# ---- 建議 requirements.txt（放在 repo 根目錄）----
-# streamlit==1.37.0
-# networkx==3.3
-# pyvis==0.3.2
-# pandas==2.2.2
