@@ -278,7 +278,7 @@ with st.sidebar:
     l_cnt = len(db.links)
     st.info(f"目前資料：人物 {p_cnt}｜婚姻 {m_cnt}｜親子 {l_cnt}")
 
-    # 一鍵載入示範資料（避免您手動重建）
+    # 一鍵載入示範資料
     if st.button("🧪 一鍵載入示範資料"):
         demo = {
             "persons": {
@@ -470,24 +470,24 @@ with tab4:
         for e in net.edges:
             if e.get("relation") == "marriage":
                 e["dashes"] = True
-        # 階層式設定（關鍵）
+        # ✅ 使用「純 JSON」字串設定（pyvis 需要 json.loads 可解析）
         net.set_options("""
-        var options = {
-          layout: {
-            hierarchical: {
-              enabled: true,
-              direction: 'UD',
-              levelSeparation: 120,
-              nodeSpacing: 160,
-              treeSpacing: 200,
-              sortMethod: 'hubsize'
-            }
-          },
-          physics: { enabled: false }
-        }
-        """)
+{
+  "layout": {
+    "hierarchical": {
+      "enabled": true,
+      "direction": "UD",
+      "levelSeparation": 120,
+      "nodeSpacing": 160,
+      "treeSpacing": 200,
+      "sortMethod": "hubsize"
+    }
+  },
+  "physics": { "enabled": false }
+}
+""")
 
-        # 3) 以 write_html(notebook=False) 產生並內嵌
+        # 3) 以 write_html(notebook=False) 產生並內嵌（避免 show() 在雲端炸掉）
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
             net.write_html(tmp.name, notebook=False)
             html = open(tmp.name, "r", encoding="utf-8").read()
