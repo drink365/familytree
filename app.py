@@ -1,18 +1,17 @@
 # app.py
-# 家族樹＋法定繼承人 MVP（台灣民法規則模組 v0.1）
+# 家族樹＋法定繼承人 MVP（台灣民法 v0.1，僅「直系卑親屬」代位；不含兄弟姊妹代位）
 # 功能：
 # - 新增/編輯人物、婚姻（含離婚/喪偶）、親子關係
-# - 以死亡日期為基準計算「台灣法定繼承人」與「應繼分比例（基礎版）」
-# - 支援非婚生子女（只要建立親子關係即可）
-# - 圖形化家族樹（networkx + pyvis）
-# - 匯出 / 匯入 JSON（便於版本控管）
+# - 以死亡日期計算法定繼承人與應繼分（配偶為當然繼承人）
+# - 僅實作「直系卑親屬代位（per stirpes）」；不實作父母/兄弟姊妹/祖父母之代位
+# - 視覺化家族樹（networkx + pyvis）
+# - JSON 匯入/匯出（便於 Git 版控）
 #
-# 說明：
-# 1) 規則（簡化）：配偶為當然繼承人；順位：直系卑親屬 > 父母 > 兄弟姊妹 > 祖父母。
-#    配偶應繼分：與第一順位等分；與第二/第三為 1/2；與第四為 2/3；若無其他順位則全數。
-#    代位：先實作第一順位的按支分配（per stirpes）。
-# 2) 未涵蓋：喪失繼承權、特留分、遺囑/遺贈、夫妻剩餘財產、遺產債務、收養細節、旁系代位等。
-# 3) 僅供教學／規劃初稿參考，不構成法律意見。
+# 重要說明（台灣民法簡化版邏輯）：
+# - 順位：直系卑親屬 > 父母 > 兄弟姊妹 > 祖父母；配偶為當然繼承人。
+# - 配偶應繼分：與第一順位等分；與第二/第三為 1/2；與第四為 2/3；無其他順位時配偶全數。
+# - 代位：僅限「直系卑親屬」；不包含父母、兄弟姊妹、祖父母（本程式已嚴格排除）。
+# - 僅供教學/規劃初稿參考，非法律意見。
 
 import json
 from datetime import date, datetime
@@ -21,7 +20,7 @@ import streamlit as st
 import pandas as pd
 import tempfile
 
-# 友善的套件檢查（避免少裝套件時一片空白）
+# 友善的套件檢查（避免少裝套件時白屏）
 try:
     import networkx as nx
     from pyvis.network import Network
@@ -29,13 +28,11 @@ except ModuleNotFoundError as e:
     st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
     st.title("🌳 家族樹 + 法定繼承人（台灣民法・MVP）")
     st.error(
-        "❗ 缺少必要套件："
-        f"`{e.name}`。\n\n"
-        "請確認 **requirements.txt** 已包含：\n"
-        "- streamlit\n- networkx\n- pyvis\n- pandas\n\n"
-        "在 Streamlit Cloud：前往 **… → Manage app → App actions → Restart** 重新建置，"
-        "或在 GitHub 對專案 push 任一修改以觸發重建。\n"
-        "（我們已在 repo 放 `runtime.txt` 固定 Python 3.11，以避免相容性問題）"
+        "❗ 缺少必要套件：" + f"`{e.name}`\n\n"
+        "請確認 **requirements.txt** 已包含：streamlit、networkx、pyvis、pandas。\n"
+        "在 Streamlit Cloud：到 **… → Manage app → App actions → Restart** 重新建置，"
+        "或在 GitHub push 任一修改觸發重建。\n"
+        "（已建議使用 `runtime.txt` 固定 Python 3.11）"
     )
     raise
 
@@ -51,7 +48,7 @@ class Person:
         self.note = note
 
     def alive_on(self, d: date) -> bool:
-        # 無死亡日 → 視為在世；有死亡日 → 死亡日必須晚於 d 才算在世
+        # 無死亡日 → 視為在世；有死亡日 → 必須晚於 d 才算在世
         if self.death:
             try:
                 return datetime.strptime(self.death, "%Y-%m-%d").date() > d
@@ -116,8 +113,7 @@ class FamilyDB:
         return {
             "persons": {pid: p.__dict__ for pid, p in self.persons.items()},
             "marriages": {mid: m.__dict__ for mid, m in self.marriages.items()},
-            "links": {cid: l.__dict__ for l, l in self.links.items()} if False else
-                     {cid: l.__dict__ for cid, l in self.links.items()},
+            "links": {cid: l.__dict__ for cid, l in self.links.items()},
         }
 
     @staticmethod
@@ -131,7 +127,7 @@ class FamilyDB:
             db.upsert_link(ParentChild(**cobj))
         return db
 
-# ========== 台灣法定繼承規則（基礎版） ==========
+# ========== 台灣法定繼承規則（僅直系卑親屬代位） ==========
 class InheritanceRuleTW:
     def __init__(self, db: FamilyDB):
         self.db = db
@@ -140,15 +136,12 @@ class InheritanceRuleTW:
         """
         回傳 (表格, 說明文字)。
         表格欄位：heir_id, name, relation, share (比例), note
-        規則（簡化版）：
-        - 繼承開啟時點 = 死亡日 dod
-        - 配偶為當然繼承人（死亡日仍有效婚姻）
-        - 依順位找第一個有繼承權的血親群組：
-          1) 直系卑親屬（含代位，按支分配）
-          2) 父母
-          3) 兄弟姊妹（本版未實作旁系代位）
-          4) 祖父母
-        - 配偶與該群組合併計算應繼分。
+        規則（簡化）：
+        - 繼承開啟：死亡日 dod
+        - 配偶：當然繼承人（死亡日當時婚姻有效，且在世）
+        - 血親順位：第一（直系卑親屬，含代位）→ 第二（父母）→ 第三（兄弟姊妹）→ 第四（祖父母）
+        - 代位範圍：**僅直系卑親屬**；**不包含第二、三、四順位之代位**（本程式嚴格排除）
+        - 配偶應繼分：與第一順位等分；與第二/第三為 1/2；與第四為 2/3；無血親時配偶全數。
         """
         ddate = datetime.strptime(dod, "%Y-%m-%d").date()
         if decedent_id not in self.db.persons:
@@ -159,7 +152,7 @@ class InheritanceRuleTW:
         spouses_alive = [sid for sid in spouses
                          if self.db.persons.get(sid) and self.db.persons[sid].alive_on(ddate)]
 
-        # 找順位群組
+        # 找順位群組（僅第一順位允許代位）
         group, relation_label = self._find_first_order_group(decedent_id, ddate)
 
         rows = []
@@ -169,25 +162,23 @@ class InheritanceRuleTW:
 
         spouse_share = 0.0
         if relation_label == "第一順位":
-            # 與子女等分（以「支」為單位；死亡子女改由其直系卑親屬按支分配）
+            # 與子女（含代位後代）等分——以「支」為單位；死亡子女由其直系卑親屬承接該支
             branches = self._descendant_branches(decedent_id, ddate)
             unit = len(branches) + (1 if spouses_alive else 0)
             spouse_share = (1 / unit) if spouses_alive else 0
-            # 子女分支轉為個人比例
-            branch_shares = []
+            # 子女各支拆成個人比例
             for branch in branches:
                 for pid, frac in branch.items():
-                    branch_shares.append((pid, frac * (1 / unit)))
-            for pid, share in branch_shares:
-                p = self.db.persons[pid]
-                rows.append({
-                    "heir_id": pid,
-                    "name": p.name,
-                    "relation": "直系卑親屬",
-                    "share": round(share, 6),
-                    "note": "代位支分" if pid not in self.db.children_of(decedent_id) else ""
-                })
+                    p = self.db.persons[pid]
+                    rows.append({
+                        "heir_id": pid,
+                        "name": p.name,
+                        "relation": "直系卑親屬",
+                        "share": round(frac * (1 / unit), 6),
+                        "note": "代位支分" if pid not in self.db.children_of(decedent_id) else ""
+                    })
         elif relation_label in ("第二順位", "第三順位"):
+            # 注意：此處「不」做代位（符合台灣民法）
             spouse_share = 0.5 if spouses_alive else 0
             others = len(group)
             each = (1 - spouse_share) / others if others > 0 else 0
@@ -203,7 +194,7 @@ class InheritanceRuleTW:
                 p = self.db.persons[pid]
                 rows.append({"heir_id": pid, "name": p.name, "relation": relation_label,
                              "share": round(each, 6), "note": ""})
-        else:  # 無血親，僅配偶
+        else:  # 無血親僅配偶
             spouse_share = 1.0 if spouses_alive else 0
 
         for sid in spouses_alive:
@@ -220,33 +211,33 @@ class InheritanceRuleTW:
 
     # ---- helpers ----
     def _find_first_order_group(self, decedent_id: str, ddate: date) -> Tuple[List[str], str]:
-        # 第一順位：直系卑親屬（含代位）
+        # 第一順位：直系卑親屬（允許代位）
         branches = self._descendant_branches(decedent_id, ddate)
         if sum(len(b) for b in branches) > 0:
             return list({pid for b in branches for pid in b.keys()}), "第一順位"
-        # 第二：父母（在世）
+        # 第二：父母（在世；不代位）
         parents = [pid for pid in self.db.parents_of(decedent_id) if self.db.persons[pid].alive_on(ddate)]
         if parents:
             return parents, "第二順位"
-        # 第三：兄弟姊妹（在世）
+        # 第三：兄弟姊妹（在世；不代位）
         sibs = self._siblings_alive(decedent_id, ddate)
         if sibs:
             return sibs, "第三順位"
-        # 第四：祖父母（在世）
+        # 第四：祖父母（在世；不代位）
         grands = self._grandparents_alive(decedent_id, ddate)
         if grands:
             return grands, "第四順位"
         return [], ""
 
     def _descendant_branches(self, decedent_id: str, ddate: date) -> List[Dict[str, float]]:
-        """回傳各「子女支」的分配（支內合計=1）。若子女死亡則由其直系卑親屬遞迴承接。"""
+        """回傳各「子女支」的分配（支內合計=1）。若子女死亡則由其直系卑親屬遞迴承接（僅直系卑親屬代位）。"""
         children = self.db.children_of(decedent_id)
-        branches = []
+        branches: List[Dict[str, float]] = []
         for c in children:
             if self.db.persons[c].alive_on(ddate):
                 branches.append({c: 1.0})
             else:
-                sub = self._alive_descendants_weights(c, ddate)
+                sub = self._alive_descendants_weights(c, ddate)  # 只往「直系卑親屬」遞迴
                 if sub:
                     branches.append(sub)
         return branches
@@ -257,15 +248,16 @@ class InheritanceRuleTW:
         if alive:
             w = 1 / len(alive)
             return {k: w for k in alive}
-        # 無存活子女，往下遞迴找
+        # 無存活子女，往下找（孫、曾孫……）；若全無，回空 dict（該支不分配）
         result: Dict[str, float] = {}
         for k in kids:
             sub = self._alive_descendants_weights(k, ddate)
             for p, w in sub.items():
                 result[p] = result.get(p, 0) + w / max(1, len(kids))
-        return result  # 找不到就回空 dict（該支不分配）
+        return result
 
     def _siblings_alive(self, decedent_id: str, ddate: date) -> List[str]:
+        # 僅取在世兄弟姊妹；不做「姪/甥」代位（符合法規）
         parents = self.db.parents_of(decedent_id)
         sibs = set()
         for par in parents:
@@ -357,7 +349,7 @@ with tab1:
                 st.success("已更新親子關係")
 
 with tab2:
-    st.subheader("法定繼承人試算（台灣民法・基礎版）")
+    st.subheader("法定繼承人試算（台灣民法・基礎版：僅直系卑親屬代位）")
     all_people = {p.name: pid for pid, p in db.persons.items()}
     if not all_people:
         st.info("請先於『人物/關係維護』建立基本資料。")
