@@ -1,14 +1,12 @@
-# app.py（簡化輸入版）
-# 特色：
-# - 新增人物：只填「姓名/性別」，ID 自動產生
-# - 建立婚姻/親子：下拉選「姓名」即可（必要時可當場新增）
-# - 匯入/匯出 JSON；互動家族樹；台灣民法繼承（僅直系卑親屬代位）
-# - Python 3.11，requirements 同前
+# app.py（簡化輸入 + 自動遷移修正版）
+# 重點：
+# - 使用者只輸入「名字/性別」，ID 自動產生；婚姻/親子用名字選取
+# - 台灣民法：僅直系卑親屬代位；配偶為當然繼承人
+# - 自動遷移：若 session_state 裡是舊版 FamilyDB（沒有 name_index），自動轉成新版
 
 import json
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
-import uuid
 import re
 import tempfile
 
@@ -82,9 +80,8 @@ class FamilyDB:
         self.marriages: Dict[str, Marriage] = {}
         self.links: Dict[str, ParentChild] = {}
 
-    # --- 快速依姓名查詢 ---
+    # 讓 UI 以「名字」為主（免 ID）
     def name_index(self) -> Dict[str, str]:
-        # 若重名，最後一個覆蓋（簡化版；實務可改成允許重名並顯示(1)(2)）
         return {p.name: pid for pid, p in self.persons.items()}
 
     def ensure_person_by_name(self, name: str, gender: str = "unknown") -> str:
@@ -95,7 +92,7 @@ class FamilyDB:
         self.persons[pid] = Person(pid, name, gender)
         return pid
 
-    # CRUD（保留）
+    # CRUD
     def upsert_person(self, p: Person):
         self.persons[p.pid] = p
     def upsert_marriage(self, m: Marriage):
@@ -118,7 +115,6 @@ class FamilyDB:
                 else:
                     if (not m.end) or (datetime.strptime(m.end, "%Y-%m-%d").date() > at):
                         res.append(other)
-        # 去重
         return list(dict.fromkeys(res))
 
     # 匯入匯出
@@ -144,7 +140,7 @@ class InheritanceRuleTW:
     def __init__(self, db: FamilyDB):
         self.db = db
 
-    def get_heirs(self, decedent_id: str, dod: str) -> Tuple[pd.DataFrame, str]:
+    def get_heirs(self, decedent_id: str, dod: str):
         ddate = datetime.strptime(dod, "%Y-%m-%d").date()
         if decedent_id not in self.db.persons:
             return pd.DataFrame(), "找不到被繼承人"
@@ -201,8 +197,7 @@ class InheritanceRuleTW:
             note.append("配偶為當然繼承人（依民法）")
         return df, "；".join(note)
 
-    # helpers
-    def _find_first_order_group(self, decedent_id: str, ddate: date) -> Tuple[List[str], str]:
+    def _find_first_order_group(self, decedent_id: str, ddate: date):
         branches = self._descendant_branches(decedent_id, ddate)
         if sum(len(b) for b in branches) > 0:
             return list({pid for b in branches for pid in b.keys()}), "第一順位"
@@ -217,7 +212,7 @@ class InheritanceRuleTW:
             return grands, "第四順位"
         return [], ""
 
-    def _descendant_branches(self, decedent_id: str, ddate: date) -> List[Dict[str, float]]:
+    def _descendant_branches(self, decedent_id: str, ddate: date):
         children = self.db.children_of(decedent_id)
         branches = []
         for c in children:
@@ -229,20 +224,20 @@ class InheritanceRuleTW:
                     branches.append(sub)
         return branches
 
-    def _alive_descendants_weights(self, pid: str, ddate: date) -> Dict[str, float]:
+    def _alive_descendants_weights(self, pid: str, ddate: date):
         kids = self.db.children_of(pid)
         alive = [k for k in kids if self.db.persons[k].alive_on(ddate)]
         if alive:
             w = 1 / len(alive)
             return {k: w for k in alive}
-        result: Dict[str, float] = {}
+        result = {}
         for k in kids:
             sub = self._alive_descendants_weights(k, ddate)
             for p, w in sub.items():
                 result[p] = result.get(p, 0) + w / max(1, len(kids))
         return result
 
-    def _siblings_alive(self, decedent_id: str, ddate: date) -> List[str]:
+    def _siblings_alive(self, decedent_id: str, ddate: date):
         parents = self.db.parents_of(decedent_id)
         sibs = set()
         for par in parents:
@@ -251,7 +246,7 @@ class InheritanceRuleTW:
                     sibs.add(c)
         return list(sibs)
 
-    def _grandparents_alive(self, decedent_id: str, ddate: date) -> List[str]:
+    def _grandparents_alive(self, decedent_id: str, ddate: date):
         grands = set()
         for p in self.db.parents_of(decedent_id):
             for gp in self.db.parents_of(p):
@@ -259,12 +254,22 @@ class InheritanceRuleTW:
                     grands.add(gp)
         return list(grands)
 
-# ------------------ UI ------------------
+# ------------------ UI（含自動遷移） ------------------
 st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
 
+# 1) 讀取 / 建立資料庫
 if "db" not in st.session_state:
     st.session_state.db = FamilyDB()
-db: FamilyDB = st.session_state.db
+db = st.session_state.db
+
+# 2) 🔧 自動遷移：舊版 FamilyDB 轉新版（補 name_index 等方法）
+if not hasattr(db, "name_index"):
+    try:
+        old_json = db.to_json()  # 先把舊資料撈出來
+    except Exception:
+        old_json = {"persons": {}, "marriages": {}, "links": {}}
+    st.session_state.db = FamilyDB.from_json(old_json)  # 轉成新版 class
+    db = st.session_state.db
 
 st.title("🌳 家族樹 + 法定繼承人（台灣民法・簡化輸入版）")
 
@@ -302,7 +307,6 @@ with tab1:
             if not name.strip():
                 st.error("請輸入姓名")
             else:
-                # 若存在同名，沿用其 ID；否則自動產生 ID
                 idx = db.name_index()
                 if name in idx:
                     pid = idx[name]
@@ -333,7 +337,6 @@ with tab2:
         mend = st.text_input("婚姻結束日 YYYY-MM-DD（可空）")
         status = st.selectbox("狀態", ["married", "divorced", "widowed"])
         if st.button("➕ 建立/更新 婚姻"):
-            # 確保雙方存在
             if a_name == "（輸入新名字）":
                 if not new_a.strip():
                     st.error("請輸入 A 的新名字")
@@ -379,7 +382,6 @@ with tab2:
                 child_pid = db.ensure_person_by_name(new_child.strip())
             else:
                 child_pid = db.ensure_person_by_name(child_name)
-
             if parent_pid == child_pid:
                 st.error("同一個人不能同時是自己的父母與子女")
             else:
@@ -420,7 +422,6 @@ with tab4:
     if not db.persons:
         st.info("尚無資料。")
     else:
-        # 建圖
         G = nx.DiGraph()
         for p in db.persons.values():
             label = p.name
