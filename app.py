@@ -66,7 +66,7 @@ with st.sidebar:
     if up:
         import_data(json.load(up))
         st.success("已匯入！")
-        st.experimental_rerun()
+        st.rerun()
     st.download_button("📥 下載 JSON 備份",export_data(),"family.json","application/json")
 
 tab1,tab2,tab3,tab4=st.tabs(["👤 人物","🔗 關係","🧮 法定繼承","🗺️ 家族樹"])
