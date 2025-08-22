@@ -1,9 +1,10 @@
-# app.py（簡化輸入 + 自動遷移 + 家族樹修正 + 診斷工具 + 安全 JSON options）
+# app.py（配偶優先顯示 + 世代分層家族樹 + 同頁快速新增）
 import json
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 import re
 import tempfile
+from collections import deque, defaultdict
 
 import streamlit as st
 import pandas as pd
@@ -130,7 +131,7 @@ class FamilyDB:
             db.upsert_link(ParentChild(**cobj))
         return db
 
-# ------------------ 台灣民法（僅直系卑親屬代位） ------------------
+# ------------------ 台灣民法（僅直系卑親屬代位；配偶優先顯示） ------------------
 class InheritanceRuleTW:
     def __init__(self, db: FamilyDB):
         self.db = db
@@ -151,6 +152,8 @@ class InheritanceRuleTW:
             return pd.DataFrame(columns=["heir_id", "name", "relation", "share", "note"]), "查無繼承人"
 
         spouse_share = 0.0
+        other_rows = []
+
         if relation_label == "第一順位":
             branches = self._descendant_branches(decedent_id, ddate)
             unit = len(branches) + (1 if spouses_alive else 0)
@@ -158,34 +161,41 @@ class InheritanceRuleTW:
             for branch in branches:
                 for pid, frac in branch.items():
                     p = self.db.persons[pid]
-                    rows.append({"heir_id": pid, "name": p.name, "relation": "直系卑親屬",
-                                 "share": round(frac * (1 / unit), 6),
-                                 "note": "代位支分" if pid not in self.db.children_of(decedent_id) else ""})
+                    other_rows.append({"heir_id": pid, "name": p.name, "relation": "直系卑親屬",
+                                       "share": round(frac * (1 / unit), 6),
+                                       "note": "代位支分" if pid not in self.db.children_of(decedent_id) else ""})
         elif relation_label in ("第二順位", "第三順位"):
             spouse_share = 0.5 if spouses_alive else 0
             others = len(group)
             each = (1 - spouse_share) / others if others > 0 else 0
             for pid in group:
                 p = self.db.persons[pid]
-                rows.append({"heir_id": pid, "name": p.name, "relation": relation_label,
-                             "share": round(each, 6), "note": ""})
+                other_rows.append({"heir_id": pid, "name": p.name, "relation": relation_label,
+                                   "share": round(each, 6), "note": ""})
         elif relation_label == "第四順位":
             spouse_share = (2 / 3) if spouses_alive else 0
             others = len(group)
             each = (1 - spouse_share) / others if others > 0 else 0
             for pid in group:
                 p = self.db.persons[pid]
-                rows.append({"heir_id": pid, "name": p.name, "relation": relation_label,
-                             "share": round(each, 6), "note": ""})
+                other_rows.append({"heir_id": pid, "name": p.name, "relation": relation_label,
+                                   "share": round(each, 6), "note": ""})
         else:
             spouse_share = 1.0 if spouses_alive else 0
 
+        # ✅ 先放配偶（置頂），再放其他繼承人
         for sid in spouses_alive:
             sp = self.db.persons[sid]
             rows.append({"heir_id": sid, "name": sp.name, "relation": "配偶",
                          "share": round(spouse_share, 6), "note": ""})
+        rows.extend(other_rows)
 
-        df = pd.DataFrame(rows).sort_values(by=["relation", "name"]).reset_index(drop=True)
+        df = pd.DataFrame(rows)
+        if not df.empty:
+            # 保證配偶在最前面
+            df["__ord__"] = df["relation"].apply(lambda r: 0 if r == "配偶" else 1)
+            df = df.sort_values(by=["__ord__", "relation", "name"]).drop(columns="__ord__").reset_index(drop=True)
+
         if relation_label:
             note.append(f"血親順位：{relation_label}")
         if spouses_alive:
@@ -249,6 +259,35 @@ class InheritanceRuleTW:
                 if self.db.persons[gp].alive_on(ddate):
                     grands.add(gp)
         return list(grands)
+
+# ------------------ 世代分層：計算每個人的 level（同代同層） ------------------
+def compute_generations(db: FamilyDB) -> Dict[str, int]:
+    parents_of = defaultdict(list)
+    children_of = defaultdict(list)
+    for pc in db.links.values():
+        parents_of[pc.child].append(pc.parent)
+        children_of[pc.parent].append(pc.child)
+
+    # 根節點：沒有父母的人
+    roots = [pid for pid in db.persons.keys() if len(parents_of[pid]) == 0]
+    level = {pid: 0 for pid in roots}
+
+    # BFS 往下層
+    q = deque(roots)
+    while q:
+        u = q.popleft()
+        for v in children_of.get(u, []):
+            lv = level.get(v, None)
+            nv = level[u] + 1
+            if lv is None or nv < lv:
+                level[v] = nv
+                q.append(v)
+
+    # 若有孤立節點（沒連到任何人），給 0 層
+    for pid in db.persons.keys():
+        if pid not in level:
+            level[pid] = 0
+    return level
 
 # ------------------ UI（含自動遷移 + 診斷） ------------------
 st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
@@ -320,7 +359,7 @@ with st.sidebar:
     st.download_button("📥 下載 JSON 備份", data=exp, file_name="family.json", mime="application/json")
     st.caption("提示：名字建議保持唯一。若重名，系統會以最後更新者為準（簡化版）。")
 
-tab1, tab2, tab3, tab4 = st.tabs(["👤 人物（免ID）", "🔗 關係（選名字）", "🧮 法定繼承試算", "🗺️ 家族樹"])
+tab1, tab2, tab3, tab4 = st.tabs(["👤 人物（免ID）", "🔗 關係（選名字）", "🧮 法定繼承試算（配偶置頂）", "🗺️ 家族樹（世代分層 + 快速新增）"])
 
 # --- Tab1：人物 ---
 with tab1:
@@ -424,9 +463,9 @@ with tab2:
         st.markdown("**親子清單（只讀）**")
         st.dataframe(pd.DataFrame([{**vars(l)} for l in db.links.values()]))
 
-# --- Tab3：法定繼承 ---
+# --- Tab3：法定繼承（配偶置頂）---
 with tab3:
-    st.subheader("法定繼承人試算（僅直系卑親屬代位）")
+    st.subheader("法定繼承人試算（僅直系卑親屬代位；配偶排第一）")
     names = list(db.name_index().keys())
     if not names:
         st.info("請先在前兩個分頁新增人物與關係，或在側邊欄按『一鍵載入示範資料』。")
@@ -440,16 +479,18 @@ with tab3:
             if df.empty:
                 st.warning("無結果，請檢查資料。")
             else:
-                st.success(memo or "計算完成")
+                st.success(memo or "計算完成（配偶置頂顯示）")
                 st.dataframe(df)
 
-# --- Tab4：家族樹（階層式視圖，使用 json.dumps 產生 options）---
+# --- Tab4：家族樹（世代分層 + 同頁快速新增）---
 with tab4:
-    st.subheader("家族樹（互動視圖）")
+    st.subheader("家族樹（同代同層，自上而下）")
     if not db.persons:
         st.info("尚無資料。請先建立人物/關係或在側邊欄按『一鍵載入示範資料』。")
     else:
-        # 1) 建圖
+        levels = compute_generations(db)
+
+        # 1) 建圖（把 level 寫進節點屬性）
         G = nx.DiGraph()
         for p in db.persons.values():
             label = p.name
@@ -457,7 +498,7 @@ with tab4:
                 label += f"\n*{p.birth}"
             if p.death:
                 label += f"\n✝ {p.death}"
-            G.add_node(p.pid, label=label, shape="box")
+            G.add_node(p.pid, label=label, shape="box", level=levels.get(p.pid, 0))
         for pc in db.links.values():
             G.add_edge(pc.parent, pc.child, relation="parent")
         for m in db.marriages.values():
@@ -471,7 +512,7 @@ with tab4:
             if e.get("relation") == "marriage":
                 e["dashes"] = True
 
-        # ✅ 用 Python dict → json.dumps，避免 JSONDecodeError
+        # ✅ 使用層級配置（尊重節點的 level），並關閉物理引擎
         options = {
             "layout": {
                 "hierarchical": {
@@ -483,7 +524,8 @@ with tab4:
                     "sortMethod": "hubsize"
                 }
             },
-            "physics": {"enabled": False}
+            "physics": {"enabled": False},
+            "nodes": {"shape": "box"}
         }
         net.set_options(json.dumps(options))
 
@@ -491,4 +533,54 @@ with tab4:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
             net.write_html(tmp.name, notebook=False)
             html = open(tmp.name, "r", encoding="utf-8").read()
+
+        left, right = st.columns([3, 2], gap="large")
+        with left:
             st.components.v1.html(html, height=700, scrolling=True)
+
+        # 右側：同頁快速新增/修改（接近「在圖上操作」）
+        with right:
+            st.markdown("### ⚡ 快速新增 / 修改")
+            all_names = sorted(list(db.name_index().keys()))
+
+            with st.expander("➕ 新增人物"):
+                nm = st.text_input("姓名", key="q_add_name")
+                gd = st.selectbox("性別", ["unknown", "female", "male"], index=0, key="q_add_gender")
+                if st.button("新增人物", key="q_add_person_btn"):
+                    if not nm.strip():
+                        st.error("請輸入姓名")
+                    else:
+                        pid = db.ensure_person_by_name(nm.strip(), gd)
+                        st.success(f"已新增：{nm}（ID: {pid}）")
+                        st.rerun()
+
+            with st.expander("❤️ 新增配偶關係"):
+                a = st.selectbox("配偶 A（選名字）", options=all_names, key="q_m_a")
+                b = st.selectbox("配偶 B（選名字）", options=all_names, key="q_m_b")
+                st_dt = st.text_input("結婚日 YYYY-MM-DD（可空）", key="q_m_start")
+                en_dt = st.text_input("婚姻結束日 YYYY-MM-DD（可空）", key="q_m_end")
+                stt = st.selectbox("狀態", ["married", "divorced", "widowed"], key="q_m_status")
+                if st.button("建立/更新 婚姻", key="q_m_btn"):
+                    if a == b:
+                        st.error("同一個人不能和自己結婚")
+                    else:
+                        a_id = db.ensure_person_by_name(a)
+                        b_id = db.ensure_person_by_name(b)
+                        mid = new_id("m", f"{a}-{b}", set(db.marriages.keys()))
+                        db.upsert_marriage(Marriage(mid, a_id, b_id, st_dt or None, en_dt or None, stt))
+                        st.success(f"已儲存婚姻：{a} - {b}（ID: {mid}）")
+                        st.rerun()
+
+            with st.expander("👶 新增親子關係"):
+                par = st.selectbox("父/母（選名字）", options=all_names, key="q_c_parent")
+                chd = st.selectbox("子女（選名字）", options=all_names, key="q_c_child")
+                if st.button("建立/更新 親子", key="q_c_btn"):
+                    if par == chd:
+                        st.error("同一個人不能同時是自己的父母與子女")
+                    else:
+                        par_id = db.ensure_person_by_name(par)
+                        chd_id = db.ensure_person_by_name(chd)
+                        cid = new_id("c", f"{par}-{chd}", set(db.links.keys()))
+                        db.upsert_link(ParentChild(cid, par_id, chd_id))
+                        st.success(f"已儲存親子：{par} → {chd}（ID: {cid}）")
+                        st.rerun()
