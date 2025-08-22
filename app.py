@@ -1,25 +1,15 @@
-# app.py（修正版：不再成一條線；一鍵載入「陳一郎」案例；直角折線 + 同代同層）
+# app.py（夫妻水平線＋離婚虛線；孩子自中點往下）
 import json
 from datetime import date, datetime
 from collections import defaultdict, deque
-from typing import Dict, List, Optional
-import tempfile  # ← 加這行
+from typing import Dict, List, Optional, Tuple
+import tempfile
 
 import streamlit as st
-import pandas as pd
 import networkx as nx
 from pyvis.network import Network
 
-
-try:
-    import networkx as nx
-    from pyvis.network import Network
-except ModuleNotFoundError as e:
-    st.set_page_config(layout="wide", page_title="家族樹", page_icon="🌳")
-    st.error(f"缺少套件：{e.name}，請確認 requirements.txt 並重啟。建議 Python 3.11。")
-    st.stop()
-
-# ---------- 資料模型 ----------
+# ----------------- 資料模型 -----------------
 class Person:
     def __init__(self, pid, name, gender="unknown", birth=None, death=None):
         self.pid, self.name, self.gender, self.birth, self.death = pid, name, gender, birth, death
@@ -36,24 +26,28 @@ class DB:
     def __init__(self):
         self.persons: Dict[str, Person] = {}
         self.marriages: Dict[str, Marriage] = {}
-        self.links: Dict[str, ParentChild] = {}
+        self.links: Dict[str, ParentChild] = {}  # parent -> child（用來算層級）
 
     @staticmethod
     def from_obj(o)->"DB":
+        """支援兩種格式：
+        1) {members, marriages, children}
+        2) {persons, marriages, links}
+        """
         db = DB()
-        # 兼容兩種結構：members/marriages/children 或 persons/marriages/links
-        if "members" in o:
+        if "members" in o:  # 您範例的格式
             for m in o["members"]:
                 db.persons[m["id"]] = Person(m["id"], m["name"], m.get("gender","unknown"))
             for m in o.get("marriages", []):
                 mid = f"m_{m['husband']}_{m['wife']}"
                 db.marriages[mid] = Marriage(mid, m["husband"], m["wife"], m.get("status","married"))
             for c in o.get("children", []):
+                # 兩條親子邊（只用來計算層級，不直接畫）
                 cid1 = f"c_{c['father']}_{c['child']}"
                 cid2 = f"c_{c['mother']}_{c['child']}"
                 db.links[cid1] = ParentChild(cid1, c["father"], c["child"])
                 db.links[cid2] = ParentChild(cid2, c["mother"], c["child"])
-        else:
+        else:  # persons/marriages/links
             for pid, p in o.get("persons", {}).items():
                 db.persons[pid] = Person(**p)
             for mid, m in o.get("marriages", {}).items():
@@ -69,21 +63,20 @@ class DB:
             "links": {k: vars(v) for k,v in self.links.items()},
         }
 
-# ---------- 世代分層（避免成一條線） ----------
-def compute_levels(db: DB)->Dict[str,int]:
+# ----------------- 工具：層級與雙親配對 -----------------
+def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str]], Dict[str,List[str]]]:
     parents_of = defaultdict(list)
     children_of = defaultdict(list)
     for l in db.links.values():
         parents_of[l.child].append(l.parent)
         children_of[l.parent].append(l.child)
 
-    # 沒有父母的人當「根」
-    roots = [pid for pid in db.persons.keys() if not parents_of[pid]]
-    if not roots:
-        # 如果每個人都有父母（資料不完整），隨機選一個當根
-        roots = list(db.persons.keys())[:1]
+    # 根：沒有父母的人
+    roots = [pid for pid in db.persons if not parents_of[pid]]
+    if not roots and db.persons:
+        roots = [next(iter(db.persons))]
 
-    level = {pid:0 for pid in roots}
+    level = {pid: 0 for pid in roots}
     q = deque(roots)
     while q:
         u = q.popleft()
@@ -92,14 +85,19 @@ def compute_levels(db: DB)->Dict[str,int]:
             if v not in level or nv < level[v]:
                 level[v] = nv
                 q.append(v)
-    # 孤立節點補0
+
     for pid in db.persons:
         level.setdefault(pid, 0)
-    return level
 
-# ---------- UI ----------
-st.set_page_config(layout="wide", page_title="家族樹（直角折線）", page_icon="🌳")
-st.title("🌳 家族樹（直角折線・同代同層）")
+    return level, parents_of, children_of
+
+def union_id(a: str, b: str) -> str:
+    """根據父母兩人建立穩定 union node id（順序無關）。"""
+    return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
+
+# ----------------- Streamlit UI -----------------
+st.set_page_config(layout="wide", page_title="家族樹（夫妻線＋垂直子女）", page_icon="🌳")
+st.title("🌳 家族樹（夫妻水平線＋離婚虛線；子女由中點往下）")
 
 if "db" not in st.session_state:
     st.session_state.db = DB()
@@ -107,7 +105,7 @@ db: DB = st.session_state.db
 
 with st.sidebar:
     st.header("資料維護")
-    # 一鍵載入：陳一郎案例（與您 repo 內容相同）
+    # 一鍵載入：陳一郎案例
     if st.button("🧪 一鍵載入示範：陳一郎家族"):
         demo = {
             "members": [
@@ -137,7 +135,7 @@ with st.sidebar:
         st.session_state.db = DB.from_obj(demo)
         st.success("已載入示範資料")
 
-    up = st.file_uploader("匯入 JSON 檔（支援 members/children 結構）", type=["json"])
+    up = st.file_uploader("匯入 JSON（members/marriages/children 或 persons/marriages/links）", type=["json"])
     if up:
         try:
             st.session_state.db = DB.from_obj(json.load(up))
@@ -145,26 +143,55 @@ with st.sidebar:
         except Exception as e:
             st.exception(e)
 
-    st.download_button("📥 下載 JSON 備份", data=json.dumps(db.to_json(), ensure_ascii=False, indent=2),
+    st.download_button("📥 下載 JSON 備份",
+                       data=json.dumps(db.to_json(), ensure_ascii=False, indent=2),
                        file_name="family.json", mime="application/json")
 
-# ---------- 畫家族樹 ----------
+# ----------------- 畫圖（夫妻線 + union node 垂直生子） -----------------
 if not db.persons:
     st.info("請先『一鍵載入示範』或匯入 JSON。")
 else:
-    lv = compute_levels(db)
+    levels, parents_of, children_of = compute_levels_and_parents(db)
 
-    # 只用親子邊做佈局（婚姻不參與佈局，避免亂層）
-    G = nx.DiGraph()
+    # 1) 只把「人物」加入圖；層級用於上下分層
+    net = Network(height="660px", width="100%", directed=True, notebook=False)
     for pid, p in db.persons.items():
-        G.add_node(pid, label=p.name, level=lv.get(pid,0), shape="box")
-    for l in db.links.values():
-        G.add_edge(l.parent, l.child)  # 只畫一條到子女
+        label = p.name
+        net.add_node(pid, label=label, shape="box", level=levels.get(pid, 0))
 
-    net = Network(height="620px", width="100%", directed=True, notebook=False)
-    net.from_nx(G)
+    # 2) 畫「夫妻水平線」：已婚實線；離婚/喪偶虛線（僅為展示，不參與層級）
+    for m in db.marriages.values():
+        dashed = (m.status != "married")
+        net.add_edge(m.a, m.b, dashes=dashed, physics=False, arrows="",
+                     color={"color":"#2f5e73","inherit":False}, smooth={"type":"horizontal"}, width=2)
 
-    # 直角折線 + 分層
+    # 3) 為每一對父母建立 union node，並由 union node 垂直連到子女
+    #    union node 放在父母同一層（確保垂直往下）
+    #    為了讓 union 對齊兩人中間，我們加兩條很淡的連線（影響佈局），再畫一條向下到孩子
+    unions_done = set()
+    # 先把 child -> parents 做反查
+    for child, parents in parents_of.items():
+        if len(parents) < 2:
+            # 單親資料：直接由該父或母連到孩子
+            par = parents[0]
+            net.add_edge(par, child, arrows="to", color={"color":"#2f5e73","inherit":False}, width=2)
+            continue
+
+        a, b = sorted(parents)[:2]
+        uid = union_id(a, b)
+        if uid not in unions_done:
+            # 放一個很小的 union 節點在父母那一層
+            level_u = max(levels.get(a,0), levels.get(b,0))
+            net.add_node(uid, label="", shape="dot", size=1, level=level_u, physics=False)
+            # 兩條很淡的線，讓 union 靠在兩人中間（幾乎看不見）
+            net.add_edge(a, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1, smooth={"type":"horizontal"}, physics=False)
+            net.add_edge(b, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1, smooth={"type":"horizontal"}, physics=False)
+            unions_done.add(uid)
+
+        # 從 union 垂直往下連到孩子（顏色較明顯）
+        net.add_edge(uid, child, arrows="to", color={"color":"#2f5e73","inherit":False}, width=2)
+
+    # 4) 固定為自上而下 + 直角風格
     import json as js
     options = {
         "layout": {"hierarchical": {
@@ -174,21 +201,16 @@ else:
         }},
         "physics": {"enabled": False},
         "edges": {
-            "smooth": {"enabled": True, "type": "horizontal"},  # 近似直角折線
+            "smooth": {"enabled": True, "type": "horizontal"},
             "color": {"inherit": False, "color": "#2f5e73"},
-            "width": 2, "arrows": {"to": {"enabled": True, "scaleFactor": 0.6}}
+            "width": 2
         },
         "nodes": {"shape":"box","color":{"background":"#dbeafe","border":"#2563eb"}, "font":{"size":14}}
     }
     net.set_options(js.dumps(options))
 
-    # 婚姻：已婚實線；離婚/喪偶虛線（不影響佈局）
-    for m in db.marriages.values():
-        dashed = (m.status != "married")
-        net.add_edge(m.a, m.b, dashes=dashed, physics=False, arrows="", color={"color":"#2f5e73","inherit":False})
-
     with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
         net.write_html(tmp.name, notebook=False)
         html = open(tmp.name, "r", encoding="utf-8").read()
 
-    st.components.v1.html(html, height=680, scrolling=True)
+    st.components.v1.html(html, height=720, scrolling=True)
