@@ -1,4 +1,4 @@
-# app.py（穩定版：匯入不重啟、即時呈現；含配偶置頂＋世代分層＋快速新增）
+# app.py（A版：心智圖風圓弧線 + 同代同層 + 匯入即時呈現 + 配偶置頂）
 import json
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
@@ -122,10 +122,8 @@ class FamilyDB:
         }
     @staticmethod
     def from_obj(obj) -> "FamilyDB":
-        """同時支援 {dict} 舊檔 或 [list] 形式資料（更耐用）。"""
         db = FamilyDB()
         if isinstance(obj, list):
-            # 嘗試列表形式：每項是人或關係
             for item in obj:
                 if not isinstance(item, dict): continue
                 t = item.get("type") or item.get("_type")
@@ -146,30 +144,25 @@ class FamilyDB:
                     db.upsert_link(ParentChild(cid, par, ch))
             return db
 
-        # dict 形式
         persons = obj.get("persons", {})
-        # 允許 list 形式 persons
         if isinstance(persons, list):
-            persons = { (p.get("pid") or new_id("p", p.get("name","未知"), set(persons))).strip(): p for p in persons }  # type: ignore
+            persons = { (p.get("pid") or new_id("p", p.get("name","未知"), set())).strip(): p for p in persons }  # type: ignore
         for pid, pobj in persons.items():
-            p = Person(**pobj)
-            if not p.pid: p.pid = pid
+            p = Person(**pobj);  p.pid = p.pid or pid
             db.upsert_person(p)
 
         marriages = obj.get("marriages", {})
         if isinstance(marriages, list):
-            marriages = { (m.get("mid") or new_id("m", f"{m.get('a')}-{m.get('b')}", set(marriages))).strip(): m for m in marriages }  # type: ignore
+            marriages = { (m.get("mid") or new_id("m", f"{m.get('a')}-{m.get('b')}", set())).strip(): m for m in marriages }  # type: ignore
         for mid, mobj in marriages.items():
-            m = Marriage(**mobj)
-            if not m.mid: m.mid = mid
+            m = Marriage(**mobj); m.mid = m.mid or mid
             db.upsert_marriage(m)
 
         links = obj.get("links", {})
         if isinstance(links, list):
-            links = { (l.get("cid") or new_id("c", f"{l.get('parent')}-{l.get('child')}", set(links))).strip(): l for l in links }  # type: ignore
+            links = { (l.get("cid") or new_id("c", f"{l.get('parent')}-{l.get('child')}", set())).strip(): l for l in links }  # type: ignore
         for cid, cobj in links.items():
-            l = ParentChild(**cobj)
-            if not l.cid: l.cid = cid
+            l = ParentChild(**cobj); l.cid = l.cid or cid
             db.upsert_link(l)
         return db
 
@@ -178,14 +171,13 @@ class InheritanceRuleTW:
     def __init__(self, db: FamilyDB):
         self.db = db
 
-    def get_heirs(self, decedent_id: str, dod: str) -> Tuple[pd.DataFrame, str]:
+    def get_heirs(self, decedent_id: str, dod: str):
         ddate = datetime.strptime(dod, "%Y-%m-%d").date()
         if decedent_id not in self.db.persons:
             return pd.DataFrame(), "找不到被繼承人"
 
         spouses = self.db.spouses_of(decedent_id, at=ddate)
-        spouses_alive = [sid for sid in spouses
-                         if self.db.persons.get(sid) and self.db.persons[sid].alive_on(ddate)]
+        spouses_alive = [sid for sid in spouses if self.db.persons.get(sid) and self.db.persons[sid].alive_on(ddate)]
 
         group, relation_label = self._find_first_order_group(decedent_id, ddate)
 
@@ -243,8 +235,7 @@ class InheritanceRuleTW:
             note.append("配偶為當然繼承人（依民法）")
         return df, "；".join(note)
 
-    # helpers
-    def _find_first_order_group(self, decedent_id: str, ddate: date) -> Tuple[List[str], str]:
+    def _find_first_order_group(self, decedent_id: str, ddate: date):
         branches = self._descendant_branches(decedent_id, ddate)
         if sum(len(b) for b in branches) > 0:
             return list({pid for b in branches for pid in b.keys()}), "第一順位"
@@ -259,7 +250,7 @@ class InheritanceRuleTW:
             return grands, "第四順位"
         return [], ""
 
-    def _descendant_branches(self, decedent_id: str, ddate: date) -> List[Dict[str, float]]:
+    def _descendant_branches(self, decedent_id: str, ddate: date):
         children = self.db.children_of(decedent_id)
         branches = []
         for c in children:
@@ -271,20 +262,20 @@ class InheritanceRuleTW:
                     branches.append(sub)
         return branches
 
-    def _alive_descendants_weights(self, pid: str, ddate: date) -> Dict[str, float]:
+    def _alive_descendants_weights(self, pid: str, ddate: date):
         kids = self.db.children_of(pid)
         alive = [k for k in kids if self.db.persons[k].alive_on(ddate)]
         if alive:
             w = 1 / len(alive)
             return {k: w for k in alive}
-        result: Dict[str, float] = {}
+        result = {}
         for k in kids:
             sub = self._alive_descendants_weights(k, ddate)
             for p, w in sub.items():
                 result[p] = result.get(p, 0) + w / max(1, len(kids))
         return result
 
-    def _siblings_alive(self, decedent_id: str, ddate: date) -> List[str]:
+    def _siblings_alive(self, decedent_id: str, ddate: date):
         parents = self.db.parents_of(decedent_id)
         sibs = set()
         for par in parents:
@@ -293,7 +284,7 @@ class InheritanceRuleTW:
                     sibs.add(c)
         return list(sibs)
 
-    def _grandparents_alive(self, decedent_id: str, ddate: date) -> List[str]:
+    def _grandparents_alive(self, decedent_id: str, ddate: date):
         grands = set()
         for p in self.db.parents_of(decedent_id):
             for gp in self.db.parents_of(p):
@@ -302,18 +293,16 @@ class InheritanceRuleTW:
         return list(grands)
 
 # ------------------ 世代分層：計算每個人的 level（同代同層） ------------------
-def compute_generations(db: 'FamilyDB') -> Dict[str, int]:
+def compute_generations(db: 'FamilyDB'):
     parents_of = defaultdict(list)
     children_of = defaultdict(list)
     for pc in db.links.values():
         parents_of[pc.child].append(pc.parent)
         children_of[pc.parent].append(pc.child)
 
-    # 根節點：沒有父母的人
     roots = [pid for pid in db.persons.keys() if len(parents_of[pid]) == 0]
     level = {pid: 0 for pid in roots}
 
-    # BFS 往下層
     q = deque(roots)
     while q:
         u = q.popleft()
@@ -324,7 +313,6 @@ def compute_generations(db: 'FamilyDB') -> Dict[str, int]:
                 level[v] = nv
                 q.append(v)
 
-    # 若有孤立節點（沒連到任何人），給 0 層
     for pid in db.persons.keys():
         if pid not in level:
             level[pid] = 0
@@ -333,7 +321,6 @@ def compute_generations(db: 'FamilyDB') -> Dict[str, int]:
 # ------------------ UI（含 session_state 持久） ------------------
 st.set_page_config(page_title="家族樹＋法定繼承人（TW）", page_icon="🌳", layout="wide")
 
-# 讀取 / 建立資料庫（放在 session_state，避免每次互動就重置）
 if "db" not in st.session_state:
     st.session_state.db = FamilyDB()
 db: FamilyDB = st.session_state.db
@@ -375,16 +362,15 @@ with st.sidebar:
         try:
             obj = json.load(up)
             st.session_state.db = FamilyDB.from_obj(obj)
-            st.session_state["__last_import__"] = up.name
             st.success(f"✅ 已匯入：{up.name}（不需重啟，頁面已更新）")
         except Exception as e:
             st.exception(e)
 
     exp = json.dumps(db.to_json(), ensure_ascii=False, indent=2)
     st.download_button("📥 下載 JSON 備份", data=exp, file_name="family.json", mime="application/json")
-    st.caption("提示：資料保存在本次工作階段。重新部署/Restart 會清空記憶體，請常用『下載 JSON 備份』保存。")
+    st.caption("提示：重新部署/Restart 會清空記憶體，請常用『下載 JSON 備份』保存。")
 
-tab1, tab2, tab3, tab4 = st.tabs(["👤 人物（免ID）", "🔗 關係（選名字）", "🧮 法定繼承試算（配偶置頂）", "🗺️ 家族樹（世代分層 + 快速新增）"])
+tab1, tab2, tab3, tab4 = st.tabs(["👤 人物（免ID）", "🔗 關係（選名字）", "🧮 法定繼承試算（配偶置頂）", "🗺️ 家族樹（心智圖風圓弧線）"])
 
 # --- Tab1：人物 ---
 with tab1:
@@ -430,15 +416,13 @@ with tab2:
         if st.button("➕ 建立/更新 婚姻"):
             if a_name == "（輸入新名字）":
                 if not new_a.strip():
-                    st.error("請輸入 A 的新名字")
-                    st.stop()
+                    st.error("請輸入 A 的新名字"); st.stop()
                 a_pid = db.ensure_person_by_name(new_a.strip())
             else:
                 a_pid = db.ensure_person_by_name(a_name)
             if b_name == "（輸入新名字）":
                 if not new_b.strip():
-                    st.error("請輸入 B 的新名字")
-                    st.stop()
+                    st.error("請輸入 B 的新名字"); st.stop()
                 b_pid = db.ensure_person_by_name(new_b.strip())
             else:
                 b_pid = db.ensure_person_by_name(b_name)
@@ -461,15 +445,13 @@ with tab2:
         if st.button("➕ 建立/更新 親子"):
             if parent_name == "（輸入新名字）":
                 if not new_parent.strip():
-                    st.error("請輸入父/母的新名字")
-                    st.stop()
+                    st.error("請輸入父/母的新名字"); st.stop()
                 parent_pid = db.ensure_person_by_name(new_parent.strip())
             else:
                 parent_pid = db.ensure_person_by_name(parent_name)
             if child_name == "（輸入新名字）":
                 if not new_child.strip():
-                    st.error("請輸入子女的新名字")
-                    st.stop()
+                    st.error("請輸入子女的新名字"); st.stop()
                 child_pid = db.ensure_person_by_name(new_child.strip())
             else:
                 child_pid = db.ensure_person_by_name(child_name)
@@ -507,68 +489,75 @@ with tab3:
                 st.success(memo or "計算完成（配偶置頂顯示）")
                 st.dataframe(df)
 
-# --- Tab4：家族樹（世代分層 + 嚴格同層；婚姻邊不參與布局）---
+# --- Tab4：家族樹（心智圖圓弧 + 同代同層；婚姻不影響佈局）---
 with tab4:
-    st.subheader("家族樹（同代同層，自上而下）")
+    st.subheader("家族樹（心智圖風圓弧線，同代同層，自上而下）")
     if not db.persons:
         st.info("尚無資料。請先建立人物/關係或在側邊欄按『一鍵載入示範資料』。")
     else:
         levels = compute_generations(db)
+        G_layout = nx.DiGraph()
+        for p in db.persons.values():
+            label = p.name
+            if p.birth: label += f"\\n*{p.birth}"
+            if p.death: label += f"\\n✝ {p.death}"
+            G_layout.add_node(p.pid, label=label, shape="box", level=levels.get(p.pid, 0))
+        for pc in db.links.values():
+            G_layout.add_edge(pc.parent, pc.child, relation="parent")
 
-        # 只用「親子」邊做布局
-        try:
-            G_layout = nx.DiGraph()
-            for p in db.persons.values():
-                label = p.name
-                if p.birth:
-                    label += f"\n*{p.birth}"
-                if p.death:
-                    label += f"\n✝ {p.death}"
-                G_layout.add_node(p.pid, label=label, shape="box", level=levels.get(p.pid, 0))
-            for pc in db.links.values():
-                G_layout.add_edge(pc.parent, pc.child, relation="parent")
+        net = Network(height="650px", width="100%", directed=True, notebook=False)
+        net.from_nx(G_layout)
 
-            net = Network(height="650px", width="100%", directed=True, notebook=False)
-            net.from_nx(G_layout)
-
-            options = {
-                "layout": {
-                    "hierarchical": {
-                        "enabled": True,
-                        "direction": "UD",
-                        "levelSeparation": 140,
-                        "nodeSpacing": 180,
-                        "treeSpacing": 220,
-                        "sortMethod": "hubsize",
-                        "blockShifting": False,
-                        "edgeMinimization": False,
-                        "parentCentralization": True
-                    }
+        import json as js
+        options = {
+            "layout": {
+                "hierarchical": {
+                    "enabled": True,
+                    "direction": "UD",
+                    "levelSeparation": 160,
+                    "nodeSpacing": 220,
+                    "treeSpacing": 260,
+                    "sortMethod": "hubsize",
+                    "blockShifting": False,
+                    "edgeMinimization": False,
+                    "parentCentralization": True
+                }
+            },
+            "physics": {"enabled": False},
+            "edges": {
+                "smooth": {
+                    "enabled": True,
+                    "type": "cubicBezier",
+                    "forceDirection": "vertical",
+                    "roundness": 0.6
                 },
-                "physics": {"enabled": False},
-                "edges": {"smooth": False},
-                "nodes": {"shape": "box"}
+                "color": {"inherit": False, "color": "#5b7bb3"},
+                "width": 2,
+                "arrows": {"to": {"enabled": True, "scaleFactor": 0.6}}
+            },
+            "nodes": {
+                "shape": "box",
+                "borderWidth": 1,
+                "color": {"background": "#dce9ff", "border": "#8aa8d6"},
+                "font": {"size": 14}
             }
-            net.set_options(json.dumps(options))
+        }
+        net.set_options(js.dumps(options))
 
-            # 婚姻使用虛線，不影響層級
-            for m in db.marriages.values():
-                a, b = m.a, m.b
-                if a in db.persons and b in db.persons:
-                    net.add_edge(a, b, dashes=True, physics=False, arrows='', color={"color": "#888", "inherit": False})
+        # 婚姻：虛線，不影響層級
+        for m in db.marriages.values():
+            a, b = m.a, m.b
+            if a in db.persons and b in db.persons:
+                net.add_edge(a, b, dashes=True, physics=False, arrows='', color={"color": "#999", "inherit": False})
 
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-                net.write_html(tmp.name, notebook=False)
-                html = open(tmp.name, "r", encoding="utf-8").read()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
+            net.write_html(tmp.name, notebook=False)
+            html = open(tmp.name, "r", encoding="utf-8").read()
 
-            left, right = st.columns([3, 2], gap="large")
-            with left:
-                st.components.v1.html(html, height=720, scrolling=True)
-        except Exception as e:
-            st.exception(e)
-            st.stop()
+        left, right = st.columns([3, 2], gap="large")
+        with left:
+            st.components.v1.html(html, height=720, scrolling=True)
 
-        # 右側：快速新增/修改
         with right:
             st.markdown("### ⚡ 快速新增 / 修改")
             all_names = sorted(list(db.name_index().keys()))
