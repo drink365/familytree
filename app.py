@@ -3,9 +3,13 @@ import json
 from datetime import date, datetime
 from collections import defaultdict, deque
 from typing import Dict, List, Optional
+import tempfile  # ← 加這行
 
 import streamlit as st
 import pandas as pd
+import networkx as nx
+from pyvis.network import Network
+
 
 try:
     import networkx as nx
