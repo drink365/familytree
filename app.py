@@ -1,20 +1,22 @@
-# app.py — FamilyTree v7.6.1 (layered ranks + inheritance tab)
-# - 不需安裝系統 Graphviz：自製 DOT + st.graphviz_chart
-# - 規則：同層【前任 → 本人 → 現任】；婚姻實線、離婚/喪偶虛線；孩子自父母中點垂直
-# - 同代必同層（用 rank=same）；中點 rail 放在子代層
-# - 內建「陳一郎家族」示範；含「法定繼承」簡化版
+# app.py — FamilyTree v7.6.2
+# - 不需系統 graphviz：自製 DOT + st.graphviz_chart
+# - 層級：父母層 +1 推子女層；夫妻同層；孩子從「夫妻中點」垂直往下
+# - 水平順序：同層使用最終 ordered，再用 invis + constraint + 高 weight 綁定
+#   前任 → 本人 → 現任；婚姻之配偶也會緊鄰（王子與王子妻）
+# - 分頁：人物｜關係｜法定繼承（簡化）｜家族樹
+# - 內建：一鍵載入「陳一郎家族」示範
 
 import json
 from datetime import date, datetime
 from collections import defaultdict
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import streamlit as st
 import pandas as pd
 
-VERSION = "7.6.1"
+VERSION = "7.6.2"
 
-# ----------------- Minimal DOT builder -----------------
+# =============== Minimal DOT builder ===============
 def _fmt_attrs(d: dict) -> str:
     if not d:
         return ""
@@ -78,7 +80,7 @@ class DotBuilder:
         lines.append("}")
         return "\n".join(lines)
 
-# ----------------- Data Models -----------------
+# =============== Data Models ===============
 class Person:
     def __init__(self, pid, name, gender="unknown", birth=None, death=None, note=""):
         self.pid, self.name, self.gender, self.birth, self.death, self.note = (
@@ -110,7 +112,7 @@ class DB:
     @staticmethod
     def from_obj(o) -> "DB":
         db = DB()
-        if "members" in o:  # A 格式（你目前常用）
+        if "members" in o:  # A 格式
             for m in o.get("members", []):
                 db.persons[m["id"]] = Person(
                     m["id"], m["name"], m.get("gender", "unknown"),
@@ -170,7 +172,7 @@ class DB:
 def union_id(a: str, b: str) -> str:
     return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
 
-# ----------------- Levels (generations) -----------------
+# =============== Levels ===============
 def compute_levels_and_maps(db: DB):
     parents_of = defaultdict(list)
     children_of = defaultdict(list)
@@ -178,58 +180,45 @@ def compute_levels_and_maps(db: DB):
         parents_of[l.child].append(l.parent)
         children_of[l.parent].append(l.child)
 
-    memo: Dict[str, int] = {}
+    memo = {}
     def depth(pid: str) -> int:
         if pid in memo:
             return memo[pid]
         ps = parents_of.get(pid, [])
-        if not ps:
-            memo[pid] = 0
-        else:
-            memo[pid] = 1 + max(depth(p) for p in ps)
+        memo[pid] = 0 if not ps else 1 + max(depth(p) for p in ps)
         return memo[pid]
 
     level = {pid: depth(pid) for pid in db.persons}
 
-    # 同一對配偶至同層
+    # 夫妻同層
     changed = True
     while changed:
         changed = False
         for m in db.marriages.values():
             a, b = m.a, m.b
-            if a not in level or b not in level:
-                continue
-            t = max(level[a], level[b])
-            if level[a] != t or level[b] != t:
-                level[a] = level[b] = t
-                changed = True
-
+            if a in level and b in level:
+                t = max(level[a], level[b])
+                if level[a] != t or level[b] != t:
+                    level[a] = level[b] = t
+                    changed = True
     return level, parents_of, children_of
 
-# ----------------- Graphviz tree (分層 + 中點垂直) -----------------
+# =============== Graphviz (層級 + 水平強制順序) ===============
 def build_graphviz_source(db: DB) -> str:
-    # 1) 先算出各代(level)與父母/子女對應
     level, parents_of, children_of = compute_levels_and_maps(db)
 
     dot = DotBuilder(directed=True)
-    dot.attr(
-        rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6",
-        compound=True, ordering="out"
-    )
-    dot.attr(
-        "node",
-        shape="box", style="rounded,filled",
-        fillcolor="#0f5b75", color="#0b3e52",
-        fontcolor="white", fontname="Taipei Sans TC, Noto Sans CJK, Arial",
-        penwidth="2", fontsize="14"
-    )
+    dot.attr(rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6", compound=True, ordering="out")
+    dot.attr("node", shape="box", style="rounded,filled",
+             fillcolor="#0f5b75", color="#0b3e52",
+             fontcolor="white", fontname="Taipei Sans TC, Noto Sans CJK, Arial",
+             penwidth="2", fontsize="14")
     dot.attr("edge", color="#1a4b5f", penwidth="2")
 
-    # 所有人先建立節點
     for pid, p in db.persons.items():
-        dot.node(pid, label=p.name)
+        dot.node(pid, p.name)
 
-    # 2) 建立「前任 / 現任」索引
+    # 前任 / 現任
     ex_map = defaultdict(list)
     cur_map = {}
     for m in db.marriages.values():
@@ -237,22 +226,20 @@ def build_graphviz_source(db: DB) -> str:
         if m.status == "married":
             cur_map[a] = b
             cur_map[b] = a
-        else:  # divorced / widowed 視為前任
-            ex_map[a].append(b)
-            ex_map[b].append(a)
+        else:
+            ex_map[a].append(b); ex_map[b].append(a)
 
-    # 3) 依層分組
     nodes_by_level = defaultdict(list)
     for pid in db.persons:
         nodes_by_level[level.get(pid, 0)].append(pid)
 
-    # 4) 每一層「先決定最終順序」→ rank=same（單一區塊）→ invis 鏈條（constraint=True, weight 大）
-    for lvl in sorted(nodes_by_level.keys()):
+    # 每層：決定最終 ordered，並用 invis+constraint 固定水平順序
+    for lvl in sorted(nodes_by_level):
         lv_nodes = sorted(nodes_by_level[lvl])
         placed = set()
         ordered = []
 
-        # (a) 先放有「前任或現任」的人的“完整區塊”＝前任們 + 本人 + 現任
+        # 先處理有婚姻者，讓配偶/前任緊鄰（前任→本人→現任）
         for pid in lv_nodes:
             if pid in placed:
                 continue
@@ -264,29 +251,24 @@ def build_graphviz_source(db: DB) -> str:
                 block = exs + [pid] + ([cur] if cur else [])
                 for x in block:
                     if x not in placed:
-                        ordered.append(x)
-                        placed.add(x)
+                        ordered.append(x); placed.add(x)
 
-        # (b) 剩下沒有婚姻關係要固定順序的人，依姓名排序放在後面
+        # 再放單身/沒有需要貼齊的人
         for pid in lv_nodes:
             if pid not in placed:
-                ordered.append(pid)
-                placed.add(pid)
+                ordered.append(pid); placed.add(pid)
 
-        # 這一層只有一個 rank=same 區塊，順序就是 ordered
         if ordered:
             dot.extra.append("{rank=same; " + " ".join(f'"{x}"' for x in ordered) + "}")
-            # 用 invis + constraint=True + 高 weight 綁定水平順序
             for a, b in zip(ordered, ordered[1:]):
-                dot.edge(a, b, style="invis", constraint=True, weight=1000, minlen=1)
+                dot.edge(a, b, style="invis", constraint=True, weight=2000, minlen=1)
 
-    # 5) 幫每段婚姻建立「夫妻中點」與「子女 Rail」（Rail 強制在子女層）
-    def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
+    # 子女 rail（在子女層），夫妻中點→rail→孩子
+    def add_sibling_rail(a: str, b: str, kids: List[str]):
         if not kids:
             return None
-        rail_id = f"rail_{parent_a}_{parent_b}"
+        rail_id = f"rail_{a}_{b}"
         dot.node(rail_id, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
-        # rail 與孩子同層
         dot.extra.append("{rank=same; \"" + rail_id + "\" " + " ".join(f'"{k}"' for k in kids) + "}")
         for c in kids:
             dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen=2)
@@ -297,36 +279,35 @@ def build_graphviz_source(db: DB) -> str:
         if a not in db.persons or b not in db.persons:
             continue
         style = "solid" if m.status == "married" else "dashed"
-
-        # 夫妻中點（與夫妻同層）
         uid = union_id(a, b)
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
         dot.extra.append(f'{{rank=same; "{a}" "{uid}" "{b}"}}')
         dot.edge(a, uid, dir="none", style=style, weight=5, minlen=1)
         dot.edge(uid, b, dir="none", style=style, weight=5, minlen=1)
 
-        # 找雙方共同子女 → 建子女 rail（在子女層），夫妻中點連到 rail
         kids = [c for c in children_of.get(a, []) if c in set(children_of.get(b, []))]
         if kids:
             kids = sorted(kids)
             rail = add_sibling_rail(a, b, kids)
             dot.edge(uid, rail, dir="none", tailport="s", headport="n", minlen=2)
 
-    # 6) 單親：只有一位父或母 → 直接父→子，拉長距離避免擠在一起
+    # 單親
     for child, parents in list(parents_of.items()):
         if len(parents) == 1:
             dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen=2)
 
     return dot.source
 
-
-# ----------------- Inheritance (簡化版：配偶優先 + 直系卑親屬代位) -----------------
+# =============== Inheritance (簡化示範) ===============
 class InheritanceTW:
     def __init__(self, db: DB):
         self.db = db
 
     def heirs(self, decedent: str, dod: str):
-        ddate = datetime.strptime(dod, "%Y-%m-%d").date()
+        try:
+            ddate = datetime.strptime(dod, "%Y-%m-%d").date()
+        except Exception:
+            ddate = date.today()
         if decedent not in self.db.persons:
             return pd.DataFrame(), "找不到被繼承人"
 
@@ -345,8 +326,8 @@ class InheritanceTW:
                         s.append(o)
             return list(dict.fromkeys(s))
 
-        sp = spouses_alive(decedent)
-        kids = children_of(decedent)
+        sp = spouses_alive(decedent)     # 只算在世配偶
+        kids = children_of(decedent)     # 直系卑親屬（未再分孫代，簡化）
 
         rows = []
         if kids or sp:
@@ -358,9 +339,10 @@ class InheritanceTW:
                 each = (1 - spouse_share) / len(kids) if len(kids) > 0 else 0
                 for k in kids:
                     rows.append({"name": self.db.persons[k].name, "relation": "直系卑親屬", "share": round(each, 6)})
+
         return pd.DataFrame(rows), "計算完成"
 
-# ----------------- UI -----------------
+# =============== UI ===============
 st.set_page_config(layout="wide", page_title=f"家族平台 {VERSION}", page_icon="🌳")
 st.title(f"🌳 家族平台（人物｜關係｜法定繼承｜家族樹） — v{VERSION}")
 
@@ -494,12 +476,12 @@ with tab3:
 
 with tab4:
     st.subheader("家族樹（夫妻水平線；離婚虛線；孩子由中點垂直；前任左、現任右）")
+    st.caption(f"👥 人物 {len(db.persons)} | 💍 婚姻 {len(db.marriages)} | 👶 親子 {len(db.links)}")
     if not db.persons:
         st.info("請先建立人物/關係，或在左側按「一鍵載入示範」。")
     else:
         try:
             dot_src = build_graphviz_source(db)
-            st.caption(f"👥 人物 {len(db.persons)} | 💍 婚姻 {len(db.marriages)} | 👶 親子 {len(db.links)}")
             st.graphviz_chart(dot_src, use_container_width=True)
             with st.expander("顯示 DOT 原始碼（除錯用）", expanded=False):
                 st.code(dot_src, language="dot")
