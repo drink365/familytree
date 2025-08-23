@@ -1,9 +1,9 @@
-# app.py — FamilyTree v7.4.0
+# app.py — FamilyTree v7.4.2
 # 重點：
-# 1) 前任在左、本人在中、現任在右：以「左右錨點 + 高權重不可見邊」鎖死順序（即使 DOT 想重排也不會）
-# 2) 子女一律從雙親連線中點垂直往下（離婚/喪偶=虛線；婚姻=實線）
-# 3) 兄弟姊妹共用水平匯流線，減少重疊
-# 4) 頁籤：人物｜關係｜法定繼承試算（簡化示範）｜家族樹（Graphviz / PyVis）
+# 1) 同層建立「不可見高權重鏈」→ 確保（前任 … → 本人 → 現任 …）的左右順序
+# 2) 子女一律從雙親連線中點往下（離婚=虛線，婚姻=實線）
+# 3) 兄弟姊妹共用水平匯流線以減少重疊
+# 4) 移除 PyVis，僅保留 Graphviz
 
 import json
 from datetime import date, datetime
@@ -14,9 +14,8 @@ import tempfile
 import streamlit as st
 import pandas as pd
 from graphviz import Digraph
-from pyvis.network import Network
 
-VERSION = "v7.4.0"
+VERSION = "v7.4.2"
 
 # ----------------- Data Models -----------------
 class Person:
@@ -130,7 +129,7 @@ def compute_levels_and_parents(db: DB) -> Tuple[Dict[str, int], Dict[str, List[s
 
     level = {pid: depth(pid) for pid in db.persons}
 
-    # 夫妻同層（拉齊至較高）
+    # 夫妻同層（包含離婚）
     changed = True
     while changed:
         changed = False
@@ -163,37 +162,46 @@ def build_graphviz(db: DB) -> Digraph:
     for pid, p in db.persons.items():
         dot.node(pid, label=p.name)
 
-    # 依輩分同層
-    by_level = defaultdict(list)
+    # 先收集每人之前任/現任清單
+    ex_map, cur_map = defaultdict(list), defaultdict(list)
+    for m in db.marriages.values():
+        ex = (m.status != "married")
+        ex_map[m.a].append(m.b) if ex else cur_map[m.a].append(m.b)
+        ex_map[m.b].append(m.a) if ex else cur_map[m.b].append(m.a)
+
+    # 依層建立「不可見高權重鏈」來固定左右順序
+    nodes_by_level = defaultdict(list)
     for pid in db.persons:
-        by_level[levels.get(pid, 0)].append(pid)
-    for lvl in sorted(by_level.keys()):
-        dot.body.append("{rank=same; " + " ".join(by_level[lvl]) + "}")
+        nodes_by_level[levels.get(pid, 0)].append(pid)
 
-    # －－－ 核心：用 invis + constraint=false 鎖定「前任 ← 本人 → 現任」的左右順序 －－－
-    marriages_by_person = defaultdict(list)
-    for _, m in db.marriages.items():
-        marriages_by_person[m.a].append(m)
-        marriages_by_person[m.b].append(m)
+    for lvl in sorted(nodes_by_level.keys()):
+        level_nodes = sorted(nodes_by_level[lvl])  # 穩定順序
+        used = set()
+        sequence: List[str] = []
 
-    for pid, marrs in marriages_by_person.items():
-        ex_list, cur_list = [], []
-        for m in marrs:
-            spouse = m.b if pid == m.a else m.a
-            (cur_list if m.status == "married" else ex_list).append(spouse)
+        # 先把「同時有前任+現任」的人當一個 group：ex... → 本人 → cur...
+        for pid in level_nodes:
+            if pid in used:
+                continue
+            exs = sorted(set([s for s in ex_map.get(pid, []) if levels.get(s, 0) == lvl]))
+            curs = sorted(set([s for s in cur_map.get(pid, []) if levels.get(s, 0) == lvl]))
+            if exs and curs:
+                block = exs + [pid] + curs
+                sequence.extend(block)
+                used.update(block)
 
-        if ex_list and cur_list:
-            # 穩定排序，避免非決定性
-            ex_list  = sorted(set(ex_list))
-            cur_list = sorted(set(cur_list))
+        # 再把剩下沒分組的節點補上
+        for pid in level_nodes:
+            if pid not in used:
+                sequence.append(pid)
+                used.add(pid)
 
-            chain = ex_list + [pid] + cur_list
-            # 同層宣告
-            dot.body.append("{rank=same; " + " ".join(chain) + "}")
-            # 左→右不可見鏈（不參與分層，只影響左右順序）
-            for a, b in zip(chain, chain[1:]):
-                dot.edge(a, b, style="invis", constraint="false", weight="100", minlen="1")
-    # －－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－
+        # 宣告 rank=same
+        dot.body.append("{rank=same; " + " ".join(sequence) + "}")
+
+        # 以高權重不可見邊把整層「串成一條鏈」→ 鎖死左右順序
+        for a, b in zip(sequence, sequence[1:]):
+            dot.edge(a, b, style="invis", constraint="true", weight="10000", minlen="1")
 
     # 兄弟姊妹水平匯流線（美化）
     def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
@@ -205,7 +213,7 @@ def build_graphviz(db: DB) -> Digraph:
             dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen="1")
         return rail_id
 
-    # 婚姻與子女（子女從 union 中點往下；離婚=虛線；婚姻邊權重調低避免干擾排序）
+    # 婚姻與子女（孩子從 union 中點往下；離婚=虛線；婚姻邊權重調低避免干擾排序）
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons:
@@ -230,57 +238,9 @@ def build_graphviz(db: DB) -> Digraph:
 
     return dot
 
-
-# ----------------- PyVis (fallback) -----------------
-def build_pyvis(db: DB) -> Network:
-    import json as js
-    levels, parents_of, children_of = compute_levels_and_parents(db)
-    net = Network(height="720px", width="100%", directed=False, notebook=False)
-    for pid, p in db.persons.items():
-        net.add_node(pid, label=p.name, shape="box", level=levels.get(pid, 0))
-    for m in db.marriages.values():
-        dashed = (m.status != "married")
-        net.add_edge(
-            m.a, m.b, dashes=dashed, physics=False, arrows="",
-            color={"color": "#2f5e73", "inherit": False},
-            smooth={"type": "horizontal"}, width=2
-        )
-    unions = set()
-    for child, parents in parents_of.items():
-        if len(parents) == 1:
-            par = parents[0]
-            net.add_edge(
-                par, child, arrows="to",
-                color={"color": "#2f5e73", "inherit": False}, width=2,
-                smooth={"type": "cubicBezier", "forceDirection": "vertical", "roundness": 0.0}
-            )
-        elif len(parents) >= 2:
-            a, b = sorted(parents)[:2]
-            uid = union_id(a, b)
-            if uid not in unions:
-                net.add_node(uid, label="", shape="dot", size=1, physics=False)
-                net.add_edge(a, uid, arrows="", color={"color": "#cfd8e3", "inherit": False},
-                             width=1, smooth={"type": "horizontal"}, physics=False)
-                net.add_edge(b, uid, arrows="", color={"color": "#cfd8e3", "inherit": False},
-                             width=1, smooth={"type": "horizontal"}, physics=False)
-                unions.add(uid)
-            net.add_edge(
-                uid, child, arrows="to",
-                color={"color": "#2f5e73", "inherit": False}, width=2,
-                smooth={"type": "cubicBezier", "forceDirection": "vertical", "roundness": 0.0}
-            )
-    options = {
-        "layout": {"hierarchical": {"enabled": True, "direction": "UD", "sortMethod": "directed"}},
-        "physics": {"enabled": False},
-        "edges": {"smooth": {"enabled": True, "type": "cubicBezier"}, "color": {"inherit": False}},
-        "nodes": {"shape": "box"}
-    }
-    net.set_options(js.dumps(options))
-    return net
-
 # ----------------- UI -----------------
 st.set_page_config(layout="wide", page_title=f"家族平台 {VERSION}", page_icon="🌳")
-st.title(f"🌳 家族平台（人物｜關係｜法定繼承｜家族樹） — {VERSION}")
+st.title(f"v{VERSION}")
 
 if "db" not in st.session_state:
     st.session_state.db = DB()
@@ -445,12 +405,4 @@ with tab4:
     if not db.persons:
         st.info("請先建立人物/關係或載入示範資料。")
     else:
-        style = st.radio("呈現引擎", ["Graphviz（建議）", "PyVis（備援）"], horizontal=True)
-        if style.startswith("Graphviz"):
-            st.graphviz_chart(build_graphviz(db))
-        else:
-            net = build_pyvis(db)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-                net.write_html(tmp.name, notebook=False)
-                html = open(tmp.name, "r", encoding="utf-8").read()
-            st.components.v1.html(html, height=780, scrolling=True)
+        st.graphviz_chart(build_graphviz(db))
