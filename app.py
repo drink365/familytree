@@ -1,9 +1,10 @@
-# app.py — FamilyTree v7.3.7
-# 功能重點：
-# - 夫妻同層；離婚/喪偶虛線、仍婚實線
-# - 子女從「夫妻中點」垂直往下（minlen=1），視覺上固定三層（示範）
-# - 若同一人同時有「前任」與「現任」，前任在左、現任在右（以不可見高權重邊控制左右順序）
-# - 頁籤：人物｜關係｜法定繼承試算（台灣，直系卑親屬代位）｜家族樹（Graphviz / PyVis）
+# app.py — FamilyTree v7.3.8
+# 重點：
+# 1) 規則#1：同一人的配偶若同時有前任與現任，前任在該人的左側、現任在右側，三人同層
+#    （以 rank=same + 不可見高權重邊控制左右順序；多位前任更靠左，多位現任更靠右）
+# 2) 子女一律從「雙親連線的中點」往下（實線=婚、虛線=離/喪），同代同層
+# 3) 兄弟姊妹以水平匯流線（sibling rail）再垂直到各子女，減少重疊
+# 4) 頁籤：人物｜關係｜法定繼承試算（台灣，直系卑親屬代位簡化）｜家族樹（Graphviz / PyVis）
 
 import json
 from datetime import date, datetime
@@ -16,7 +17,7 @@ import pandas as pd
 from graphviz import Digraph
 from pyvis.network import Network
 
-VERSION = "v7.3.7"
+VERSION = "v7.3.8"
 
 # ----------------- Data Models -----------------
 class Person:
@@ -47,7 +48,7 @@ class DB:
     @staticmethod
     def from_obj(o) -> "DB":
         db = DB()
-        # 兩種常見匯入格式：members/children；或 persons/marriages/links
+        # 支援兩種結構：members/children；或 persons/marriages/links
         if "members" in o:
             for m in o.get("members", []):
                 db.persons[m["id"]] = Person(
@@ -130,7 +131,7 @@ def compute_levels_and_parents(db: DB) -> Tuple[Dict[str, int], Dict[str, List[s
 
     level = {pid: depth(pid) for pid in db.persons}
 
-    # 夫妻同層（拉齊到較高）
+    # 夫妻同層（拉齊至較高）
     changed = True
     while changed:
         changed = False
@@ -169,19 +170,14 @@ def build_graphviz(db: DB) -> Digraph:
     for lvl in sorted(by_level.keys()):
         dot.body.append("{rank=same; " + " ".join(by_level[lvl]) + "}")
 
-    def is_female(pid: str) -> bool:
-        g = (db.persons.get(pid).gender or "").lower()
-        return g in ("f", "female", "女", "女姓")
-
-    # 每人婚姻，先建立左右順序（前任在左、現任在右）
+    # 先根據「前任左、現任右」建立左右順序（不可見高權重邊）
     marriages_by_person = defaultdict(list)
     for mid, m in db.marriages.items():
         marriages_by_person[m.a].append((mid, m))
         marriages_by_person[m.b].append((mid, m))
 
     for pid, marrs in marriages_by_person.items():
-        ex_list = []     # 前任（divorced / widowed）
-        cur_list = []    # 現任（married）
+        ex_list, cur_list = [], []
         for mid, m in marrs:
             spouse = m.b if pid == m.a else m.a
             if m.status == "married":
@@ -189,42 +185,56 @@ def build_graphviz(db: DB) -> Digraph:
             else:
                 ex_list.append((mid, m, spouse))
         if ex_list and cur_list:
-            # 取第一位作為左右錨點
-            _, m_ex, ex_sp = ex_list[0]
-            _, m_cur, cur_sp = cur_list[0]
-            dot.body.append("{rank=same; " + f"{ex_sp} {pid} {cur_sp}" + "}")
-            dot.edge(ex_sp, pid, style="invis", weight="200")
-            dot.edge(pid, cur_sp, style="invis", weight="200")
-            # 其他前任排更左
-            for _, m2, sp2 in ex_list[1:]:
-                dot.body.append("{rank=same; " + f"{sp2} {ex_sp}" + "}")
-                dot.edge(sp2, ex_sp, style="invis", weight="150")
-            # 其他現任（較少見）排更右
-            for _, m2, sp2 in cur_list[1:]:
-                dot.body.append("{rank=same; " + f"{cur_sp} {sp2}" + "}")
-                dot.edge(cur_sp, sp2, style="invis", weight="150")
+            # 取第一位前任與第一位現任作為左右錨點
+            _, _me, ex_sp = ex_list[0]
+            _, _mc, cur_sp = cur_list[0]
+            dot.body.append(f"{{rank=same; {ex_sp} {pid} {cur_sp}}}")
+            dot.edge(ex_sp, pid, style="invis", weight="300")
+            dot.edge(pid, cur_sp, style="invis", weight="300")
+            # 其餘前任更靠左
+            for _, _m2, sp2 in ex_list[1:]:
+                dot.body.append(f"{{rank=same; {sp2} {ex_sp}}}")
+                dot.edge(sp2, ex_sp, style="invis", weight="200")
+            # 其餘現任更靠右
+            for _, _m2, sp2 in cur_list[1:]:
+                dot.body.append(f"{{rank=same; {cur_sp} {sp2}}}")
+                dot.edge(cur_sp, sp2, style="invis", weight="200")
 
-    # 畫婚姻與孩子（孩子從夫妻中點垂直往下；minlen=1）
+    # 幫助兄弟姊妹「共用一條水平匯流線」的函數
+    def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
+        if not kids:
+            return
+        rail_id = f"rail_{parent_a}_{parent_b}"
+        # rail 是個小點，與每個孩子之間畫下垂；rail 與 union 中點連線一次
+        dot.node(rail_id, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
+        for c in kids:
+            dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen="1")
+        return rail_id
+
+    # 畫婚姻與孩子（孩子從雙親的 union 中點垂直往下；離婚=虛線）
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons:
             continue
         style = "solid" if m.status == "married" else "dashed"
         uid = union_id(a, b)
+        # 夫妻中點
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
-        dot.body.append("{rank=same; " + a + " " + uid + " " + b + "}")
+        dot.body.append(f"{{rank=same; {a} {uid} {b}}}")
         dot.edge(a, uid, dir="none", style=style, weight="100", minlen="1")
         dot.edge(uid, b, dir="none", style=style, weight="100", minlen="1")
 
-        kids = sorted(set(children_of.get(a, [])) & set(children_of.get(b, [])))
-        for c in kids:
-            dot.edge(uid, c, dir="none", tailport="s", headport="n", minlen="1")  # 固定下降一層
-            # 以不可見邊，讓孩子稍微靠母方
-            mom = a if is_female(a) else (b if is_female(b) else None)
-            if mom:
-                dot.edge(mom, c, style="invis", weight="30", minlen="1")
+        # 雙親共同子女
+        kids = [c for c in children_of.get(a, []) if c in set(children_of.get(b, []))]
+        kids = sorted(kids)
+        if kids:
+            # 兄弟姊妹水平匯流線，避免每個孩子都直接從 union 中點下來造成擁擠
+            rail = add_sibling_rail(a, b, kids)
+            # union 中點 → rail 垂直一次即可
+            dot.edge(uid, rail, dir="none", tailport="s", headport="n", minlen="1")
 
-    # 單親
+    # 單親（只有一個父或母）的情況
+    # 仍採「單親 → 子女」垂直，避免無父/母的 union
     for child, parents in parents_of.items():
         if len(parents) == 1:
             dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen="1")
@@ -392,7 +402,7 @@ with tab2:
             st.dataframe(pd.DataFrame([{**vars(l)} for l in db.links.values()]))
 
 with tab3:
-    st.subheader("法定繼承人試算（配偶優先；僅直系卑親屬代位）")
+    st.subheader("法定繼承人試算（配偶優先；僅直系卑親屬代位，簡化示範）")
     if not db.persons:
         st.info("請先建立人物/關係或載入示範資料。")
     else:
@@ -414,7 +424,6 @@ with tab3:
                     for m in self.db.marriages.values():
                         if pid in (m.a, m.b):
                             o = m.b if pid == m.a else m.a
-                            # 簡化：只要對方活著且婚姻未在死亡日前終止就算
                             if (m.end is None) or (_dt.strptime(m.end, "%Y-%m-%d").date() > ddate):
                                 if alive(o):
                                     s.append(o)
