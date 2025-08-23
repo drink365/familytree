@@ -1,8 +1,7 @@
 
-# app.py（整合版）
+# app.py（整合版 v6）
 # 分頁：人物 / 關係 / 法定繼承試算 / 家族樹
-# 家族樹：夫妻水平線（married=實線、divorced/widowed=虛線）；
-#        若有子女，從夫妻線中點（union node）垂直往下連到孩子。
+# 家族樹：夫妻水平線（已婚=實線、離婚/喪偶=虛線）；若有子女，從夫妻線中點（union node）垂直往下。
 # 匯入：支援 {members, marriages, children} 與 {persons, marriages, links}
 
 import json
@@ -13,7 +12,6 @@ import tempfile
 
 import streamlit as st
 import pandas as pd
-import networkx as nx
 from pyvis.network import Network
 
 # ----------------- 資料模型 -----------------
@@ -47,7 +45,7 @@ class DB:
         # 支援兩種結構：members/marriages/children 或 persons/marriages/links
         if "members" in o:
             for m in o.get("members", []):
-                db.persons[m["id"]] = Person(m["id"], m["name"], m.get("gender","unknown"))
+                db.persons[m["id"]] = Person(m["id"], m["name"], m.get("gender","unknown"), m.get("birth"), m.get("death"), m.get("note",""))
             for m in o.get("marriages", []):
                 mid = f"m_{m['husband']}_{m['wife']}"
                 db.marriages[mid] = Marriage(mid, m["husband"], m["wife"], m.get("status","married"), m.get("start"), m.get("end"))
@@ -61,11 +59,12 @@ class DB:
                     db.links[cid2] = ParentChild(cid2, c["mother"], c["child"])
         else:
             for pid, p in o.get("persons", {}).items():
-                db.persons[pid] = Person(**p)
+                db.persons[pid] = Person(p.get("pid", pid), p.get("name",""), p.get("gender","unknown"),
+                                         p.get("birth"), p.get("death"), p.get("note",""))
             for mid, m in o.get("marriages", {}).items():
-                db.marriages[mid] = Marriage(**m)
+                db.marriages[mid] = Marriage(m.get("mid", mid), m["a"], m["b"], m.get("status","married"), m.get("start"), m.get("end"))
             for cid, c in o.get("links", {}).items():
-                db.links[cid] = ParentChild(**c)
+                db.links[cid] = ParentChild(c.get("cid", cid), c["parent"], c["child"])
         return db
 
     def to_json(self)->dict:
@@ -75,18 +74,20 @@ class DB:
             "links": {k: vars(v) for k,v in self.links.items()},
         }
 
-    def name_index(self) -> Dict[str,str]:
-        return {p.name: pid for pid,p in self.persons.items()}
-
     def ensure_person(self, name: str, gender="unknown") -> str:
-        idx = self.name_index()
-        if name in idx: return idx[name]
+        # 以姓名查找現有人物；如無則建立
+        for pid, p in self.persons.items():
+            if p.name == name:
+                return pid
         base = "p_" + "".join(ch if ch.isalnum() else "_" for ch in name)
         pid = base; i = 1
         while pid in self.persons:
             i += 1; pid = f"{base}_{i}"
         self.persons[pid] = Person(pid, name, gender)
         return pid
+
+def get_name_index(db: DB) -> Dict[str, str]:
+    return {p.name: pid for pid, p in db.persons.items()}
 
 # ----------------- 工具：層級與父母 -----------------
 def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str]], Dict[str,List[str]]]:
@@ -284,6 +285,7 @@ with st.sidebar:
         except Exception as e:
             st.exception(e)
 
+    # 匯出
     st.download_button("📥 下載 JSON 備份",
                        data=json.dumps(db.to_json(), ensure_ascii=False, indent=2),
                        file_name="family.json", mime="application/json")
@@ -309,15 +311,15 @@ with tab1:
 # --- Tab2 關係 ---
 with tab2:
     st.subheader("婚姻 / 親子關係（用姓名選擇）")
-    names = sorted(db.name_index().keys())
+    names = sorted([p.name for p in db.persons.values()])
     if not names:
         st.info("請先建立人物或一鍵載入示範資料。")
     else:
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**婚姻**")
-            a = st.selectbox("配偶 A", names)
-            b = st.selectbox("配偶 B", names)
+            a = st.selectbox("配偶 A", names, key="m_a")
+            b = st.selectbox("配偶 B", names, key="m_b")
             stt = st.selectbox("狀態", ["married","divorced","widowed"])
             if st.button("建立/更新 婚姻"):
                 if a == b:
@@ -330,8 +332,8 @@ with tab2:
                     st.success(f"婚姻已儲存：{a} - {b}（{stt}）")
         with c2:
             st.markdown("**親子**")
-            par = st.selectbox("父/母", names)
-            chd = st.selectbox("子女", names)
+            par = st.selectbox("父/母", names, key="pc_p")
+            chd = st.selectbox("子女", names, key="pc_c")
             if st.button("建立/更新 親子"):
                 if par == chd:
                     st.error("同一個人不能同時是自己的父母與子女")
@@ -353,10 +355,10 @@ with tab3:
     if not db.persons:
         st.info("請先建立人物/關係或載入示範資料。")
     else:
-        pick = st.selectbox("被繼承人", sorted(db.name_index().keys()))
+        pick = st.selectbox("被繼承人", sorted([p.name for p in db.persons.values()]))
         dod = st.text_input("死亡日 YYYY-MM-DD", value=str(date.today()))
         if st.button("計算繼承人"):
-            dec_id = db.name_index()[pick]
+            dec_id = get_name_index(db)[pick]
             rule = InheritanceTW(db)
             df, memo = rule.heirs(dec_id, dod)
             if df.empty:
@@ -373,7 +375,7 @@ with tab4:
     else:
         levels, parents_of, children_of = compute_levels_and_parents(db)
 
-        net = Network(height="700px", width="100%", directed=True, notebook=False)
+        net = Network(height="720px", width="100%", directed=True, notebook=False)
         # 人物節點
         for pid, p in db.persons.items():
             net.add_node(pid, label=p.name, shape="box", level=levels.get(pid,0))
@@ -431,4 +433,4 @@ with tab4:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
             net.write_html(tmp.name, notebook=False)
             html = open(tmp.name, "r", encoding="utf-8").read()
-        st.components.v1.html(html, height=760, scrolling=True)
+        st.components.v1.html(html, height=780, scrolling=True)
