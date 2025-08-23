@@ -1,8 +1,8 @@
 
-# app.py（整合版 v6）
-# 分頁：人物 / 關係 / 法定繼承試算 / 家族樹
-# 家族樹：夫妻水平線（已婚=實線、離婚/喪偶=虛線）；若有子女，從夫妻線中點（union node）垂直往下。
-# 匯入：支援 {members, marriages, children} 與 {persons, marriages, links}
+# app.py（自研版 v7）
+# 四分頁：人物 / 關係 / 法定繼承試算 / 家族樹
+# 參考系譜學慣例，但使用我們自定 JSON Schema（仍相容舊版 members/children 與 persons/links）
+# 家族樹：預設使用 Graphviz（夫妻水平線；已婚=實線、離婚/喪偶=虛線；孩子從夫妻中點垂直往下）。保留 PyVis 做為備援。
 
 import json
 from datetime import date, datetime
@@ -12,9 +12,10 @@ import tempfile
 
 import streamlit as st
 import pandas as pd
+from graphviz import Digraph
 from pyvis.network import Network
 
-# ----------------- 資料模型 -----------------
+# ----------------- 自家資料模型（簡潔但完整） -----------------
 class Person:
     def __init__(self, pid, name, gender="unknown", birth=None, death=None, note=""):
         self.pid, self.name, self.gender, self.birth, self.death, self.note = pid, name, gender, birth, death, note
@@ -42,12 +43,12 @@ class DB:
     @staticmethod
     def from_obj(o)->"DB":
         db = DB()
-        # 支援兩種結構：members/marriages/children 或 persons/marriages/links
+        # 支援兩種外來結構：members/marriages/children 或 persons/marriages/links
         if "members" in o:
             for m in o.get("members", []):
                 db.persons[m["id"]] = Person(m["id"], m["name"], m.get("gender","unknown"), m.get("birth"), m.get("death"), m.get("note",""))
             for m in o.get("marriages", []):
-                mid = f"m_{m['husband']}_{m['wife']}"
+                mid = m.get("id") or f"m_{m['husband']}_{m['wife']}"
                 db.marriages[mid] = Marriage(mid, m["husband"], m["wife"], m.get("status","married"), m.get("start"), m.get("end"))
             for c in o.get("children", []):
                 # 容錯：允許只有父或只有母（單親）
@@ -97,6 +98,7 @@ def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str
         parents_of[l.child].append(l.parent)
         children_of[l.parent].append(l.child)
 
+    # 找 root（沒有父母的人）
     roots = [pid for pid in db.persons if not parents_of[pid]]
     if not roots and db.persons:
         roots = [next(iter(db.persons))]
@@ -238,14 +240,85 @@ class InheritanceTW:
         if grands: return grands, "第四順位"
         return [], ""
 
+# ----------------- Graphviz 版家族樹（自家演算法） -----------------
+def build_graphviz(db: DB) -> Digraph:
+    levels, parents_of, children_of = compute_levels_and_parents(db)
+    dot = Digraph(engine="dot")
+    dot.attr(rankdir="TB", splines="ortho", nodesep="0.6", ranksep="1.2")
+    dot.attr("node", shape="box", style="rounded,filled", fillcolor="#E8F0FE", color="#1D4ED8", fontname="Taipei Sans TC, Noto Sans CJK, Arial")
+
+    # 依層級分 rank（同代同層）
+    by_level = defaultdict(list)
+    for pid in db.persons:
+        by_level[levels.get(pid,0)].append(pid)
+    for lvl in sorted(by_level.keys()):
+        same = " ".join(by_level[lvl])
+        if same:
+            dot.body.append("{rank=same; " + same + "}")
+    # 人物節點
+    for pid, p in db.persons.items():
+        dot.node(pid, label=p.name)
+
+    # 夫妻水平線（實線/虛線）+ union node → 子女
+    for m in db.marriages.values():
+        a, b = m.a, m.b
+        if a not in db.persons or b not in db.persons:
+            continue
+        style = "solid" if m.status == "married" else "dashed"
+        # 夫妻連線（純視覺，無箭頭，不影響層級）
+        dot.edge(a, b, dir="none", style=style, color="#2F5E73", constraint="false")
+        # union node 置於兩人之間
+        uid = union_id(a, b)
+        dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
+        dot.edge(a, uid, style="invis")  # 幫助定位
+        dot.edge(b, uid, style="invis")
+        # 從 union node 到孩子
+        kids = sorted(set(children_of.get(a, [])) & set(children_of.get(b, [])))
+        for c in kids:
+            dot.edge(uid, c, dir="none", color="#2F5E73")
+
+    # 單親→子女
+    for child, parents in parents_of.items():
+        if len(parents) == 1:
+            dot.edge(parents[0], child, dir="none", color="#2F5E73")
+
+    return dot
+
+# ----------------- PyVis 備援（保留舊法） -----------------
+def build_pyvis(db: DB) -> Network:
+    levels, parents_of, children_of = compute_levels_and_parents(db)
+    net = Network(height="720px", width="100%", directed=False, notebook=False)
+    for pid, p in db.persons.items():
+        net.add_node(pid, label=p.name, shape="box", level=levels.get(pid,0))
+    for m in db.marriages.values():
+        dashed = (m.status != "married")
+        net.add_edge(m.a, m.b, dashes=dashed, physics=False, arrows="", color={"color":"#2f5e73","inherit":False}, smooth={"type":"horizontal"}, width=2)
+    unions_done = set()
+    for child, parents in parents_of.items():
+        if len(parents) == 0:
+            continue
+        elif len(parents) == 1:
+            par = parents[0]
+            net.add_edge(par, child, arrows="to", color={"color":"#2f5e73","inherit":False}, width=2, smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
+        else:
+            a, b = sorted(parents)[:2]
+            uid = union_id(a,b)
+            if uid not in unions_done:
+                net.add_node(uid, label="", shape="dot", size=1, physics=False)
+                net.add_edge(a, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1, smooth={"type":"horizontal"}, physics=False)
+                net.add_edge(b, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1, smooth={"type":"horizontal"}, physics=False)
+                unions_done.add(uid)
+            net.add_edge(uid, child, arrows="to", color={"color":"#2f5e73","inherit":False}, width=2, smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
+    return net
+
 # ----------------- UI -----------------
 st.set_page_config(layout="wide", page_title="家族平台", page_icon="🌳")
 st.title("🌳 家族平台（人物｜關係｜法定繼承｜家族樹）")
 
 if "db" not in st.session_state:
     st.session_state.db = DB()
-db: DB = st.session_state.db
 
+# ---- 側邊欄：資料維護 / 匯入匯出 ----
 with st.sidebar:
     st.header("資料維護 / 匯入匯出")
     if st.button("🧪 一鍵載入示範：陳一郎家族"):
@@ -275,22 +348,25 @@ with st.sidebar:
             ]
         }
         st.session_state.db = DB.from_obj(demo)
-        st.success("已載入示範資料")
+        st.success("已載入示範資料"); st.rerun()
 
     up = st.file_uploader("匯入 JSON（members/children 或 persons/links）", type=["json"])
     if up:
         try:
             st.session_state.db = DB.from_obj(json.load(up))
-            st.success("匯入成功")
+            st.success("匯入成功"); st.rerun()
         except Exception as e:
             st.exception(e)
 
     # 匯出
     st.download_button("📥 下載 JSON 備份",
-                       data=json.dumps(db.to_json(), ensure_ascii=False, indent=2),
+                       data=json.dumps(st.session_state.db.to_json(), ensure_ascii=False, indent=2),
                        file_name="family.json", mime="application/json")
 
-# 分頁
+# 重新綁定最新 DB
+db: DB = st.session_state.db
+
+# ---- 分頁 ----
 tab1, tab2, tab3, tab4 = st.tabs(["👤 人物", "🔗 關係", "🧮 法定繼承試算", "🗺️ 家族樹"])
 
 # --- Tab1 人物 ---
@@ -367,70 +443,20 @@ with tab3:
                 st.success(memo or "計算完成")
                 st.dataframe(df, use_container_width=True)
 
-# --- Tab4 家族樹（夫妻線＋union node） ---
+# --- Tab4 家族樹 ---
 with tab4:
     st.subheader("家族樹（夫妻水平線；離婚虛線；孩子由中點垂直）")
     if not db.persons:
         st.info("請先建立人物/關係或載入示範資料。")
     else:
-        levels, parents_of, children_of = compute_levels_and_parents(db)
-
-        net = Network(height="720px", width="100%", directed=True, notebook=False)
-        # 人物節點
-        for pid, p in db.persons.items():
-            net.add_node(pid, label=p.name, shape="box", level=levels.get(pid,0))
-
-        # 夫妻水平線（不參與層級）
-        for m in db.marriages.values():
-            dashed = (m.status != "married")
-            net.add_edge(m.a, m.b, dashes=dashed, physics=False, arrows="",
-                         color={"color":"#2f5e73","inherit":False},
-                         smooth={"type":"horizontal"}, width=2)
-
-        # union node：0/1/2 父母完整處理
-        unions_done = set()
-        for child, parents in parents_of.items():
-            if len(parents) == 0:
-                # 無父母資料，略過
-                continue
-            elif len(parents) == 1:
-                par = parents[0]
-                net.add_edge(par, child, arrows="to",
-                             color={"color":"#2f5e73","inherit":False}, width=2,
-                             smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
-                continue
-            else:
-                a, b = sorted(parents)[:2]
-                uid = union_id(a,b)
-                if uid not in unions_done:
-                    lvl = max(levels.get(a,0), levels.get(b,0))
-                    net.add_node(uid, label="", shape="dot", size=1, level=lvl, physics=False)
-                    # 淡線幫助 union 定位在兩人中點
-                    net.add_edge(a, uid, arrows="", color={"color":"#cfd8e3","inherit":False},
-                                 width=1, smooth={"type":"horizontal"}, physics=False)
-                    net.add_edge(b, uid, arrows="", color={"color":"#cfd8e3","inherit":False},
-                                 width=1, smooth={"type":"horizontal"}, physics=False)
-                    unions_done.add(uid)
-                net.add_edge(uid, child, arrows="to",
-                             color={"color":"#2f5e73","inherit":False}, width=2,
-                             smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
-
-        # 佈局設定
-        import json as js
-        options = {
-            "layout": {"hierarchical": {
-                "enabled": True, "direction": "UD",
-                "levelSeparation": 140, "nodeSpacing": 200, "treeSpacing": 240,
-                "sortMethod": "hubsize", "blockShifting": False, "edgeMinimization": False, "parentCentralization": True
-            }},
-            "physics": {"enabled": False},
-            "edges": {"smooth": {"enabled": True, "type": "horizontal"},
-                      "color": {"inherit": False, "color": "#2f5e73"}, "width": 2},
-            "nodes": {"shape":"box","color":{"background":"#dbeafe","border":"#2563eb"}, "font":{"size":14}}
-        }
-        net.set_options(js.dumps(options))
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
-            net.write_html(tmp.name, notebook=False)
-            html = open(tmp.name, "r", encoding="utf-8").read()
-        st.components.v1.html(html, height=780, scrolling=True)
+        style = st.radio("呈現引擎", ["Graphviz（建議）","PyVis（備援）"], horizontal=True)
+        if style.startswith("Graphviz"):
+            dot = build_graphviz(db)
+            st.graphviz_chart(dot)
+            st.download_button("⬇️ 下載 DOT", data="\n".join(dot.body), file_name="family_tree.dot", mime="text/plain")
+        else:
+            net = build_pyvis(db)
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
+                net.write_html(tmp.name, notebook=False)
+                html = open(tmp.name, "r", encoding="utf-8").read()
+            st.components.v1.html(html, height=780, scrolling=True)
