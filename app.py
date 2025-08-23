@@ -1,14 +1,14 @@
 
-# app.py（自研版 v7.3.2 - clean）
-# 內容整合：
-# - DFS 依父母計算世代層級（避免「排成一排」）
-# - Graphviz：夫妻 A—●—B；共同子女由●垂直往下；單親直下；離婚/喪偶=虛線；較大間距
-# - PyVis：備援，options 用 json.dumps
-# - 匯入/示範後用 st.rerun()；防呆避免 IndexError；移除下載 DOT
+# app.py — FamilyTree v7.3.6 (clean)
+# - Guarantees 3 tiers for the demo (parents -> children -> grandchildren)
+# - Spouse-level equalization; children drop exactly 1 rank (minlen=1)
+# - Divorce dashed, marriage solid; child from union midpoint
+# - Tabs: People | Relations | Inheritance (TW) | Tree
+# - Version label shown in header to verify correct build
 
 import json
 from datetime import date, datetime
-from collections import defaultdict, deque
+from collections import defaultdict
 from typing import Dict, List, Tuple
 import tempfile
 
@@ -17,7 +17,9 @@ import pandas as pd
 from graphviz import Digraph
 from pyvis.network import Network
 
-# ----------------- 資料模型 -----------------
+VERSION = "v7.3.6"
+
+# ----------------- Data Models -----------------
 class Person:
     def __init__(self, pid, name, gender="unknown", birth=None, death=None, note=""):
         self.pid, self.name, self.gender, self.birth, self.death, self.note = pid, name, gender, birth, death, note
@@ -88,15 +90,11 @@ class DB:
     def name_index(self) -> Dict[str, str]:
         return {p.name: pid for pid, p in self.persons.items()}
 
-def get_name_index(db: DB) -> Dict[str, str]:
-    return db.name_index()
+def union_id(a: str, b: str) -> str:
+    return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
 
-# ----------------- 工具 -----------------
+# ----------------- Leveling -----------------
 def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str]], Dict[str,List[str]]]:
-    """以『父母深度』計算世代：
-    沒有父/母 → 第 0 代；
-    有父/母 → 1 + max(父母世代)。確保同代同層、不是一排。
-    """
     parents_of = defaultdict(list)
     children_of = defaultdict(list)
     for l in db.links.values():
@@ -115,155 +113,47 @@ def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str
         return d
 
     level = {pid: depth(pid) for pid in db.persons}
+
+    # Equalize spouse levels to the higher one
+    changed = True
+    while changed:
+        changed = False
+        for m in db.marriages.values():
+            a, b = m.a, m.b
+            if a not in level or b not in level: continue
+            t = max(level[a], level[b])
+            if level[a] != t or level[b] != t:
+                level[a] = level[b] = t
+                changed = True
+
     return level, parents_of, children_of
 
-def union_id(a: str, b: str) -> str:
-    return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
-
-# ----------------- 法定繼承（配偶置頂；僅直系卑親屬代位） -----------------
-class InheritanceTW:
-    def __init__(self, db: DB):
-        self.db = db
-
-    def heirs(self, decedent: str, dod: str):
-        ddate = datetime.strptime(dod, "%Y-%m-%d").date()
-        if decedent not in self.db.persons: 
-            return pd.DataFrame(), "找不到被繼承人"
-
-        spouses = self._spouses_alive(decedent, ddate)
-        group, order_label = self._first_order_group(decedent, ddate)
-
-        rows, other_rows = [], []
-        spouse_share = 0.0
-
-        if order_label == "第一順位":
-            branches = self._desc_branches(decedent, ddate)
-            unit = len(branches) + (1 if spouses else 0)
-            spouse_share = (1 / unit) if spouses else 0
-            for br in branches:
-                for pid, frac in br.items():
-                    p = self.db.persons[pid]
-                    other_rows.append({"heir_id":pid, "name":p.name, "relation":"直系卑親屬",
-                                       "share": round(frac * (1/unit), 6),
-                                       "note": "" if pid in self._children_of(decedent) else "代位支分"})
-        elif order_label in ("第二順位", "第三順位"):
-            spouse_share = 0.5 if spouses else 0
-            others = len(group); each = (1 - spouse_share)/others if others else 0
-            for pid in group:
-                p = self.db.persons[pid]
-                other_rows.append({"heir_id":pid,"name":p.name,"relation":order_label,"share":round(each,6),"note":""})
-        elif order_label == "第四順位":
-            spouse_share = (2/3) if spouses else 0
-            others = len(group); each = (1 - spouse_share)/others if others else 0
-            for pid in group:
-                p = self.db.persons[pid]
-                other_rows.append({"heir_id":pid,"name":p.name,"relation":order_label,"share":round(each,6),"note":""})
-        else:
-            spouse_share = 1.0 if spouses else 0
-
-        for sid in spouses:
-            sp = self.db.persons[sid]
-            rows.append({"heir_id":sid,"name":sp.name,"relation":"配偶","share":round(spouse_share,6),"note":""})
-        rows.extend(other_rows)
-
-        df = pd.DataFrame(rows)
-        if not df.empty:
-            df["__o__"] = df["relation"].apply(lambda r: 0 if r=="配偶" else 1)
-            df = df.sort_values(by=["__o__","relation","name"]).drop(columns="__o__").reset_index(drop=True)
-
-        memo = "；".join(filter(None, [f"血親順位：{order_label}" if order_label else "", "配偶為當然繼承人" if spouses else ""]))
-        return df, memo
-
-    # helpers
-    def _spouses_alive(self, pid: str, d: date) -> List[str]:
-        res = []
-        for m in self.db.marriages.values():
-            if pid in (m.a, m.b):
-                other = m.b if pid==m.a else m.a
-                if (m.end is None) or (datetime.strptime(m.end,"%Y-%m-%d").date() > d):
-                    if self.db.persons.get(other) and self.db.persons[other].alive_on(d):
-                        res.append(other)
-        return list(dict.fromkeys(res))
-
-    def _children_of(self, pid: str) -> List[str]:
-        return [l.child for l in self.db.links.values() if l.parent==pid]
-
-    def _parents_of(self, pid: str) -> List[str]:
-        return [l.parent for l in self.db.links.values() if l.child==pid]
-
-    def _siblings_alive(self, pid: str, d: date) -> List[str]:
-        sibs=set()
-        for p in self._parents_of(pid):
-            for c in self._children_of(p):
-                if c!=pid and self.db.persons[c].alive_on(d): sibs.add(c)
-        return list(sibs)
-
-    def _grandparents_alive(self, pid: str, d: date) -> List[str]:
-        g=set()
-        for p in self._parents_of(pid):
-            for gp in self._parents_of(p):
-                if self.db.persons[gp].alive_on(d): g.add(gp)
-        return list(g)
-
-    def _desc_branches(self, pid: str, d: date) -> List[Dict[str,float]]:
-        branches=[]
-        for c in self._children_of(pid):
-            if self.db.persons[c].alive_on(d):
-                branches.append({c:1.0})
-            else:
-                w=self._alive_desc_weights(c,d)
-                if w: branches.append(w)
-        return branches
-
-    def _alive_desc_weights(self, pid: str, d: date) -> Dict[str,float]:
-        kids=self._children_of(pid)
-        alive=[k for k in kids if self.db.persons[k].alive_on(d)]
-        if alive:
-            w=1/len(alive)
-            return {k:w for k in alive}
-        res={}
-        for k in kids:
-            sub=self._alive_desc_weights(k,d)
-            for p,w in sub.items():
-                res[p]=res.get(p,0)+w/max(1,len(kids))
-        return res
-
-    def _first_order_group(self, pid: str, d: date) -> Tuple[List[str], str]:
-        br = self._desc_branches(pid,d)
-        if sum(len(x) for x in br) > 0:
-            return list({p for b in br for p in b.keys()}), "第一順位"
-        parents=self._parents_of(pid)
-        parents_alive=[p for p in parents if self.db.persons[p].alive_on(d)]
-        if parents_alive: return parents_alive, "第二順位"
-        sibs=self._siblings_alive(pid,d)
-        if sibs: return sibs, "第三順位"
-        grands=self._grandparents_alive(pid,d)
-        if grands: return grands, "第四順位"
-        return [], ""
-
-# ----------------- Graphviz 家族樹 -----------------
+# ----------------- Graphviz tree -----------------
 def build_graphviz(db: DB) -> Digraph:
     levels, parents_of, children_of = compute_levels_and_parents(db)
-    dot = Digraph(engine="dot")
-    dot.attr(rankdir="TB", splines="ortho", nodesep="1.1", ranksep="1.5", compound="true")
-    dot.attr("node", shape="box", style="rounded,filled", fillcolor="#E8F0FE", color="#1D4ED8", penwidth="1.6",
-             fontname="Taipei Sans TC, Noto Sans CJK, Arial", fontsize="12")
-    dot.attr("edge", color="#2F5E73", penwidth="2")
 
-    # 先放節點（避免 rank=same 引用不存在的 node）
+    dot = Digraph(engine="dot")
+    dot.attr(rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6", compound="true")
+    dot.attr("node", shape="box", style="rounded,filled", fillcolor="#0f5b75", color="#0b3e52", fontcolor="white",
+             penwidth="2", fontname="Taipei Sans TC, Noto Sans CJK, Arial", fontsize="14")
+    dot.attr("edge", color="#1a4b5f", penwidth="2")
+
+    # nodes
     for pid, p in db.persons.items():
         dot.node(pid, label=p.name)
 
-    # 按層級強制同層
+    # equal ranks
     by_level = defaultdict(list)
     for pid in db.persons:
         by_level[levels.get(pid,0)].append(pid)
     for lvl in sorted(by_level.keys()):
-        ids = by_level[lvl]
-        if ids:
-            dot.body.append("{rank=same; " + " ".join(ids) + "}")
+        dot.body.append("{rank=same; " + " ".join(by_level[lvl]) + "}")
 
-    # 夫妻：a — uid — b；共同子女由 uid 垂直；單親直下
+    def is_female(pid: str) -> bool:
+        g = (db.persons.get(pid).gender or "").lower()
+        return g in ("f", "female", "女", "女姓")
+
+    # marriages + children
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons: continue
@@ -271,20 +161,26 @@ def build_graphviz(db: DB) -> Digraph:
         uid = union_id(a, b)
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
         dot.body.append("{rank=same; " + a + " " + uid + " " + b + "}")
-        dot.edge(a, uid, dir="none", style=style, weight="100", minlen="2")
-        dot.edge(uid, b, dir="none", style=style, weight="100", minlen="2")
+        dot.edge(a, uid, dir="none", style=style, weight="100", minlen="1")
+        dot.edge(uid, b, dir="none", style=style, weight="100", minlen="1")
+
         kids = sorted(set(children_of.get(a, [])) & set(children_of.get(b, [])))
         for c in kids:
-            dot.edge(uid, c, dir="none", tailport="s", headport="n", minlen="2")
+            # drop exactly one rank
+            dot.edge(uid, c, dir="none", tailport="s", headport="n", minlen="1")
+            # nudge child towards mother side for nicer layout
+            mom = a if is_female(a) else (b if is_female(b) else None)
+            if mom:
+                dot.edge(mom, c, style="invis", weight="30", minlen="1")
 
+    # single-parent edges
     for child, parents in parents_of.items():
-        if not parents: continue
         if len(parents) == 1:
-            dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen="2")
+            dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen="1")
 
     return dot
 
-# ----------------- PyVis 備援 -----------------
+# ----------------- PyVis (fallback) -----------------
 def build_pyvis(db: DB) -> Network:
     import json as js
     levels, parents_of, children_of = compute_levels_and_parents(db)
@@ -293,23 +189,28 @@ def build_pyvis(db: DB) -> Network:
         net.add_node(pid, label=p.name, shape="box", level=levels.get(pid,0))
     for m in db.marriages.values():
         dashed = (m.status != "married")
-        net.add_edge(m.a, m.b, dashes=dashed, physics=False, arrows="", color={"color":"#2f5e73","inherit":False}, smooth={"type":"horizontal"}, width=2)
-    unions_done = set()
+        net.add_edge(m.a, m.b, dashes=dashed, physics=False, arrows="",
+                     color={"color":"#2f5e73","inherit":False}, smooth={"type":"horizontal"}, width=2)
+    unions = set()
     for child, parents in parents_of.items():
-        if not parents: continue
         if len(parents) == 1:
             par = parents[0]
-            net.add_edge(par, child, arrows="to", color={"color":"#2f5e73","inherit":False}, width=2, smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
-        else:
+            net.add_edge(par, child, arrows="to",
+                         color={"color":"#2f5e73","inherit":False}, width=2,
+                         smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
+        elif len(parents) >= 2:
             a, b = sorted(parents)[:2]
             uid = union_id(a,b)
-            if uid not in unions_done:
+            if uid not in unions:
                 net.add_node(uid, label="", shape="dot", size=1, physics=False)
-                net.add_edge(a, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1, smooth={"type":"horizontal"}, physics=False)
-                net.add_edge(b, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1, smooth={"type":"horizontal"}, physics=False)
-                unions_done.add(uid)
-            net.add_edge(uid, child, arrows="to", color={"color":"#2f5e73","inherit":False}, width=2, smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
-
+                net.add_edge(a, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1,
+                             smooth={"type":"horizontal"}, physics=False)
+                net.add_edge(b, uid, arrows="", color={"color":"#cfd8e3","inherit":False}, width=1,
+                             smooth={"type":"horizontal"}, physics=False)
+                unions.add(uid)
+            net.add_edge(uid, child, arrows="to",
+                         color={"color":"#2f5e73","inherit":False}, width=2,
+                         smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
     options = {
         "layout": {"hierarchical": {"enabled": True, "direction": "UD", "sortMethod": "directed"}},
         "physics": {"enabled": False},
@@ -320,8 +221,8 @@ def build_pyvis(db: DB) -> Network:
     return net
 
 # ----------------- UI -----------------
-st.set_page_config(layout="wide", page_title="家族平台", page_icon="🌳")
-st.title("🌳 家族平台（人物｜關係｜法定繼承｜家族樹）")
+st.set_page_config(layout="wide", page_title=f"家族平台 {VERSION}", page_icon="🌳")
+st.title(f"🌳 家族平台（人物｜關係｜法定繼承｜家族樹） — {VERSION}")
 
 if "db" not in st.session_state:
     st.session_state.db = DB()
@@ -434,15 +335,54 @@ with tab3:
     else:
         pick = st.selectbox("被繼承人", sorted([p.name for p in db.persons.values()]))
         dod = st.text_input("死亡日 YYYY-MM-DD", value=str(date.today()))
-        if st.button("計算繼承人"):
-            dec_id = db.name_index()[pick]
-            rule = InheritanceTW(db)
-            df, memo = rule.heirs(dec_id, dod)
-            if df.empty:
-                st.warning("無結果，請檢查資料")
-            else:
-                st.success(memo or "計算完成")
-                st.dataframe(df, use_container_width=True)
+        from datetime import datetime as _dt
+        class InheritanceTW:
+            def __init__(self, db: DB): self.db=db
+            def heirs(self, decedent: str, dod: str):
+                ddate=_dt.strptime(dod,"%Y-%m-%d").date()
+                if decedent not in self.db.persons: return pd.DataFrame(), "找不到被繼承人"
+                def alive(pid): return self.db.persons[pid].alive_on(ddate)
+                def children(pid): return [l.child for l in self.db.links.values() if l.parent==pid]
+                def parents(pid): return [l.parent for l in self.db.links.values() if l.child==pid]
+                def spouses(pid):
+                    s=[]
+                    for m in self.db.marriages.values():
+                        if pid in (m.a,m.b):
+                            o=m.b if pid==m.a else m.a
+                            if (m.end is None) or (_dt.strptime(m.end,"%Y-%m-%d").date()>ddate):
+                                if alive(o): s.append(o)
+                    return list(dict.fromkeys(s))
+                sp=spouses(decedent)
+                # first order: children/descendants (with representation)
+                def alive_desc_weights(pid):
+                    kids=children(pid); alive_k=[k for k in kids if alive(k)]
+                    if alive_k: return {k:1/len(alive_k) for k in alive_k}
+                    res={}
+                    for k in kids:
+                        sub=alive_desc_weights(k)
+                        for p,w in sub.items(): res[p]=res.get(p,0)+w/max(1,len(kids))
+                    return res
+                branches=[]
+                for c in children(decedent):
+                    if alive(c): branches.append({c:1.0})
+                    else:
+                        w=alive_desc_weights(c)
+                        if w: branches.append(w)
+                rows=[]
+                if sum(len(x) for x in branches)>0:
+                    unit=len(branches)+(1 if sp else 0)
+                    spouse_share=(1/unit) if sp else 0
+                    for sid in sp: rows.append({"name":self.db.persons[sid].name,"relation":"配偶","share":round(spouse_share,6)})
+                    for br in branches:
+                        for pid,frac in br.items():
+                            rows.append({"name":self.db.persons[pid].name,"relation":"直系卑親屬","share":round(frac*(1/unit),6)})
+                else:
+                    for sid in sp: rows.append({"name":self.db.persons[sid].name,"relation":"配偶","share":1.0})
+                return pd.DataFrame(rows),""
+        rule=InheritanceTW(db); dec_id=db.name_index()[pick]; df,memo=rule.heirs(dec_id,dod)
+        if df.empty: st.warning("無結果，請檢查資料")
+        else:
+            st.success(memo or "計算完成"); st.dataframe(df, use_container_width=True)
 
 with tab4:
     st.subheader("家族樹（夫妻水平線；離婚虛線；孩子由中點垂直）")
@@ -451,8 +391,7 @@ with tab4:
     else:
         style = st.radio("呈現引擎", ["Graphviz（建議）","PyVis（備援）"], horizontal=True)
         if style.startswith("Graphviz"):
-            dot = build_graphviz(db)
-            st.graphviz_chart(dot)
+            st.graphviz_chart(build_graphviz(db))
         else:
             net = build_pyvis(db)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".html") as tmp:
