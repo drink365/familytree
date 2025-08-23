@@ -1,9 +1,9 @@
-# app.py — FamilyTree v7.3.9
-# 規則重點：
-# 1) 若同一人同時有前任與現任：前任在左、本人在中、現任在右，三人同層（以 ordering="out" + 不可見高權重邊 強制）
-# 2) 子女一律從「雙親連線的中點」垂直往下（離婚亦同）
-# 3) 離婚/喪偶：虛線；婚姻：實線
-# 4) 頁籤：人物｜關係｜法定繼承試算（台灣，僅直系卑親屬代位的簡化示範）｜家族樹（Graphviz / PyVis）
+# app.py — FamilyTree v7.4.0
+# 重點：
+# 1) 前任在左、本人在中、現任在右：以「左右錨點 + 高權重不可見邊」鎖死順序（即使 DOT 想重排也不會）
+# 2) 子女一律從雙親連線中點垂直往下（離婚/喪偶=虛線；婚姻=實線）
+# 3) 兄弟姊妹共用水平匯流線，減少重疊
+# 4) 頁籤：人物｜關係｜法定繼承試算（簡化示範）｜家族樹（Graphviz / PyVis）
 
 import json
 from datetime import date, datetime
@@ -16,7 +16,7 @@ import pandas as pd
 from graphviz import Digraph
 from pyvis.network import Network
 
-VERSION = "v7.3.9"
+VERSION = "v7.4.0"
 
 # ----------------- Data Models -----------------
 class Person:
@@ -150,7 +150,7 @@ def build_graphviz(db: DB) -> Digraph:
     levels, parents_of, children_of = compute_levels_and_parents(db)
 
     dot = Digraph(engine="dot")
-    # ordering="out" 有助於遵循我們以不可見邊定義的左右順序
+    # ordering="out" + 高權重不可見鏈 強制左右順序
     dot.attr(rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6",
              compound="true", ordering="out")
     dot.attr(
@@ -171,7 +171,7 @@ def build_graphviz(db: DB) -> Digraph:
     for lvl in sorted(by_level.keys()):
         dot.body.append("{rank=same; " + " ".join(by_level[lvl]) + "}")
 
-    # -------- 關鍵：強制「前任在左、本人在中、現任在右」 --------
+    # -------- 以「左右錨點 + 不可見高權重邊」鎖死：前任在左、本人中、現任在右 --------
     marriages_by_person = defaultdict(list)
     for mid, m in db.marriages.items():
         marriages_by_person[m.a].append((mid, m))
@@ -181,32 +181,27 @@ def build_graphviz(db: DB) -> Digraph:
         ex_list, cur_list = [], []
         for mid, m in marrs:
             spouse = m.b if pid == m.a else m.a
-            (cur_list if m.status == "married" else ex_list).append((mid, m, spouse))
+            (cur_list if m.status == "married" else ex_list).append(spouse)
 
         if ex_list and cur_list:
-            # 以第一位前任/現任為左右錨點（多配偶的精細排序下版再強化）
-            _, _me, ex_sp = ex_list[0]
-            _, _mc, cur_sp = cur_list[0]
+            # 依配偶 id 排序，避免非決定性順序
+            ex_list  = sorted(set(ex_list))
+            cur_list = sorted(set(cur_list))
 
-            # 宣告同層 + 以不可見高權重邊建立左右順序
-            dot.body.append(f"{{rank=same; {ex_sp} {pid} {cur_sp}}}")
-            dot.edge(ex_sp, pid, style="invis", weight="300", minlen="1", constraint="false")
-            dot.edge(pid, cur_sp, style="invis", weight="300", minlen="1", constraint="false")
+            # 建立左右不可見錨點（同層）
+            L = f"ancL_{pid}"
+            R = f"ancR_{pid}"
+            dot.node(L, label="", shape="point", width="0.01", height="0.01", style="invis")
+            dot.node(R, label="", shape="point", width="0.01", height="0.01", style="invis")
+            dot.body.append(f"{{rank=same; {L} {' '.join(ex_list)} {pid} {' '.join(cur_list)} {R}}}")
 
-            # 額外：其餘前任排更左；其餘現任排更右（簡單鏈）
-            prev = ex_sp
-            for _, _m2, sp2 in ex_list[1:]:
-                dot.body.append(f"{{rank=same; {sp2} {prev}}}")
-                dot.edge(sp2, prev, style="invis", weight="200", minlen="1", constraint="false")
-                prev = sp2
-            prev = cur_sp
-            for _, _m2, sp2 in cur_list[1:]:
-                dot.body.append(f"{{rank=same; {prev} {sp2}}}")
-                dot.edge(prev, sp2, style="invis", weight="200", minlen="1", constraint="false")
-                prev = sp2
-    # ------------------------------------------------
+            # 以不可見高權重邊串成一條序列：L → ex... → 本人 → cur... → R
+            chain = [L] + ex_list + [pid] + cur_list + [R]
+            for a, b in zip(chain, chain[1:]):
+                dot.edge(a, b, style="invis", weight="1000", minlen="1", constraint="true")
+    # -------------------------------------------------------------------------
 
-    # 幫助兄弟姊妹「共用一條水平匯流線」的函數（減少擁擠與重疊）
+    # 兄弟姊妹匯流線（水平 rail）
     def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
         if not kids:
             return None
@@ -216,7 +211,7 @@ def build_graphviz(db: DB) -> Digraph:
             dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen="1")
         return rail_id
 
-    # 婚姻與子女（子女從雙親「union 中點」下來；離婚=虛線）
+    # 婚姻與子女（孩子從雙親 union 中點往下；離婚=虛線）
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons:
@@ -234,7 +229,7 @@ def build_graphviz(db: DB) -> Digraph:
             rail = add_sibling_rail(a, b, kids)
             dot.edge(uid, rail, dir="none", tailport="s", headport="n", minlen="1")
 
-    # 單親（只有一個父/母）的情況：直接由單親垂直到子女
+    # 單親（只有一個父/母）
     for child, parents in parents_of.items():
         if len(parents) == 1:
             dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen="1")
@@ -424,7 +419,6 @@ with tab3:
                     for m in self.db.marriages.values():
                         if pid in (m.a, m.b):
                             o = m.b if pid == m.a else m.a
-                            # 簡化：只要對方活著且婚姻未在死亡日前終止就算
                             if (m.end is None) or (_dt.strptime(m.end, "%Y-%m-%d").date() > ddate):
                                 if alive(o):
                                     s.append(o)
