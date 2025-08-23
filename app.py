@@ -208,101 +208,117 @@ def compute_levels_and_maps(db: DB):
 
 # ----------------- Graphviz tree (分層 + 中點垂直) -----------------
 def build_graphviz_source(db: DB) -> str:
+    # 1) 先算出各代(level)與父母/子女對應
     level, parents_of, children_of = compute_levels_and_maps(db)
 
     dot = DotBuilder(directed=True)
-    dot.attr(rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6",
-             compound=True, ordering="out")
-    dot.attr("node", shape="box", style="rounded,filled",
-             fillcolor="#0f5b75", color="#0b3e52",
-             fontcolor="white", fontname="Taipei Sans TC, Noto Sans CJK, Arial",
-             penwidth="2", fontsize="14")
+    dot.attr(
+        rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6",
+        compound=True, ordering="out"
+    )
+    dot.attr(
+        "node",
+        shape="box", style="rounded,filled",
+        fillcolor="#0f5b75", color="#0b3e52",
+        fontcolor="white", fontname="Taipei Sans TC, Noto Sans CJK, Arial",
+        penwidth="2", fontsize="14"
+    )
     dot.attr("edge", color="#1a4b5f", penwidth="2")
 
-    # 人節點
+    # 所有人先建立節點
     for pid, p in db.persons.items():
         dot.node(pid, label=p.name)
 
-    # 先分類當層的【前任 → 本人 → 現任】
+    # 2) 建立「前任 / 現任」索引
     ex_map = defaultdict(list)
     cur_map = {}
     for m in db.marriages.values():
         a, b = m.a, m.b
         if m.status == "married":
-            cur_map.setdefault(a, b)
-            cur_map.setdefault(b, a)
-        else:
+            cur_map[a] = b
+            cur_map[b] = a
+        else:  # divorced / widowed 視為前任
             ex_map[a].append(b)
             ex_map[b].append(a)
 
-    # 每一層 rank=same，並把「前任→本人→現任」用 invis 邊固定水平順序
+    # 3) 依層分組
     nodes_by_level = defaultdict(list)
     for pid in db.persons:
         nodes_by_level[level.get(pid, 0)].append(pid)
 
+    # 4) 每一層「先決定最終順序」→ rank=same（單一區塊）→ invis 鏈條（constraint=True, weight 大）
     for lvl in sorted(nodes_by_level.keys()):
         lv_nodes = sorted(nodes_by_level[lvl])
-        if lv_nodes:
-            dot.extra.append("{rank=same; " + " ".join(f'\"{x}\"' for x in lv_nodes) + "}")
-        used = set()
+        placed = set()
+        ordered = []
+
+        # (a) 先放有「前任或現任」的人的“完整區塊”＝前任們 + 本人 + 現任
         for pid in lv_nodes:
-            if pid in used:
+            if pid in placed:
                 continue
-            exs = sorted({s for s in ex_map.get(pid, []) if level.get(s, 0) == lvl})
+            exs = sorted([x for x in ex_map.get(pid, []) if level.get(x, 0) == lvl])
             cur = cur_map.get(pid)
             if cur is not None and level.get(cur, 0) != lvl:
                 cur = None
             if exs or cur:
                 block = exs + [pid] + ([cur] if cur else [])
                 for x in block:
-                    used.add(x)
-                dot.extra.append(
-                    "subgraph cluster_ord_%s { rank=same; color=white; %s }" %
-                    (pid, " ".join(f'\"{x}\"' for x in block))
-                )
-                for a, b in zip(block, block[1:]):
-                    dot.edge(a, b, style="invis", constraint=False, weight=500, minlen=1)
+                    if x not in placed:
+                        ordered.append(x)
+                        placed.add(x)
 
-    # 輔助：建立兄弟姊妹 rail，rail 強制放在子女層
+        # (b) 剩下沒有婚姻關係要固定順序的人，依姓名排序放在後面
+        for pid in lv_nodes:
+            if pid not in placed:
+                ordered.append(pid)
+                placed.add(pid)
+
+        # 這一層只有一個 rank=same 區塊，順序就是 ordered
+        if ordered:
+            dot.extra.append("{rank=same; " + " ".join(f'"{x}"' for x in ordered) + "}")
+            # 用 invis + constraint=True + 高 weight 綁定水平順序
+            for a, b in zip(ordered, ordered[1:]):
+                dot.edge(a, b, style="invis", constraint=True, weight=1000, minlen=1)
+
+    # 5) 幫每段婚姻建立「夫妻中點」與「子女 Rail」（Rail 強制在子女層）
     def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
         if not kids:
             return None
-        child_lvls = [level.get(k, 0) for k in kids]
-        tgt_lvl = min(child_lvls)  # 正常就是父母層+1
         rail_id = f"rail_{parent_a}_{parent_b}"
         dot.node(rail_id, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
-        # 指定 rail 所在層 rank=same
-        dot.extra.append("{rank=same; \"" + rail_id + "\" " + " ".join(f'\"{k}\"' for k in kids) + "}")
+        # rail 與孩子同層
+        dot.extra.append("{rank=same; \"" + rail_id + "\" " + " ".join(f'"{k}"' for k in kids) + "}")
         for c in kids:
             dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen=2)
         return rail_id
 
-    # 畫婚姻（中點在夫妻層），再連到子女 rail（在子女層）
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons:
             continue
         style = "solid" if m.status == "married" else "dashed"
-        uid = union_id(a, b)  # 夫妻中點
+
+        # 夫妻中點（與夫妻同層）
+        uid = union_id(a, b)
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
-        dot.extra.append(f'{{rank=same; \"{a}\" \"{uid}\" \"{b}\"}}')  # 中點與夫妻同層
+        dot.extra.append(f'{{rank=same; "{a}" "{uid}" "{b}"}}')
         dot.edge(a, uid, dir="none", style=style, weight=5, minlen=1)
         dot.edge(uid, b, dir="none", style=style, weight=5, minlen=1)
 
-        # 找共同子女 -> 放 rail 到子女層
+        # 找雙方共同子女 → 建子女 rail（在子女層），夫妻中點連到 rail
         kids = [c for c in children_of.get(a, []) if c in set(children_of.get(b, []))]
         if kids:
             kids = sorted(kids)
             rail = add_sibling_rail(a, b, kids)
             dot.edge(uid, rail, dir="none", tailport="s", headport="n", minlen=2)
 
-    # 單親（只有一個父或母）
+    # 6) 單親：只有一位父或母 → 直接父→子，拉長距離避免擠在一起
     for child, parents in list(parents_of.items()):
         if len(parents) == 1:
-            # 直接父→子，跨層距離加大
             dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen=2)
 
     return dot.source
+
 
 # ----------------- Inheritance (簡化版：配偶優先 + 直系卑親屬代位) -----------------
 class InheritanceTW:
