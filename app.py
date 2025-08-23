@@ -1,10 +1,10 @@
-# app.py — FamilyTree v7.6.3
-# 需求重點：
-# - 同層水平順序：前任 -> 本人 -> 現任（先處理“有現任者”當 pivot，避免被前任搶先）
-# - 夫妻同層、孩子由「夫妻中點」垂直往下
-# - 離婚/喪偶虛線、婚姻實線
+# app.py — FamilyTree v7.6.4 (strict ordering)
+# 重點：
+# - 同層嚴格排序：前任(全部) → 本人 → 現任 → 其他同層人員
+# - 夫妻同層水平線；離婚/喪偶虛線；孩子由「夫妻中點」垂直往下
 # - 分頁：人物｜關係｜法定繼承試算｜家族樹
-# - 內建一鍵載入「陳一郎家族」示範
+# - 一鍵載入「陳一郎家族」示範
+# - 免系統 graphviz：自帶 DOT builder；以 st.graphviz_chart 顯示
 
 import json
 from collections import defaultdict
@@ -14,9 +14,9 @@ from typing import Dict, List
 import streamlit as st
 import pandas as pd
 
-VERSION = "7.6.3"
+VERSION = "7.6.4"
 
-# ---------------- DOT builder（免安裝系統 graphviz） ----------------
+# ---------------- DOT builder ----------------
 def _fmt_attrs(d: dict) -> str:
     if not d:
         return ""
@@ -196,6 +196,58 @@ def compute_levels_and_maps(db: DB):
                     level[a]=level[b]=t; changed = True
     return level, parents_of, children_of
 
+# ---------------- 嚴格同層排序 ----------------
+def strict_order_by_level(level_nodes: List[str], lvl: int, level: Dict[str,int],
+                          current_of: Dict[str,str], ex_of: Dict[str,List[str]]) -> List[str]:
+    """
+    先放「有現任的人」的區塊（前任 → 本人 → 現任），再放其他同層。
+    這會保證「前任在最左、本人在中、現任在右」，且整個區塊在同層最前方。
+    """
+    placed = set()
+    ordered: List[str] = []
+
+    # 先取 pivots（有現任且現任同層），避免被前任搶先
+    pivots = []
+    seen_couple = set()
+    for pid in sorted(level_nodes):
+        cur = current_of.get(pid)
+        if not cur or level.get(cur, -1) != lvl:
+            continue
+        couple_key = tuple(sorted([pid, cur]))
+        if couple_key in seen_couple:
+            continue
+        seen_couple.add(couple_key)
+        pivots.append(pid)
+
+    # 所有 pivot 區塊先排（確保在最左側）
+    for pid in sorted(pivots):
+        # 前任（同層）→ 本人 → 現任
+        ex_same = [x for x in ex_of.get(pid, []) if level.get(x, -1) == lvl]
+        ex_same = sorted(set(ex_same))
+        block = ex_same + [pid]
+        cur = current_of.get(pid)
+        if cur and level.get(cur, -1) == lvl:
+            block += [cur]
+        for x in block:
+            if x not in placed:
+                ordered.append(x); placed.add(x)
+
+    # 其餘同層（沒有現任者、只有前任者、單身等）
+    for pid in sorted(level_nodes):
+        if pid in placed:
+            continue
+        ex_same = [x for x in ex_of.get(pid, []) if level.get(x, -1) == lvl]
+        ex_same = sorted(set(ex_same))
+        block = ex_same + [pid]
+        cur = current_of.get(pid)
+        if cur and level.get(cur, -1) == lvl and cur not in placed:
+            block += [cur]
+        for x in block:
+            if x not in placed:
+                ordered.append(x); placed.add(x)
+
+    return ordered
+
 # ---------------- 繪製家族樹 ----------------
 def build_graphviz_source(db: DB) -> str:
     level, parents_of, children_of = compute_levels_and_maps(db)
@@ -209,11 +261,10 @@ def build_graphviz_source(db: DB) -> str:
              penwidth="2", fontsize="14")
     dot.attr("edge", color="#1a4b5f", penwidth="2")
 
-    # 節點
     for pid, p in db.persons.items():
         dot.node(pid, p.name)
 
-    # 前任/現任索引
+    # 夫妻映射（現任/前任）
     ex_map = defaultdict(list)
     cur_map = {}
     for m in db.marriages.values():
@@ -223,71 +274,34 @@ def build_graphviz_source(db: DB) -> str:
         else:
             ex_map[a].append(b); ex_map[b].append(a)
 
-    # 依層分組
+    # 按層同 rank + 嚴格順序
     nodes_by_level = defaultdict(list)
     for pid in db.persons:
         nodes_by_level[level.get(pid,0)].append(pid)
 
-    # 同層排序：先處理「有現任者」當 pivot，再處理其它
     for lvl in sorted(nodes_by_level):
-        lv_nodes = sorted(nodes_by_level[lvl])
-
-        placed = set()
-        ordered: List[str] = []
-
-        # 1) pivots：有現任且現任在同層，且只取一邊（避免重複）
-        seen_couples = set()
-        for pid in lv_nodes:
-            cur = cur_map.get(pid)
-            if not cur or level.get(cur,0)!=lvl:  # 沒現任或現任不在同層
-                continue
-            couple_key = tuple(sorted([pid, cur]))
-            if couple_key in seen_couples:
-                continue
-            seen_couples.add(couple_key)
-
-            # 前任（同層）→ 本人 → 現任
-            exs = sorted([x for x in ex_map.get(pid, []) if level.get(x,0)==lvl])
-            block = exs + [pid, cur]
-            for x in block:
-                if x not in placed:
-                    ordered.append(x); placed.add(x)
-
-        # 2) 其它（可能只有前任、或單身）
-        for pid in lv_nodes:
-            if pid in placed:
-                continue
-            exs = sorted([x for x in ex_map.get(pid, []) if level.get(x,0)==lvl])
-            cur = cur_map.get(pid)
-            if cur and level.get(cur,0)==lvl and cur not in placed:
-                # 沒被 1) 處理到的少數情況（如某層只先看到配偶）
-                block = exs + [pid, cur]
-            else:
-                block = exs + [pid]
-            for x in block:
-                if x not in placed:
-                    ordered.append(x); placed.add(x)
-
+        lv_nodes = nodes_by_level[lvl]
+        ordered = strict_order_by_level(lv_nodes, lvl, level, cur_map, ex_map)
         if ordered:
-            # 固定同層與水平順序
             dot.extra.append("{rank=same; " + " ".join(f'"{x}"' for x in ordered) + "}")
             for a, b in zip(ordered, ordered[1:]):
-                dot.edge(a, b, style="invis", constraint=True, weight=2000, minlen=1)
+                dot.edge(a, b, style="invis", constraint=True, weight=2200, minlen=1)
 
-    # 建子女 rail（與孩子同層），夫妻中點 -> rail -> 孩子
-    def add_sibling_rail(a: str, b: str, kids: List[str]):
+    # 兄弟姊妹 rail（與孩子同層）
+    def add_sibling_rail(kids: List[str]):
         if not kids: return None
-        rail = f"rail_{a}_{b}"
+        rail = f"rail_{'_'.join(kids)}"
         dot.node(rail, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
         dot.extra.append("{rank=same; \"" + rail + "\" " + " ".join(f'"{k}"' for k in kids) + "}")
         for c in kids:
             dot.edge(rail, c, dir="none", tailport="s", headport="n", minlen=2)
         return rail
 
-    # 婚姻線＋孩子
+    # 婚姻線＋孩子（從夫妻中點垂直）
     for m in db.marriages.values():
         a, b = m.a, m.b
-        if a not in db.persons or b not in db.persons: continue
+        if a not in db.persons or b not in db.persons: 
+            continue
         style = "solid" if m.status=="married" else "dashed"
         uid = union_id(a,b)
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
@@ -298,17 +312,15 @@ def build_graphviz_source(db: DB) -> str:
         kids = [c for c in set(children_of.get(a,[])).intersection(children_of.get(b,[]))]
         kids.sort()
         if kids:
-            rail = add_sibling_rail(a,b,kids)
+            rail = add_sibling_rail(kids)
             dot.edge(uid, rail, dir="none", tailport="s", headport="n", minlen=2)
 
-    # 單親
-    for child, parents in defaultdict(list, {c.child:[] for c in db.links.values()}).items():
-        pass  # 上面就會覆蓋掉；再補一輪確保單親
+    # 單親（若某 child 只有一位 parent）
+    child_parent_count = defaultdict(int)
     for l in db.links.values():
-        # 如果此 child 只被一位 parent 連，直接畫 parent->child
-        # 這裡做個簡單判定
-        cnt = sum(1 for x in db.links.values() if x.child==l.child)
-        if cnt==1:
+        child_parent_count[l.child] += 1
+    for l in db.links.values():
+        if child_parent_count[l.child] == 1:
             dot.edge(l.parent, l.child, dir="none", tailport="s", headport="n", minlen=2)
 
     return dot.source
@@ -337,7 +349,6 @@ class InheritanceTW:
                 if pid in (m.a,m.b):
                     o = m.b if pid==m.a else m.a
                     if alive(o): s.append(o)
-            # 去重
             return list(dict.fromkeys(s))
 
         sp = spouses_alive(decedent)
@@ -487,7 +498,7 @@ with tab3:
             st.dataframe(df, use_container_width=True)
 
 with tab4:
-    st.subheader("家族樹（夫妻水平線；離婚虛線；孩子由中點垂直；前任左、現任右）")
+    st.subheader("家族樹（夫妻水平線；離婚虛線；孩子中點垂直；前任左、現任右，且優先於同層其他人）")
     st.caption(f"👥 人物 {len(db.persons)}｜💍 婚姻 {len(db.marriages)}｜👶 親子 {len(db.links)}")
     if not db.persons:
         st.info("請先建立人物/關係，或在左側按「一鍵載入示範」。")
