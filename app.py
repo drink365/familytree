@@ -150,7 +150,7 @@ def build_graphviz(db: DB) -> Digraph:
     levels, parents_of, children_of = compute_levels_and_parents(db)
 
     dot = Digraph(engine="dot")
-    # ordering="out" + 高權重不可見鏈 強制左右順序
+    # ordering="out" 搭配高權重不可見邊與 subgraph，固定左右順序
     dot.attr(rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6",
              compound="true", ordering="out")
     dot.attr(
@@ -171,37 +171,41 @@ def build_graphviz(db: DB) -> Digraph:
     for lvl in sorted(by_level.keys()):
         dot.body.append("{rank=same; " + " ".join(by_level[lvl]) + "}")
 
-    # -------- 以「左右錨點 + 不可見高權重邊」鎖死：前任在左、本人中、現任在右 --------
+    # -------- 強制「前任左、本人中、現任右」：subgraph + 高權重不可見鏈 --------
     marriages_by_person = defaultdict(list)
     for mid, m in db.marriages.items():
-        marriages_by_person[m.a].append((mid, m))
-        marriages_by_person[m.b].append((mid, m))
+        marriages_by_person[m.a].append(m)
+        marriages_by_person[m.b].append(m)
 
     for pid, marrs in marriages_by_person.items():
         ex_list, cur_list = [], []
-        for mid, m in marrs:
+        for m in marrs:
             spouse = m.b if pid == m.a else m.a
-            (cur_list if m.status == "married" else ex_list).append(spouse)
+            if m.status == "married":
+                cur_list.append(spouse)
+            else:
+                ex_list.append(spouse)
 
         if ex_list and cur_list:
-            # 依配偶 id 排序，避免非決定性順序
+            # 排序以避免非決定性
             ex_list  = sorted(set(ex_list))
             cur_list = sorted(set(cur_list))
 
-            # 建立左右不可見錨點（同層）
             L = f"ancL_{pid}"
             R = f"ancR_{pid}"
+            # 建左右錨點（隱形點），和一個同層 subgraph，把順序明確寫在同一行
             dot.node(L, label="", shape="point", width="0.01", height="0.01", style="invis")
             dot.node(R, label="", shape="point", width="0.01", height="0.01", style="invis")
-            dot.body.append(f"{{rank=same; {L} {' '.join(ex_list)} {pid} {' '.join(cur_list)} {R}}}")
+            ordered = " ".join([L] + ex_list + [pid] + cur_list + [R])
+            dot.body.append(f"subgraph cluster_order_{pid} {{ rank=same; color=white; {ordered}; }}")
 
-            # 以不可見高權重邊串成一條序列：L → ex... → 本人 → cur... → R
+            # 用高權重不可見邊把序列整個串起來（真正鎖死左右）
             chain = [L] + ex_list + [pid] + cur_list + [R]
             for a, b in zip(chain, chain[1:]):
-                dot.edge(a, b, style="invis", weight="1000", minlen="1", constraint="true")
-    # -------------------------------------------------------------------------
+                dot.edge(a, b, style="invis", weight="10000", minlen="1", constraint="true")
+    # ---------------------------------------------------------------------
 
-    # 兄弟姊妹匯流線（水平 rail）
+    # 兄弟姊妹水平匯流線（減少重疊）
     def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
         if not kids:
             return None
@@ -211,7 +215,7 @@ def build_graphviz(db: DB) -> Digraph:
             dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen="1")
         return rail_id
 
-    # 婚姻與子女（孩子從雙親 union 中點往下；離婚=虛線）
+    # 婚姻與子女（孩子從 union 中點往下；離婚=虛線）
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons:
@@ -219,10 +223,12 @@ def build_graphviz(db: DB) -> Digraph:
         style = "solid" if m.status == "married" else "dashed"
         uid = union_id(a, b)
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
+        # 注意：婚姻邊的權重降低，避免搶走左右排序的主導權
         dot.body.append(f"{{rank=same; {a} {uid} {b}}}")
-        dot.edge(a, uid, dir="none", style=style, weight="100", minlen="1")
-        dot.edge(uid, b, dir="none", style=style, weight="100", minlen="1")
+        dot.edge(a, uid, dir="none", style=style, weight="5", minlen="1")
+        dot.edge(uid, b, dir="none", style=style, weight="5", minlen="1")
 
+        # 共同子女由 union 中點往下
         kids = [c for c in children_of.get(a, []) if c in set(children_of.get(b, []))]
         kids = sorted(kids)
         if kids:
