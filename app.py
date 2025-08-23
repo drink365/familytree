@@ -1,10 +1,10 @@
-# app.py — FamilyTree v7.4.3
-# 規則：
-# 1) 前任一定在左、本人在中、現任在右（同層以不可見高權重鏈鎖定左右順序）
-# 2) 子女從雙親 union 中點垂直往下（婚姻：實線；離婚/喪偶：虛線）
-# 3) 兄弟姊妹共用水平匯流線以減少重疊
-# 4) 僅使用 Graphviz；移除 PyVis
-# 5) UI：人物｜關係｜法定繼承試算（簡化）｜家族樹；支援一鍵載入「陳一郎家族」示範
+# app.py — FamilyTree v7.5.0
+# 特色：
+# - 同層左右順序強制為【前任們 → 本人 → 現任】（本人一定居中、前任一定在左、現任一定在右）
+#   實作方式：只在三人組內加不可見鏈（constraint=false），避免整層大鏈互相牽動。
+# - 子女由雙親 union 中點垂直往下（婚姻：實線；離婚/喪偶：虛線）
+# - 兄弟姊妹共享水平匯流線以減少重疊
+# - 僅使用 Graphviz（移除 PyVis）
 
 import json
 from datetime import date, datetime
@@ -15,7 +15,7 @@ import streamlit as st
 import pandas as pd
 from graphviz import Digraph
 
-VERSION = "7.4.3"
+VERSION = "7.5.0"
 
 # ----------------- Data Models -----------------
 class Person:
@@ -30,7 +30,6 @@ class Person:
         try:
             return datetime.strptime(self.death, "%Y-%m-%d").date() > d
         except Exception:
-            # 若格式不正確，視為仍在世以避免錯判
             return True
 
 
@@ -185,7 +184,6 @@ def build_graphviz(db: DB) -> Digraph:
     for m in db.marriages.values():
         a, b = m.a, m.b
         if m.status == "married":
-            # 若資料誤植多位現任，只取第一次遇到的
             if a not in cur_map:
                 cur_map[a] = b
             if b not in cur_map:
@@ -194,43 +192,35 @@ def build_graphviz(db: DB) -> Digraph:
             ex_map[a].append(b)
             ex_map[b].append(a)
 
-    # 依層建立「不可見高權重鏈」來固定左右順序
+    # 依層：宣告 rank=same；再為「有配偶關係的人」建立局部排序鏈（前任們→本人→現任）
     nodes_by_level = defaultdict(list)
     for pid in db.persons:
         nodes_by_level[level.get(pid, 0)].append(pid)
 
     for lvl in sorted(nodes_by_level.keys()):
-        level_nodes = sorted(nodes_by_level[lvl])  # 穩定
-        used = set()
-        sequence: List[str] = []
+        lv_nodes = sorted(nodes_by_level[lvl])
+        # 同層宣告（僅設定 y 軸相同；不在這裡做整層排序）
+        dot.body.append("{rank=same; " + " ".join(lv_nodes) + "}")
 
-        # 先把有配偶關係的人組成 block：前任們 → 本人 → 現任(如有)
-        for pid in level_nodes:
+        used = set()
+        for pid in lv_nodes:
             if pid in used:
                 continue
             exs = sorted({s for s in ex_map.get(pid, []) if level.get(s, 0) == lvl})
             cur = cur_map.get(pid)
             if cur is not None and level.get(cur, 0) != lvl:
-                cur = None  # 現任不在同層則不參與左右排序
+                cur = None
+
             if exs or cur:
-                block = exs + [pid]
-                if cur:
-                    block += [cur]
+                block = exs + [pid] + ([cur] if cur else [])
+                # 標記已經入列，避免配偶重複被別人的 block 再拉一次
                 for x in block:
-                    if x not in used:
-                        sequence.append(x)
-                        used.add(x)
-
-        # 把其餘未使用的節點補上（不破壞已固化的家庭順序）
-        for pid in level_nodes:
-            if pid not in used:
-                sequence.append(pid)
-                used.add(pid)
-
-        # 同層宣告 + 用高權重不可見邊把整層串成鏈，徹底鎖死左右順序
-        dot.body.append("{rank=same; " + " ".join(sequence) + "}")
-        for a, b in zip(sequence, sequence[1:]):
-            dot.edge(a, b, style="invis", constraint="true", weight="10000", minlen="1")
+                    used.add(x)
+                # 把三人組固定左右：不可見、constraint=false（只影響左右，不影響分層）
+                dot.body.append(f"subgraph cluster_ord_{pid} {{ rank=same; color=white; " +
+                                " ".join(block) + " }}")
+                for a, b in zip(block, block[1:]):
+                    dot.edge(a, b, style="invis", constraint="false", weight="500", minlen="1")
 
     # 兄弟姊妹水平匯流線（美化）
     def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
@@ -242,7 +232,7 @@ def build_graphviz(db: DB) -> Digraph:
             dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen="1")
         return rail_id
 
-    # 婚姻與子女（孩子從 union 中點往下；離婚=虛線；婚姻線權重降低避免干擾左右鏈）
+    # 婚姻與子女（孩子從 union 中點往下；離婚=虛線；婚姻線權重降低避免干擾左右）
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons:
@@ -413,10 +403,8 @@ with tab3:
                     for m in self.db.marriages.values():
                         if pid in (m.a, m.b):
                             o = m.b if pid == m.a else m.a
-                            # 未處理結束日期的嚴格性，示範版只檢查對方是否仍在世
                             if alive(o):
                                 s.append(o)
-                    # 去重後回傳
                     return list(dict.fromkeys(s))
 
                 sp = spouses_alive(decedent)
@@ -424,7 +412,6 @@ with tab3:
 
                 rows = []
                 if kids or sp:
-                    # 配偶與直系卑親屬同順位：均分（示範：若雙方皆存在，配偶 1/2、子女平均分 1/2）
                     unit = (1 if sp else 0) + (1 if kids else 0)
                     spouse_share = (1 / unit) if sp else 0
                     for sid in sp:
