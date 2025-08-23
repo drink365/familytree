@@ -150,7 +150,6 @@ def build_graphviz(db: DB) -> Digraph:
     levels, parents_of, children_of = compute_levels_and_parents(db)
 
     dot = Digraph(engine="dot")
-    # ordering="out" 搭配高權重不可見邊與 subgraph，固定左右順序
     dot.attr(rankdir="TB", splines="ortho", nodesep="1.2", ranksep="1.6",
              compound="true", ordering="out")
     dot.attr(
@@ -164,16 +163,16 @@ def build_graphviz(db: DB) -> Digraph:
     for pid, p in db.persons.items():
         dot.node(pid, label=p.name)
 
-    # 同層（rank=same）
+    # 依輩分同層
     by_level = defaultdict(list)
     for pid in db.persons:
         by_level[levels.get(pid, 0)].append(pid)
     for lvl in sorted(by_level.keys()):
         dot.body.append("{rank=same; " + " ".join(by_level[lvl]) + "}")
 
-    # -------- 強制「前任左、本人中、現任右」：subgraph + 高權重不可見鏈 --------
+    # －－－ 核心：用 invis + constraint=false 鎖定「前任 ← 本人 → 現任」的左右順序 －－－
     marriages_by_person = defaultdict(list)
-    for mid, m in db.marriages.items():
+    for _, m in db.marriages.items():
         marriages_by_person[m.a].append(m)
         marriages_by_person[m.b].append(m)
 
@@ -181,31 +180,22 @@ def build_graphviz(db: DB) -> Digraph:
         ex_list, cur_list = [], []
         for m in marrs:
             spouse = m.b if pid == m.a else m.a
-            if m.status == "married":
-                cur_list.append(spouse)
-            else:
-                ex_list.append(spouse)
+            (cur_list if m.status == "married" else ex_list).append(spouse)
 
         if ex_list and cur_list:
-            # 排序以避免非決定性
+            # 穩定排序，避免非決定性
             ex_list  = sorted(set(ex_list))
             cur_list = sorted(set(cur_list))
 
-            L = f"ancL_{pid}"
-            R = f"ancR_{pid}"
-            # 建左右錨點（隱形點），和一個同層 subgraph，把順序明確寫在同一行
-            dot.node(L, label="", shape="point", width="0.01", height="0.01", style="invis")
-            dot.node(R, label="", shape="point", width="0.01", height="0.01", style="invis")
-            ordered = " ".join([L] + ex_list + [pid] + cur_list + [R])
-            dot.body.append(f"subgraph cluster_order_{pid} {{ rank=same; color=white; {ordered}; }}")
-
-            # 用高權重不可見邊把序列整個串起來（真正鎖死左右）
-            chain = [L] + ex_list + [pid] + cur_list + [R]
+            chain = ex_list + [pid] + cur_list
+            # 同層宣告
+            dot.body.append("{rank=same; " + " ".join(chain) + "}")
+            # 左→右不可見鏈（不參與分層，只影響左右順序）
             for a, b in zip(chain, chain[1:]):
-                dot.edge(a, b, style="invis", weight="10000", minlen="1", constraint="true")
-    # ---------------------------------------------------------------------
+                dot.edge(a, b, style="invis", constraint="false", weight="100", minlen="1")
+    # －－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－－
 
-    # 兄弟姊妹水平匯流線（減少重疊）
+    # 兄弟姊妹水平匯流線（美化）
     def add_sibling_rail(parent_a: str, parent_b: str, kids: List[str]):
         if not kids:
             return None
@@ -215,7 +205,7 @@ def build_graphviz(db: DB) -> Digraph:
             dot.edge(rail_id, c, dir="none", tailport="s", headport="n", minlen="1")
         return rail_id
 
-    # 婚姻與子女（孩子從 union 中點往下；離婚=虛線）
+    # 婚姻與子女（子女從 union 中點往下；離婚=虛線；婚姻邊權重調低避免干擾排序）
     for m in db.marriages.values():
         a, b = m.a, m.b
         if a not in db.persons or b not in db.persons:
@@ -223,24 +213,23 @@ def build_graphviz(db: DB) -> Digraph:
         style = "solid" if m.status == "married" else "dashed"
         uid = union_id(a, b)
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
-        # 注意：婚姻邊的權重降低，避免搶走左右排序的主導權
         dot.body.append(f"{{rank=same; {a} {uid} {b}}}")
         dot.edge(a, uid, dir="none", style=style, weight="5", minlen="1")
         dot.edge(uid, b, dir="none", style=style, weight="5", minlen="1")
 
-        # 共同子女由 union 中點往下
         kids = [c for c in children_of.get(a, []) if c in set(children_of.get(b, []))]
-        kids = sorted(kids)
         if kids:
+            kids = sorted(kids)
             rail = add_sibling_rail(a, b, kids)
             dot.edge(uid, rail, dir="none", tailport="s", headport="n", minlen="1")
 
-    # 單親（只有一個父/母）
+    # 單親
     for child, parents in parents_of.items():
         if len(parents) == 1:
             dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen="1")
 
     return dot
+
 
 # ----------------- PyVis (fallback) -----------------
 def build_pyvis(db: DB) -> Network:
