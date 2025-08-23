@@ -1,10 +1,11 @@
-# app.py — FamilyTree v7.5.0
+# app.py — FamilyTree v7.5.1
 # 特色：
 # - 同層左右順序強制為【前任們 → 本人 → 現任】（本人一定居中、前任一定在左、現任一定在右）
-#   實作方式：只在三人組內加不可見鏈（constraint=false），避免整層大鏈互相牽動。
+#   實作：只在「家庭三人組」內加不可見鏈（constraint=false），避免整層大鏈互相牽動。
 # - 子女由雙親 union 中點垂直往下（婚姻：實線；離婚/喪偶：虛線）
 # - 兄弟姊妹共享水平匯流線以減少重疊
-# - 僅使用 Graphviz（移除 PyVis）
+# - 只用 Graphviz（移除 PyVis）
+# - 家族樹頁面加上 try/except 與提示，避免看起來一片空白
 
 import json
 from datetime import date, datetime
@@ -15,7 +16,7 @@ import streamlit as st
 import pandas as pd
 from graphviz import Digraph
 
-VERSION = "7.5.0"
+VERSION = "7.5.1"
 
 # ----------------- Data Models -----------------
 class Person:
@@ -30,6 +31,7 @@ class Person:
         try:
             return datetime.strptime(self.death, "%Y-%m-%d").date() > d
         except Exception:
+            # 若格式不正確，視為仍在世，避免錯判
             return True
 
 
@@ -178,7 +180,7 @@ def build_graphviz(db: DB) -> Digraph:
     for pid, p in db.persons.items():
         dot.node(pid, label=p.name)
 
-    # 建每人的「前任清單」與「現任（最多1位）」索引
+    # 每人的「前任清單」與「現任（最多1位）」索引
     ex_map: Dict[str, List[str]] = defaultdict(list)
     cur_map: Dict[str, str] = {}  # 每人最多一位現任
     for m in db.marriages.values():
@@ -199,8 +201,9 @@ def build_graphviz(db: DB) -> Digraph:
 
     for lvl in sorted(nodes_by_level.keys()):
         lv_nodes = sorted(nodes_by_level[lvl])
-        # 同層宣告（僅設定 y 軸相同；不在這裡做整層排序）
-        dot.body.append("{rank=same; " + " ".join(lv_nodes) + "}")
+        # 同層宣告（僅設定 y 軸相同）
+        if lv_nodes:
+            dot.body.append("{rank=same; " + " ".join(lv_nodes) + "}")
 
         used = set()
         for pid in lv_nodes:
@@ -209,16 +212,17 @@ def build_graphviz(db: DB) -> Digraph:
             exs = sorted({s for s in ex_map.get(pid, []) if level.get(s, 0) == lvl})
             cur = cur_map.get(pid)
             if cur is not None and level.get(cur, 0) != lvl:
-                cur = None
+                cur = None  # 現任不在同層則不參與左右排序
 
             if exs or cur:
                 block = exs + [pid] + ([cur] if cur else [])
                 # 標記已經入列，避免配偶重複被別人的 block 再拉一次
                 for x in block:
                     used.add(x)
-                # 把三人組固定左右：不可見、constraint=false（只影響左右，不影響分層）
-                dot.body.append(f"subgraph cluster_ord_{pid} {{ rank=same; color=white; " +
-                                " ".join(block) + " }}")
+                # 在三人組內固定左右：不可見、constraint=false（只影響左右，不影響分層）
+                dot.body.append(
+                    f"subgraph cluster_ord_{pid} {{ rank=same; color=white; " + " ".join(block) + " }}"
+                )
                 for a, b in zip(block, block[1:]):
                     dot.edge(a, b, style="invis", constraint="false", weight="500", minlen="1")
 
@@ -403,6 +407,7 @@ with tab3:
                     for m in self.db.marriages.values():
                         if pid in (m.a, m.b):
                             o = m.b if pid == m.a else m.a
+                            # 未處理結束日期的嚴格性，示範版只檢查對方是否仍在世
                             if alive(o):
                                 s.append(o)
                     return list(dict.fromkeys(s))
@@ -412,6 +417,7 @@ with tab3:
 
                 rows = []
                 if kids or sp:
+                    # 簡化示範：配偶與直系卑親屬同順位。若兩者皆有，配偶 1/2、子女均分 1/2。
                     unit = (1 if sp else 0) + (1 if kids else 0)
                     spouse_share = (1 / unit) if sp else 0
                     for sid in sp:
@@ -436,6 +442,15 @@ with tab3:
 with tab4:
     st.subheader("家族樹（夫妻水平線；離婚虛線；孩子由中點垂直；前任左、現任右）")
     if not db.persons:
-        st.info("請先建立人物/關係或載入示範資料。")
+        st.info("請先建立人物/關係，或在左側點「一鍵載入示範：陳一郎家族」。")
     else:
-        st.graphviz_chart(build_graphviz(db))
+        try:
+            dot = build_graphviz(db)
+            st.caption(f"👥 人物 {len(db.persons)} | 💍 婚姻 {len(db.marriages)} | 👶 親子 {len(db.links)}")
+            st.graphviz_chart(dot)
+        except Exception as e:
+            st.error(f"繪圖發生錯誤：{e}")
+            try:
+                st.code(dot.source, language="dot")
+            except Exception:
+                st.write("無法輸出 DOT 原始碼（dot 尚未建立）。")
