@@ -1,9 +1,7 @@
-# app.py — FamilyTree v7.9.0
-# - 強制：同層「前任 → 本人 → 現任」左右順序（rank=same + invisible edges，高權重）
-# - 不設配偶區塊；以同層排序＋Gemini junction 生出子女
-# - 夫妻實線、離婚/喪偶虛線
-# - 分頁：人物｜關係｜法定繼承試算｜家族樹
-# - 使用 st.graphviz_chart，無需系統 graphviz 可執行
+# app.py — FamilyTree v7.9.1
+# - 強制左右順序：前任 → 本人 → 現任（rank=same + invisible edges，高權重 9999）
+# - 三代分層；夫妻中點；在婚實線、離婚虛線
+# - Streamlit + Graphviz（st.graphviz_chart，不需系統安裝 graphviz 執行檔）
 
 import json
 from collections import defaultdict
@@ -13,9 +11,9 @@ from typing import Dict, List, Tuple, Optional
 import streamlit as st
 import pandas as pd
 
-VERSION = "7.9.0"
+VERSION = "7.9.1"
 
-# ---------------- Utilities / DOT ----------------
+# ---------------- DOT builder ----------------
 def _fmt_attrs(d: dict) -> str:
     if not d:
         return ""
@@ -79,16 +77,15 @@ class DotBuilder:
         out.append("}")
         return "\n".join(out)
 
+# ---------------- Data models ----------------
 def normalize_status(s: str) -> str:
     if not s:
         return ""
     s = str(s).strip().lower()
-    s = (s.replace("（", "(").replace("）", ")")
-           .replace("：", ":").replace("，", ","))
     married  = {"married", "在婚", "結婚", "已婚", "現任", "marry", "true", "是"}
     divorced = {"divorced", "離婚"}
     widowed  = {"widowed", "喪偶", "喪夫", "喪妻"}
-    if s in married: return "married"
+    if s in married:  return "married"
     if s in divorced: return "divorced"
     if s in widowed:  return "widowed"
     return "divorced"
@@ -99,7 +96,6 @@ def clean_name(x: str) -> str:
 def union_id(a: str, b: str) -> str:
     return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
 
-# ---------------- Data models ----------------
 class Person:
     def __init__(self, pid, name, gender="unknown", birth=None, death=None, note=""):
         self.pid, self.name, self.gender = pid, name, gender
@@ -217,43 +213,9 @@ def compute_levels_and_maps(db: DB):
     return level, parents_of, children_of
 
 # ---------------- Ordering helpers ----------------
-def pick_pivot(level_nodes: List[str], lvl: int, level: Dict[str, int],
-               cur_map: Dict[str, str], ex_map: Dict[str, List[str]],
-               name_of: Dict[str, str]) -> Optional[str]:
-    candidates: List[Tuple[int, str, str]] = []
-    for pid in level_nodes:
-        cur = cur_map.get(pid)
-        if not cur or level.get(cur, -1) != lvl:
-            continue
-        exs = [x for x in ex_map.get(pid, []) if level.get(x, -1) == lvl]
-        if exs:
-            candidates.append((len(exs), name_of.get(pid, pid), pid))
-    if not candidates:
-        return None
-    candidates.sort(key=lambda t: (-t[0], t[1]))
-    return candidates[0][2]
-
-def order_level_simple(level_nodes: List[str], lvl: int, level: Dict[str, int],
-                       cur_map: Dict[str, str], ex_map: Dict[str, List[str]],
-                       name_of: Dict[str, str]) -> List[str]:
-    nodes = list(level_nodes)
-    if not nodes:
-        return []
-    pivot = pick_pivot(nodes, lvl, level, cur_map, ex_map, name_of)
-
-    def role_priority(pid: str) -> Tuple[int, str]:
-        if pivot:
-            exs = set(x for x in ex_map.get(pivot, []) if level.get(x, -1) == lvl)
-            cur = cur_map.get(pivot) if level.get(cur_map.get(pivot, ""), -1) == lvl else None
-            if pid in exs:
-                return (0, name_of.get(pid, pid))
-            if pid == pivot:
-                return (1, name_of.get(pid, pid))
-            if cur and pid == cur:
-                return (2, name_of.get(pid, pid))
-        return (3, name_of.get(pid, pid))
-    nodes.sort(key=role_priority)
-    return nodes
+def order_level_base(level_nodes: List[str], name_of: Dict[str, str]) -> List[str]:
+    # 低權重的基礎穩定排序（避免 DOT 依 id 或 hash 隨機）
+    return sorted(level_nodes, key=lambda x: name_of.get(x, x))
 
 # ---------------- Graphviz builder ----------------
 def build_graphviz_source(db: DB) -> str:
@@ -281,39 +243,46 @@ def build_graphviz_source(db: DB) -> str:
     for pid, p in db.persons.items():
         dot.node(pid, p.name)
 
-    # 分層 + 同層排序
     name_of = {pid: db.persons[pid].name for pid in db.persons}
     nodes_by_level = defaultdict(list)
     for pid in db.persons:
         nodes_by_level[level.get(pid, 0)].append(pid)
 
+    # ---- 同層約束（核心）：前任 → 本人 → 現任 ----
     for lvl in sorted(nodes_by_level):
         lv_nodes = nodes_by_level[lvl]
-        ordered = order_level_simple(lv_nodes, lvl, level, cur_map, ex_map, name_of)
-        if ordered:
-            # 一般同層（低權重穩定）
-            dot.extra.append("{rank=same; " + " ".join(f'"{x}"' for x in ordered) + "}")
-            for a, b in zip(ordered, ordered[1:]):
-                dot.edge(a, b, style="invis", constraint=True, weight=800, minlen=1)
+        if not lv_nodes:
+            continue
 
-        # ★ 關鍵：對每一個「有現任且有前任同層」的人，強制「前任 → 本人 → 現任」順序（高權重）
+        # 先把整層放 rank=same；並用低權重 invisible 邊按姓名穩定一下
+        base_order = order_level_base(lv_nodes, name_of)
+        dot.extra.append("{rank=same; " + " ".join(f'"{x}"' for x in base_order) + "}")
+        for a, b in zip(base_order, base_order[1:]):
+            dot.edge(a, b, style="invis", constraint=True, weight=5, minlen=1)
+
+        # 對每個人在「同層」的前任/現任，強制高權重順序
         for pid in lv_nodes:
+            seq = []
+            # 同層前任（多個，以姓名排序）
+            exs = [x for x in ex_map.get(pid, []) if level.get(x, -1) == lvl]
+            exs.sort(key=lambda x: name_of.get(x, x))
+            # 同層現任（最多一個）
             cur = cur_map.get(pid)
             cur_ok = cur and level.get(cur, -1) == lvl
-            exs = [x for x in ex_map.get(pid, []) if level.get(x, -1) == lvl]
-            if cur_ok or exs:
-                seq = sorted(exs, key=lambda x: name_of.get(x, x)) + [pid]
+
+            if exs or cur_ok:
+                seq = exs + [pid]
                 if cur_ok:
                     seq.append(cur)
-                # rank=same 確認同層 + invis 高權重固定左右
+                # 再加一次 rank=same（不重複也沒關係）
                 dot.extra.append("{rank=same; " + " ".join(f'"{x}"' for x in seq) + "}")
+                # 超高權重不可見邊，強制左右順序
                 for a, b in zip(seq, seq[1:]):
-                    dot.edge(a, b, style="invis", constraint=True, weight=3000, minlen=1)
+                    dot.edge(a, b, style="invis", constraint=True, weight=9999, minlen=1)
 
-    # 夫妻中點 + 不可見 junction → 子女（Gemini 作法）
+    # ---- 夫妻中點 + 子女 junction（Gemini） ----
     def add_children_from_pair(a: str, b: str, kids: List[str], style: str):
-        if not kids:
-            return
+        if not kids: return
         mid = union_id(a, b)
         dot.node(mid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
         dot.extra.append(f'{{rank=same; "{a}" "{mid}" "{b}"}}')
@@ -326,6 +295,10 @@ def build_graphviz_source(db: DB) -> str:
         dot.extra.append("{rank=same; " + " ".join(['"{}"'.format(jn)] + [f'"{k}"' for k in kids]) + "}")
         for c in kids:
             dot.edge(jn, c, dir="none", tailport="s", headport="n", minlen=2)
+
+    children_of_parent = defaultdict(set)
+    for l in db.links.values():
+        children_of_parent[l.parent].add(l.child)
 
     def common_children(a: str, b: str) -> List[str]:
         sa = set(children_of.get(a, []))
