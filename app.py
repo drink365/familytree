@@ -1,11 +1,11 @@
-# app.py — FamilyTree v7.5.1
+# app.py — FamilyTree v7.5.2
 # 特色：
+# - 只用 Graphviz，家族樹以 DOT 原始碼餵給 st.graphviz_chart（避免空白）
 # - 同層左右順序強制為【前任們 → 本人 → 現任】（本人一定居中、前任一定在左、現任一定在右）
-#   實作：只在「家庭三人組」內加不可見鏈（constraint=false），避免整層大鏈互相牽動。
+#   實作：只在三人組內加不可見鏈（constraint=false），避免整層大鏈互相牽動。
 # - 子女由雙親 union 中點垂直往下（婚姻：實線；離婚/喪偶：虛線）
 # - 兄弟姊妹共享水平匯流線以減少重疊
-# - 只用 Graphviz（移除 PyVis）
-# - 家族樹頁面加上 try/except 與提示，避免看起來一片空白
+# - 內建「陳一郎家族」一鍵示範；法定繼承簡化示範（配偶與直系卑親屬）
 
 import json
 from datetime import date, datetime
@@ -16,7 +16,8 @@ import streamlit as st
 import pandas as pd
 from graphviz import Digraph
 
-VERSION = "7.5.1"
+VERSION = "7.5.2"
+
 
 # ----------------- Data Models -----------------
 class Person:
@@ -31,7 +32,7 @@ class Person:
         try:
             return datetime.strptime(self.death, "%Y-%m-%d").date() > d
         except Exception:
-            # 若格式不正確，視為仍在世，避免錯判
+            # 若日期格式不正確，視為仍在世以避免錯判
             return True
 
 
@@ -55,7 +56,7 @@ class DB:
 
     @staticmethod
     def from_obj(o) -> "DB":
-        """支援兩種格式：
+        """支援兩種匯入格式：
         A) {members:[{id,name,gender...}], marriages:[{husband,wife,status}], children:[{father,mother,child}]}
         B) {persons:{pid:{...}}, marriages:{mid:{a,b,status}}, links:{cid:{parent,child}}}
         """
@@ -102,7 +103,7 @@ class DB:
         }
 
     def ensure_person(self, name: str, gender="unknown") -> str:
-        """以名字找 ID，若沒有就建立"""
+        """用姓名找 ID，沒有就新建"""
         for pid, p in self.persons.items():
             if p.name == name:
                 return pid
@@ -122,6 +123,7 @@ class DB:
 def union_id(a: str, b: str) -> str:
     """產生雙親 union 節點 ID（無向）"""
     return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
+
 
 # ----------------- Leveling -----------------
 def compute_levels_and_maps(db: DB) -> Tuple[Dict[str, int], Dict[str, List[str]], Dict[str, List[str]]]:
@@ -161,6 +163,7 @@ def compute_levels_and_maps(db: DB) -> Tuple[Dict[str, int], Dict[str, List[str]
                 changed = True
 
     return level, parents_of, children_of
+
 
 # ----------------- Graphviz tree -----------------
 def build_graphviz(db: DB) -> Digraph:
@@ -216,7 +219,6 @@ def build_graphviz(db: DB) -> Digraph:
 
             if exs or cur:
                 block = exs + [pid] + ([cur] if cur else [])
-                # 標記已經入列，避免配偶重複被別人的 block 再拉一次
                 for x in block:
                     used.add(x)
                 # 在三人組內固定左右：不可見、constraint=false（只影響左右，不影響分層）
@@ -261,6 +263,7 @@ def build_graphviz(db: DB) -> Digraph:
             dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen="1")
 
     return dot
+
 
 # ----------------- UI -----------------
 st.set_page_config(layout="wide", page_title=f"家族平台 {VERSION}", page_icon="🌳")
@@ -407,7 +410,6 @@ with tab3:
                     for m in self.db.marriages.values():
                         if pid in (m.a, m.b):
                             o = m.b if pid == m.a else m.a
-                            # 未處理結束日期的嚴格性，示範版只檢查對方是否仍在世
                             if alive(o):
                                 s.append(o)
                     return list(dict.fromkeys(s))
@@ -447,7 +449,10 @@ with tab4:
         try:
             dot = build_graphviz(db)
             st.caption(f"👥 人物 {len(db.persons)} | 💍 婚姻 {len(db.marriages)} | 👶 親子 {len(db.links)}")
-            st.graphviz_chart(dot)
+            # ✅ 改用 DOT 原始碼餵給 Streamlit，避免某些環境直傳物件不渲染而出現空白
+            st.graphviz_chart(dot.source, use_container_width=True)
+            with st.expander("顯示 DOT 原始碼（除錯用）", expanded=False):
+                st.code(dot.source, language="dot")
         except Exception as e:
             st.error(f"繪圖發生錯誤：{e}")
             try:
