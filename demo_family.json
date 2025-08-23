@@ -1,0 +1,25 @@
+{
+  "members": [
+    {"id": "f1", "name": "陳一郎", "gender": "M"},
+    {"id": "f2", "name": "陳前妻", "gender": "F"},
+    {"id": "f3", "name": "王子", "gender": "M"},
+    {"id": "f4", "name": "王子妻", "gender": "F"},
+    {"id": "f5", "name": "王孫", "gender": "M"},
+    {"id": "f6", "name": "陳妻", "gender": "F"},
+    {"id": "f7", "name": "陳大", "gender": "M"},
+    {"id": "f8", "name": "陳二", "gender": "M"},
+    {"id": "f9", "name": "陳三", "gender": "M"}
+  ],
+  "marriages": [
+    {"husband": "f1", "wife": "f2", "status": "divorced"},
+    {"husband": "f3", "wife": "f4", "status": "married"},
+    {"husband": "f1", "wife": "f6", "status": "married"}
+  ],
+  "children": [
+    {"father": "f1", "mother": "f2", "child": "f3"},
+    {"father": "f3", "mother": "f4", "child": "f5"},
+    {"father": "f1", "mother": "f6", "child": "f7"},
+    {"father": "f1", "mother": "f6", "child": "f8"},
+    {"father": "f1", "mother": "f6", "child": "f9"}
+  ]
+}
