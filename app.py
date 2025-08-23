@@ -1,10 +1,10 @@
 
-# app.py（自研版 v7.3）
-# 修正：f-string 引號、Graphviz 間距與路徑更清楚、其餘修正沿用 v7.2
-# 特色：
-# - Graphviz：夫妻 A—●—B，子女自●垂直向下；同代同層；離婚/喪偶＝虛線
-# - PyVis：作為備援；options 以 json.dumps 設定
-# - 匯入/示範後使用 st.rerun()；防呆避免 IndexError；移除下載 DOT 按鈕
+# app.py（自研版 v7.3.2 - clean）
+# 內容整合：
+# - DFS 依父母計算世代層級（避免「排成一排」）
+# - Graphviz：夫妻 A—●—B；共同子女由●垂直往下；單親直下；離婚/喪偶=虛線；較大間距
+# - PyVis：備援，options 用 json.dumps
+# - 匯入/示範後用 st.rerun()；防呆避免 IndexError；移除下載 DOT
 
 import json
 from datetime import date, datetime
@@ -45,7 +45,6 @@ class DB:
     @staticmethod
     def from_obj(o)->"DB":
         db = DB()
-        # 支援舊的 members/marriages/children 與新的 persons/marriages/links
         if "members" in o:
             for m in o.get("members", []):
                 db.persons[m["id"]] = Person(m["id"], m["name"], m.get("gender","unknown"), m.get("birth"), m.get("death"), m.get("note",""))
@@ -77,7 +76,6 @@ class DB:
         }
 
     def ensure_person(self, name: str, gender="unknown") -> str:
-        # 若同名已存在，回傳原 pid；否則新建
         for pid, p in self.persons.items():
             if p.name == name: return pid
         base = "p_" + "".join(ch if ch.isalnum() else "_" for ch in name)
@@ -94,7 +92,6 @@ def get_name_index(db: DB) -> Dict[str, str]:
     return db.name_index()
 
 # ----------------- 工具 -----------------
-
 def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str]], Dict[str,List[str]]]:
     """以『父母深度』計算世代：
     沒有父/母 → 第 0 代；
@@ -106,7 +103,6 @@ def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str
         parents_of[l.child].append(l.parent)
         children_of[l.parent].append(l.child)
 
-    # DFS + 記憶化：以父母遞迴決定深度
     memo: Dict[str,int] = {}
     def depth(pid: str) -> int:
         if pid in memo: return memo[pid]
@@ -120,6 +116,10 @@ def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str
 
     level = {pid: depth(pid) for pid in db.persons}
     return level, parents_of, children_of
+
+def union_id(a: str, b: str) -> str:
+    return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
+
 # ----------------- 法定繼承（配偶置頂；僅直系卑親屬代位） -----------------
 class InheritanceTW:
     def __init__(self, db: DB):
@@ -245,46 +245,40 @@ class InheritanceTW:
 def build_graphviz(db: DB) -> Digraph:
     levels, parents_of, children_of = compute_levels_and_parents(db)
     dot = Digraph(engine="dot")
-    # 增加 ranksep/nodesep，採用 ortho 以避免重疊，設定新手友善字型
     dot.attr(rankdir="TB", splines="ortho", nodesep="1.1", ranksep="1.5", compound="true")
     dot.attr("node", shape="box", style="rounded,filled", fillcolor="#E8F0FE", color="#1D4ED8", penwidth="1.6",
              fontname="Taipei Sans TC, Noto Sans CJK, Arial", fontsize="12")
     dot.attr("edge", color="#2F5E73", penwidth="2")
 
-    # 同代同層
+    # 先放節點（避免 rank=same 引用不存在的 node）
+    for pid, p in db.persons.items():
+        dot.node(pid, label=p.name)
+
+    # 按層級強制同層
     by_level = defaultdict(list)
     for pid in db.persons:
         by_level[levels.get(pid,0)].append(pid)
     for lvl in sorted(by_level.keys()):
-        if by_level[lvl]:
-            dot.body.append("{rank=same; " + " ".join(by_level[lvl]) + "}")
+        ids = by_level[lvl]
+        if ids:
+            dot.body.append("{rank=same; " + " ".join(ids) + "}")
 
-    # 節點
-    for pid, p in db.persons.items():
-        dot.node(pid, label=p.name)
-
-    # 夫妻：a — uid — b；孩子從 uid 垂直往下
+    # 夫妻：a — uid — b；共同子女由 uid 垂直；單親直下
     for m in db.marriages.values():
         a, b = m.a, m.b
-        if a not in db.persons or b not in db.persons:
-            continue
+        if a not in db.persons or b not in db.persons: continue
         style = "solid" if m.status == "married" else "dashed"
         uid = union_id(a, b)
-        # 並排
-        dot.body.append("{rank=same; " + a + " " + uid + " " + b + "}")
         dot.node(uid, label="", shape="point", width="0.02", height="0.02", color="#94A3B8")
-        # 高權重水平邊固定左右順序；minlen 提升配偶間距
+        dot.body.append("{rank=same; " + a + " " + uid + " " + b + "}")
         dot.edge(a, uid, dir="none", style=style, weight="100", minlen="2")
         dot.edge(uid, b, dir="none", style=style, weight="100", minlen="2")
-        # 共同子女：由中點垂直往下；minlen 提升垂直距離；tail/head port 使路徑更直
         kids = sorted(set(children_of.get(a, [])) & set(children_of.get(b, [])))
         for c in kids:
             dot.edge(uid, c, dir="none", tailport="s", headport="n", minlen="2")
 
-    # 單親 → 子女
     for child, parents in parents_of.items():
-        if not parents:
-            continue
+        if not parents: continue
         if len(parents) == 1:
             dot.edge(parents[0], child, dir="none", tailport="s", headport="n", minlen="2")
 
@@ -302,8 +296,7 @@ def build_pyvis(db: DB) -> Network:
         net.add_edge(m.a, m.b, dashes=dashed, physics=False, arrows="", color={"color":"#2f5e73","inherit":False}, smooth={"type":"horizontal"}, width=2)
     unions_done = set()
     for child, parents in parents_of.items():
-        if not parents:
-            continue
+        if not parents: continue
         if len(parents) == 1:
             par = parents[0]
             net.add_edge(par, child, arrows="to", color={"color":"#2f5e73","inherit":False}, width=2, smooth={"type":"cubicBezier","forceDirection":"vertical","roundness":0.0})
@@ -333,7 +326,6 @@ st.title("🌳 家族平台（人物｜關係｜法定繼承｜家族樹）")
 if "db" not in st.session_state:
     st.session_state.db = DB()
 
-# 側邊欄
 with st.sidebar:
     st.header("資料維護 / 匯入匯出")
     if st.button("🧪 一鍵載入示範：陳一郎家族"):
@@ -379,7 +371,6 @@ with st.sidebar:
 
 db: DB = st.session_state.db
 
-# 分頁
 tab1, tab2, tab3, tab4 = st.tabs(["👤 人物", "🔗 關係", "🧮 法定繼承試算", "🗺️ 家族樹"])
 
 with tab1:
