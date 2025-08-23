@@ -1,3 +1,4 @@
+
 import json
 from collections import defaultdict, deque
 import streamlit as st
@@ -46,15 +47,7 @@ DEMO_DB = {
 # Graphviz DOT 產生器
 # -----------------------
 def build_graphviz_source(db):
-    """
-    根據資料輸出 Graphviz DOT：
-    1) 夫妻中點（point）承接子女，避免子女線接錯父或母
-    2) 三代以 rank=same 固定層級
-    3) 不可見邊固定「前任 → 本人 → 現任」水平順序
-    4) 兄弟姊妹以 birth/order 排序，經由 rail（point）排列
-    """
     persons = db.get("persons", {})
-    # marriages 正規化成 (a,b,status) 並確保 a<b 方便建 key
     marriages = []
     for m in db.get("marriages", []):
         a, b = m["a"], m["b"]
@@ -62,7 +55,6 @@ def build_graphviz_source(db):
             a, b = b, a
         marriages.append((a, b, m.get("status", "married")))
 
-    # children: [(parents_tuple, child)]
     children = []
     for c in db.get("children", []):
         ps = list(c.get("parents", []))
@@ -70,13 +62,12 @@ def build_graphviz_source(db):
             ps[0], ps[1] = ps[1], ps[0]
         children.append((tuple(ps), c["child"]))
 
-    # 關聯表
-    spouse_map = defaultdict(list)      # p -> [(spouse, status)]
+    spouse_map = defaultdict(list)
     for a, b, st in marriages:
         spouse_map[a].append((b, st))
         spouse_map[b].append((a, st))
 
-    kids_by_parents = defaultdict(list) # key=(a,b) 或 (a,) -> [child...]
+    kids_by_parents = defaultdict(list)
     parent_of = defaultdict(list)
     child_of = {}
     for parents, child in children:
@@ -85,7 +76,7 @@ def build_graphviz_source(db):
             parent_of[p].append(child)
         child_of[child] = list(parents)
 
-    # 推算世代：沒有父母紀錄者為第 0 代
+    # 推算世代
     gens = {pid: 0 for pid in persons if pid not in child_of}
     q = deque(gens.keys())
     while q:
@@ -95,7 +86,6 @@ def build_graphviz_source(db):
                 gens[c] = gens[p] + 1
                 q.append(c)
 
-    # 風格
     THEME = "#0F4C5C"
     NODE_STYLE = (
         'shape=box, style="rounded,filled", color="{0}", fillcolor="{0}22", '
@@ -117,9 +107,7 @@ def build_graphviz_source(db):
     # 夫妻與中點
     mid_nodes = set()
     for a, b, status in marriages:
-        # 夫妻同層
         dot.append('{rank=same; "' + a + '" "' + b + '"}')
-        # 讓二人相鄰：高權重不可見邊
         dot.append(f'"{a}" -> "{b}" [style=invis, weight=1000, constraint=true];')
 
         mid = f"mid_{a}_{b}"
@@ -129,7 +117,6 @@ def build_graphviz_source(db):
         dot.append(f'"{a}" -> "{mid}" [dir=none, style={style}];')
         dot.append(f'"{mid}" -> "{b}" [dir=none, style={style}];')
 
-    # 兄弟姊妹排序 key
     def kid_sort_key(kid_id):
         p = persons.get(kid_id, {})
         return (
@@ -138,12 +125,10 @@ def build_graphviz_source(db):
             p.get("name", kid_id),
         )
 
-    # rail：夫妻中點/單親 → rail → kids
     for key, kids in kids_by_parents.items():
         kids_sorted = sorted(kids, key=kid_sort_key)
         rail = "rail_" + "_".join(key) if key else "rail_root"
 
-        # rail 與孩子同層
         same_rank_elems = " ".join(['"{}"'.format(rail)] + [f'"{k}"' for k in kids_sorted])
         dot.append("{rank=same; " + same_rank_elems + "}")
         dot.append(f'"{rail}" [shape=point, width=0.01, height=0.01, color="#94A3B8"];')
@@ -152,7 +137,6 @@ def build_graphviz_source(db):
             a, b = key
             mid = f"mid_{a}_{b}"
             if mid not in mid_nodes:
-                # 若沒有婚姻記錄但有共同子女，也建立中點（預設實線）
                 dot.append(f'"{mid}" [shape=point, width=0.01, height=0.01, color="#94A3B8"];')
                 dot.append(f'"{a}" -> "{mid}" [dir=none, style=solid];')
                 dot.append(f'"{mid}" -> "{b}" [dir=none, style=solid];')
@@ -165,7 +149,6 @@ def build_graphviz_source(db):
         for kid in kids_sorted:
             dot.append(f'"{rail}" -> "{kid}" [dir=none];')
 
-    # 水平順序：前任 → 本人 → 現任（有現任才固定）
     for p, lst in spouse_map.items():
         current = [s for s, st in lst if st == "married"]
         exs = [s for s, st in lst if st != "married"]
@@ -175,7 +158,6 @@ def build_graphviz_source(db):
             for a, b in zip(ordered, ordered[1:]):
                 dot.append(f'"{a}" -> "{b}" [style=invis, weight=2000, constraint=true];')
 
-    # 同代同層
     gen_to_nodes = defaultdict(list)
     for pid, g in gens.items():
         gen_to_nodes[g].append(pid)
@@ -191,7 +173,49 @@ def build_graphviz_source(db):
 # -----------------------
 st.title("🌳 家庭樹（正確三代佈局版）")
 
-st.markdown("""
+st.markdown('''
 - 若不上傳檔案，會直接顯示內建 demo（與你附圖一致）。
 - 也可上傳自訂 JSON，結構如下：
 
+```
+{
+  "persons": {
+    "idA": {"name": "張三", "birth": 1970, "order": 1},
+    "idB": {"name": "李四"}
+  },
+  "marriages": [
+    {"a": "idA", "b": "idB", "status": "married"}   // 或 "divorced"/"widowed"
+  ],
+  "children": [
+    {"parents": ["idA", "idB"], "child": "child1"},
+    {"parents": ["idB"], "child": "child2"}         // 單親
+  ]
+}
+```
+''')
+
+uploaded = st.file_uploader("上傳自訂家庭 JSON（可略過）", type=["json"])
+if uploaded:
+    try:
+        db = json.load(uploaded)
+    except Exception as e:
+        st.error(f"JSON 解析失敗：{e}")
+        st.stop()
+else:
+    db = DEMO_DB
+
+dot = build_graphviz_source(db)
+st.subheader("家族樹")
+st.graphviz_chart(dot, use_container_width=True)
+
+with st.expander("查看 DOT 原始碼（除錯用）"):
+    st.code(dot, language="dot")
+
+st.download_button(
+    "下載 Graphviz DOT",
+    data=dot.encode("utf-8"),
+    file_name="family_tree.dot",
+    mime="text/vnd.graphviz",
+)
+
+st.caption("© 永傳家族辦公室｜重點邏輯：夫妻中點＋水平順序固定＋世代分層")
