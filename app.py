@@ -94,33 +94,32 @@ def get_name_index(db: DB) -> Dict[str, str]:
     return db.name_index()
 
 # ----------------- 工具 -----------------
+
 def compute_levels_and_parents(db: DB) -> Tuple[Dict[str,int], Dict[str,List[str]], Dict[str,List[str]]]:
+    """以『父母深度』計算世代：
+    沒有父/母 → 第 0 代；
+    有父/母 → 1 + max(父母世代)。確保同代同層、不是一排。
+    """
     parents_of = defaultdict(list)
     children_of = defaultdict(list)
     for l in db.links.values():
         parents_of[l.child].append(l.parent)
         children_of[l.parent].append(l.child)
 
-    roots = [pid for pid in db.persons if not parents_of[pid]]
-    if not roots and db.persons:
-        roots = [next(iter(db.persons))]
+    # DFS + 記憶化：以父母遞迴決定深度
+    memo: Dict[str,int] = {}
+    def depth(pid: str) -> int:
+        if pid in memo: return memo[pid]
+        ps = parents_of.get(pid, [])
+        if not ps:
+            memo[pid] = 0
+            return 0
+        d = 1 + max(depth(p) for p in ps)
+        memo[pid] = d
+        return d
 
-    level = {pid:0 for pid in roots}
-    q = deque(roots)
-    while q:
-        u = q.popleft()
-        for v in children_of.get(u, []):
-            nv = level[u] + 1
-            if v not in level or nv < level[v]:
-                level[v] = nv
-                q.append(v)
-    for pid in db.persons:
-        level.setdefault(pid, 0)
+    level = {pid: depth(pid) for pid in db.persons}
     return level, parents_of, children_of
-
-def union_id(a: str, b: str) -> str:
-    return f"u_{a}_{b}" if a < b else f"u_{b}_{a}"
-
 # ----------------- 法定繼承（配偶置頂；僅直系卑親屬代位） -----------------
 class InheritanceTW:
     def __init__(self, db: DB):
@@ -247,7 +246,7 @@ def build_graphviz(db: DB) -> Digraph:
     levels, parents_of, children_of = compute_levels_and_parents(db)
     dot = Digraph(engine="dot")
     # 增加 ranksep/nodesep，採用 ortho 以避免重疊，設定新手友善字型
-    dot.attr(rankdir="TB", splines="ortho", nodesep="1.0", ranksep="1.4", compound="true")
+    dot.attr(rankdir="TB", splines="ortho", nodesep="1.1", ranksep="1.5", compound="true")
     dot.attr("node", shape="box", style="rounded,filled", fillcolor="#E8F0FE", color="#1D4ED8", penwidth="1.6",
              fontname="Taipei Sans TC, Noto Sans CJK, Arial", fontsize="12")
     dot.attr("edge", color="#2F5E73", penwidth="2")
