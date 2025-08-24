@@ -337,7 +337,7 @@ def draw_tree():
                 s.node(n)
             # 用不可見邊固定水平相鄰順序；當只有兩位配偶時，會是 [配偶1, 當事人, 配偶2]
             for i in range(len(seq) - 1):
-                s.edge(seq[i], seq[i+1], style="invis", constraint="false")
+                s.edge(seq[i], seq[i+1], style="invis", weight="100", constraint="true", minlen="1")
     # 夫妻（婚姻節點）+ 子女
     # 我們為每一段婚姻建一個「小圓點」junction，孩子由此垂直連結
     # 新增 anchor：mid=夫妻中點、a=配偶A下方、b=配偶B下方
