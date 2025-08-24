@@ -4,7 +4,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Family Tree (clustered children)", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="Family Tree", page_icon="🌳", layout="wide")
 
 HTML = r"""
 <!DOCTYPE html>
@@ -114,9 +114,9 @@ HTML = r"""
   const COUPLE_GAP_MIN = NODE_W + 36;     // 配偶最小水平距離
   const LAYER_GAP_MIN  = NODE_W + 60;     // 同層人物最小水平距離（非孩子）
   const LAYER_TOLERANCE = 20;             // 判定同層 y 容差
-  const SIBLING_GAP = 36;                 // ★ 同一婚姻兄弟姊妹之間的距離
-  const CLUSTER_GAP = 56;                 // ★ 不同婚姻孩子群組之間的最小距離
-  const BUS_OFFSET_STEPS = [-12,-4,4,12,20]; // 不同婚姻的水平車道
+  const SIBLING_GAP = 36;                 // 同一婚姻兄弟姊妹間距（排「區塊」）
+  const CLUSTER_GAP = 56;                 // 不同婚姻孩子群組的最小距離
+  const BUS_OFFSET_STEPS = [-12,-4,4,12,20]; // 不同婚姻子女水平線的偏移候選（避免重疊）
   const CHILD_TOP_GAP = 18;               // 子女水平線至少高於 child 頂部
 
   /* 視圖狀態（viewBox 方式 pan/zoom） */
@@ -189,7 +189,7 @@ HTML = r"""
     });
   }
 
-  /* ELK 佈局（層距 32） */
+  /* ELK 佈局 */
   function buildElkGraph(){
     const nodes=[], edges=[];
     Object.values(doc.persons).forEach(p=>{
@@ -211,7 +211,7 @@ HTML = r"""
       layoutOptions:{
         "elk.algorithm":"layered",
         "elk.direction":"DOWN",
-        "elk.layered.spacing.nodeNodeBetweenLayers":"32",
+        "elk.layered.spacing.nodeNodeBetweenLayers":"32",  /* 層距縮半：32 */
         "elk.spacing.nodeNode":"46",
         "elk.edgeRouting":"ORTHOGONAL",
         "elk.layered.nodePlacement.bk.fixedAlignment":"BALANCED",
@@ -232,10 +232,10 @@ HTML = r"""
     return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
   }
 
-  /* —— 只針對「非孩子」做同層推開 —— */
+  /* 只針對「非孩子」做同層推開（避免把孩子推去別家） */
   function enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet){
     const items = (layout.children||[])
-      .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id))  // ★ 跳過第三代孩子，避免把孩子推去別家
+      .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id))
       .map(n=>{
         const nn = pickNode(layout, n.id, overrides) || n;
         return { id:n.id, x:nn.x, y:nn.y };
@@ -302,7 +302,7 @@ HTML = r"""
         }
       });
 
-      /* —— 先記錄每段婚姻的孩子們（群組） —— */
+      /* —— 每段婚姻的孩子（群組） —— */
       const unionKids = {};
       const childrenIdSet = new Set();
       Object.values(doc.unions).forEach(u=>{
@@ -310,43 +310,62 @@ HTML = r"""
         if(kids.length>0){ unionKids[u.id]=kids; kids.forEach(id=>childrenIdSet.add(id)); }
       });
 
-      /* —— 只對「非孩子」做同層推開 —— */
+      /* 只對非孩子做同層推開 */
       enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
 
-      /* —— 以父母婚點 midX 為中心，排兄弟姊妹；群組之間再推開 —— */
-      const clustersByLayer = {};  // { layerKey: [ {unionId, childIds[], rect:{x0,x1}, yKey } ] }
+      /* —— 以父母婚點為中心，排兄弟姊妹「區塊」（孩子+配偶） —— */
+      const clustersByLayer = {};  // { layerKey: [ {unionId, rect:{x0,x1}} ] }
       Object.entries(unionKids).forEach(([uid,kids])=>{
-        // 取父母兩人的位置，算出 midX
         const u = doc.unions[uid];
         const na = pickNode(layout, u.partners[0], overrides);
         const nb = pickNode(layout, u.partners[1], overrides);
         if(!na || !nb) return;
         const midX = (na.x + nb.x + NODE_W) / 2;
 
-        // 以 ELK 排出來的 x 由小到大（或使用現有順序），做兄弟姊妹水平排列
         const kidNodes = kids
           .map(id=>pickNode(layout, id, overrides))
           .filter(Boolean)
           .sort((a,b)=>a.x - b.x);
-
         if(kidNodes.length===0) return;
+
         const layerKey = Math.round(kidNodes[0].y / LAYER_TOLERANCE);
 
-        const width = kidNodes.length*NODE_W + (kidNodes.length-1)*SIBLING_GAP;
-        let startX = midX - width/2;
-
-        // 暫存 override（先不推開群組之間）
-        kidNodes.forEach((n,i)=>{
-          const x = startX + i*(NODE_W+SIBLING_GAP);
-          overrides[n.id] = Object.assign({}, overrides[n.id]||{}, { x });
+        // 把每個孩子視為「區塊」：若有配偶，區塊寬度 = child + couple-gap + mate
+        const blocks = kidNodes.map(k=>{
+          const myUnions = Object.values(doc.unions).filter(xx => (xx.partners||[]).includes(k.id));
+          const myMateUnion = myUnions[0];  // 簡化：取第一段婚姻（需要可自定策略）
+          let hasMate = false, mateId = null;
+          if (myMateUnion) {
+            const [pa,pb] = myMateUnion.partners;
+            mateId = (pa===k.id)? pb : pa;
+            hasMate = !!mateId && !!doc.persons[mateId];
+          }
+          const width = hasMate ? (NODE_W + COUPLE_GAP_MIN + NODE_W) : NODE_W;
+          return { kidId:k.id, mateId, hasMate, width, y: k.y };
         });
 
-        const x0 = startX, x1 = startX + width;
+        const totalWidth = blocks.reduce((s,b)=> s+b.width, 0) + (blocks.length-1)*SIBLING_GAP;
+        let startX = midX - totalWidth/2;
+
+        blocks.forEach(b=>{
+          const blockLeft = startX;
+          const childX = blockLeft;  // 孩子在左邊，配偶在右
+          overrides[b.kidId] = Object.assign({}, overrides[b.kidId]||{}, { x: childX });
+          if (b.hasMate) {
+            const mateX = childX + COUPLE_GAP_MIN + NODE_W;
+            // y 對齊：以子女 y 為準
+            overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: overrides[b.kidId]?.y ?? b.y });
+          }
+          startX += b.width + SIBLING_GAP;
+        });
+
+        const x0 = midX - totalWidth/2;
+        const x1 = x0 + totalWidth;
         if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
-        clustersByLayer[layerKey].push({ unionId: uid, childIds: kidNodes.map(n=>n.id), rect:{x0,x1} });
+        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1} });
       });
 
-      // —— 群組之間互推，維持最小距離 CLUSTER_GAP —— //
+      // —— 群組之間互推，維持最小距離 —— //
       Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
         list.sort((a,b)=>a.rect.x0 - b.rect.x0);
         let cursorRight = list[0].rect.x1;
@@ -354,10 +373,23 @@ HTML = r"""
           const wantLeft = cursorRight + CLUSTER_GAP;
           if(list[i].rect.x0 < wantLeft){
             const shift = wantLeft - list[i].rect.x0;
-            // 整個群組右移
-            list[i].childIds.forEach(cid=>{
-              const cur = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
-              overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: cur + shift });
+            // 整個群組右移：把群組內的孩子與其配偶一起位移
+            const kids = unionKids[list[i].unionId] || [];
+            kids.forEach(cid=>{
+              const curX = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
+              overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: curX + shift });
+              // 若孩子有配偶也一起移
+              const myUnions = Object.values(doc.unions).filter(xx => (xx.partners||[]).includes(cid));
+              const mateUnion = myUnions[0];
+              if (mateUnion) {
+                const [pa,pb] = mateUnion.partners;
+                const mateId = (pa===cid)? pb : pa;
+                if (mateId && doc.persons[mateId]) {
+                  const curMateX = overrides[mateId]?.x ?? pickNode(layout, mateId, overrides).x;
+                  const curMateY = overrides[mateId]?.y ?? pickNode(layout, mateId, overrides).y;
+                  overrides[mateId] = Object.assign({}, overrides[mateId]||{}, { x: curMateX + shift, y: curMateY });
+                }
+              }
             });
             list[i].rect.x0 += shift; list[i].rect.x1 += shift;
           }
