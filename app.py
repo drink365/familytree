@@ -319,17 +319,28 @@ def draw_tree():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         anchor = m.get("anchor", "mid")
         jn = f"J_{mid}"
-        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
+        # 中點節點：預設不可見
+        dot.node(jn, "", shape="point", width="0.01", style="invis")
         style = "dashed" if divorced else "solid"
+        # spouses side-by-side
+        with dot.subgraph() as s:
+            s.attr(rank="same")
+            s.node(a)
+            s.node(b)
         if anchor == "mid":
-            # 夫妻中點為接點
+            # 將 jn 與夫妻同一水平，畫成 A–jn–B 的橫線；jn 不顯示，看起來像一條直線
+            with dot.subgraph() as s:
+                s.attr(rank="same")
+                s.node(jn)
             dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
             dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR)
         elif anchor == "a":
-            # 接點在配偶A下方：上方仍畫A-B橫線
+            # 先畫夫妻橫線，再由 A 垂直往下到接點
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
             dot.edge(a, jn, dir="none", color=BORDER_COLOR)
         elif anchor == "b":
+            dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+            dot.edge(b, jn, dir="none", color=BORDER_COLOR)
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
             dot.edge(b, jn, dir="none", color=BORDER_COLOR)
 
