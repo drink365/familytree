@@ -38,7 +38,7 @@ def ensure_person(name, sex="男", alive=True, note=""):
     d["persons"][pid] = {"name": name, "sex": sex, "alive": alive, "note": note}
     return pid
 
-def add_marriage(a, b, divorced=False):
+def add_marriage(a, b, divorced=False, anchor='mid'):
     """Return mid if created; if same pair exists, return that mid."""
     d = st.session_state.data
     # check exists
@@ -46,9 +46,10 @@ def add_marriage(a, b, divorced=False):
         if {m["a"], m["b"]} == {a, b}:
             # update divorced flag if different
             m["divorced"] = bool(divorced)
+            m["anchor"] = m.get("anchor", anchor)
             return mid
     mid = f"M{next_id()}"
-    d["marriages"][mid] = {"a": a, "b": b, "divorced": bool(divorced)}
+    d["marriages"][mid] = {"a": a, "b": b, "divorced": bool(divorced), "anchor": anchor}
     return mid
 
 def add_child(mid, child):
@@ -316,12 +317,22 @@ def draw_tree():
     # 我們為每一段婚姻建一個「小圓點」junction，夫妻連到 dot，再由 dot 垂直連到小孩
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
+        anchor = m.get("anchor", "mid")
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
         style = "dashed" if divorced else "solid"
-        # 以「婚姻接點」作為夫妻連線中點，讓孩子能從中點往下
-        dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
-        dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR)
+        if anchor == "mid":
+            # 夫妻中點為接點
+            dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
+            dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR)
+        elif anchor == "a":
+            # 接點在配偶A下方：上方仍畫A-B橫線
+            dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+            dot.edge(a, jn, dir="none", color=BORDER_COLOR)
+        elif anchor == "b":
+            dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+            dot.edge(b, jn, dir="none", color=BORDER_COLOR)
+
 
         # 讓夫妻併排
         with dot.subgraph() as s:
@@ -430,13 +441,15 @@ def page_relations():
     # -- 建立婚姻
     st.markdown("### 建立婚姻（現任 / 離婚）")
     with st.form("form_marriage"):
-        colA, colB, colC = st.columns([2,2,1])
+        colA, colB, colC, colD = st.columns([2,2,1,2])
         with colA:
             a = pick_from("配偶 A", list_person_options(include_empty=True), key="marry_a")
         with colB:
             b = pick_from("配偶 B", list_person_options(include_empty=True), key="marry_b")
         with colC:
             divorced = st.checkbox("此婚姻為離婚/前配偶", value=False)
+        with colD:
+            anchor = st.radio("孩子連接點", ["夫妻中點","配偶A下方","配偶B下方"], index=0, horizontal=True)
         ok = st.form_submit_button("建立婚姻")
         if ok:
             if not a or not b:
@@ -444,7 +457,8 @@ def page_relations():
             elif a == b:
                 st.warning("兩個欄位不可為同一人。")
             else:
-                add_marriage(a, b, divorced)
+                anchor_key = {'夫妻中點':'mid','配偶A下方':'a','配偶B下方':'b'}[anchor]
+                add_marriage(a, b, divorced, anchor_key)
                 st.success("婚姻已建立/更新")
                 st.rerun()
 
