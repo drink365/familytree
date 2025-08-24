@@ -109,14 +109,14 @@ HTML = r"""
 (function(){
   const elk = new ELK();
 
-  /* 尺寸與間距 */
+  /* 尺寸與間距（調整） */
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 36;     // 配偶最小水平距離
-  const LAYER_GAP_MIN  = NODE_W + 60;     // 同層人物最小水平距離（非孩子）
-  const LAYER_TOLERANCE = 20;             // 判定同層 y 容差
-  const SIBLING_GAP = 36;                 // 同一婚姻兄弟姊妹間距（排「區塊」）
-  const CLUSTER_GAP = 56;                 // 不同婚姻孩子群組的最小距離
-  const BUS_OFFSET_STEPS = [-12,-4,4,12,20];
+  const COUPLE_GAP_MIN = NODE_W + 18;     // ✅ 夫妻最小距離：縮小
+  const LAYER_GAP_MIN  = NODE_W + 60;     // 非子女同層最小距離
+  const LAYER_TOLERANCE = 20;
+  const SIBLING_GAP = 36;                 // 兄弟姊妹基礎間距（會動態加大）
+  const CLUSTER_GAP = 56;                 // 不同婚姻的子女群組間距
+  const BUS_OFFSET_STEPS = [-14,-6,6,14,22]; // bus 高度輪替
   const CHILD_TOP_GAP = 18;
 
   /* 視圖狀態 */
@@ -189,6 +189,7 @@ HTML = r"""
     });
   }
 
+  /* ELK 佈局 */
   function buildElkGraph(){
     const nodes=[], edges=[];
     Object.values(doc.persons).forEach(p=>{
@@ -231,6 +232,7 @@ HTML = r"""
     return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
   }
 
+  /* 同層非子女推開 */
   function enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet){
     const items = (layout.children||[])
       .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id))
@@ -262,9 +264,6 @@ HTML = r"""
       }
     });
   }
-
-  function hashInt(s){ let h=0; for(let i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; } return h>>>0; }
-  function busYOffset(unionId){ const h = hashInt(unionId); return BUS_OFFSET_STEPS[h % BUS_OFFSET_STEPS.length]; }
 
   function render(autoFit=false){
     syncSelectors();
@@ -299,6 +298,7 @@ HTML = r"""
         }
       });
 
+      /* 子女資料（群組） */
       const unionKids = {};
       const childrenIdSet = new Set();
       Object.values(doc.unions).forEach(u=>{
@@ -308,14 +308,14 @@ HTML = r"""
 
       enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
 
-      /* 以父母婚點為中心，排兄弟姊妹「區塊」（孩子+配偶） */
+      /* —— 以父母婚點為中心，排兄弟姊妹「區塊」（孩子+配偶） —— */
       const clustersByLayer = {};
       Object.entries(unionKids).forEach(([uid,kids])=>{
         const u = doc.unions[uid];
         const na = pickNode(layout, u.partners[0], overrides);
         const nb = pickNode(layout, u.partners[1], overrides);
         if(!na || !nb) return;
-        const midX = (na.x + nb.x + NODE_W) / 2;   // ★ anchorX
+        const midX = (na.x + nb.x + NODE_W) / 2;   // anchor
 
         const kidNodes = kids
           .map(id=>pickNode(layout, id, overrides))
@@ -328,17 +328,22 @@ HTML = r"""
         const blocks = kidNodes.map(k=>{
           const myUnions = Object.values(doc.unions).filter(xx => (xx.partners||[]).includes(k.id));
           const myMateUnion = myUnions[0];
-          let hasMate = false, mateId = null;
+          let hasMate = false, mateId = null, hasGrandKids = false;
           if (myMateUnion) {
             const [pa,pb] = myMateUnion.partners;
             mateId = (pa===k.id)? pb : pa;
             hasMate = !!mateId && !!doc.persons[mateId];
+            // 是否有第三代（讓同代孩子間距可加大）
+            hasGrandKids = doc.children.some(cl => cl.unionId === myMateUnion.id);
           }
           const width = hasMate ? (NODE_W + COUPLE_GAP_MIN + NODE_W) : NODE_W;
-          return { kidId:k.id, mateId, hasMate, width, y: k.y };
+          return { kidId:k.id, mateId, hasMate, hasGrandKids, width, y: k.y };
         });
 
-        const totalWidth = blocks.reduce((s,b)=> s+b.width, 0) + (blocks.length-1)*SIBLING_GAP;
+        // ✅ 動態兄弟姊妹間距：孩子越多，越加寬（每多一個 +8）
+        const localGap = SIBLING_GAP + Math.max(0, blocks.length - 3) * 8;
+
+        const totalWidth = blocks.reduce((s,b)=> s+b.width, 0) + (blocks.length-1)*localGap;
         let startX = midX - totalWidth/2;
 
         blocks.forEach(b=>{
@@ -348,18 +353,18 @@ HTML = r"""
             const mateX = childX + COUPLE_GAP_MIN + NODE_W;
             overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: overrides[b.kidId]?.y ?? b.y });
           }
-          startX += b.width + SIBLING_GAP;
+          startX += b.width + localGap;
         });
 
         const x0 = midX - totalWidth/2;
         const x1 = x0 + totalWidth;
         if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
-        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX }); // ★ 保留 anchorX
+        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX });
       });
 
-      /* 群組互推：用 anchorX 排序，避免因群組太寬打亂左右順序 */
+      /* 群組互推（用 anchor 排序） */
       Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
-        list.sort((a,b)=>a.anchorX - b.anchorX); // ★ 改用 anchorX
+        list.sort((a,b)=>a.anchorX - b.anchorX);
         let cursorRight = list[0].rect.x1;
         for(let i=1;i<list.length;i++){
           const wantLeft = cursorRight + CLUSTER_GAP;
@@ -369,7 +374,7 @@ HTML = r"""
             kids.forEach(cid=>{
               const curX = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
               overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: curX + shift });
-              // 若孩子有配偶也一起移
+              // 連配偶一起移
               const myUnions = Object.values(doc.unions).filter(xx => (xx.partners||[]).includes(cid));
               const mateUnion = myUnions[0];
               if (mateUnion) {
@@ -382,8 +387,7 @@ HTML = r"""
                 }
               }
             });
-            list[i].rect.x0 += shift; list[i].rect.x1 += shift;
-            list[i].anchorX += shift; // ★ anchorX 也跟著移
+            list[i].rect.x0 += shift; list[i].rect.x1 += shift; list[i].anchorX += shift;
           }
           cursorRight = list[i].rect.x1;
         }
@@ -407,6 +411,15 @@ HTML = r"""
       content = {w, h};
       if(autoFit) vb = computeFitViewBox(w, h);
 
+      /* ➜ 為每層的婚姻分配「不重複的 bus 高度」 */
+      const laneOffsetByUnion = {};
+      Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
+        list.sort((a,b)=>a.anchorX - b.anchorX);
+        list.forEach((it,i)=>{
+          laneOffsetByUnion[it.unionId] = BUS_OFFSET_STEPS[i % BUS_OFFSET_STEPS.length];
+        });
+      });
+
       /* SVG */
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
       svg.setAttribute("width", "100%");
@@ -418,7 +431,7 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
-      /* 婚姻線 + 中點 + 子女（不同婚姻車道） */
+      /* 婚姻線 + 中點 + 子女連線（使用 laneOffsetByUnion） */
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = pickNode(layout, aid, overrides);
@@ -453,7 +466,7 @@ HTML = r"""
 
         const kids = (unionKids[u.id]||[]);
         if(kids.length>0){
-          const offBase = busYOffset(u.id);
+          const offBase = laneOffsetByUnion[u.id] ?? 0;   // ✅ 同層不同婚姻給不同高度
           kids.forEach(cid=>{
             const nc = pickNode(layout, cid, overrides);
             if(!nc) return;
@@ -542,6 +555,7 @@ HTML = r"""
     updateSelectionInfo();
   }
 
+  /* 右側編輯 */
   function updateSelectionInfo(){
     const el = document.getElementById("selInfo");
     const btnDead = document.getElementById("btnToggleDead");
