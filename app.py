@@ -16,7 +16,11 @@ HTML = r"""
 <script src="https://unpkg.com/elkjs@0.8.2/lib/elk.bundled.js"></script>
 <style>
   :root{
-    --bg:#0b3d4f; --fg:#ffffff; --border:#114b5f; --line:#0f3c4d;
+    --bg:#0b3d4f;        /* 正常節點底色 */
+    --bg-dead:#6b7280;   /* 身故節點底色（灰） */
+    --fg:#ffffff;
+    --border:#114b5f;
+    --line:#0f3c4d;
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;background:#f8fafc}
@@ -25,25 +29,32 @@ HTML = r"""
   .btn.sec{background:#334155}
   .btn.warn{background:#b91c1c}
   .btn.ok{background:#0f766e}
+  .btn.muted{background:#6b7280}
   .pane{display:grid;grid-template-columns:2fr 1fr;gap:1rem;padding:1rem}
   .card{background:#fff;border:1px solid #e5e7eb;border-radius:1rem;padding:1rem}
-  .row{display:flex;gap:.5rem;align-items:center;margin:.25rem 0}
+  .row{display:flex;gap:.5rem;align-items:center;margin:.25rem 0;flex-wrap:wrap}
   select,input[type=text]{border:1px solid #cbd5e1;border-radius:.75rem;padding:.45rem .6rem}
   .canvas{height:720px;overflow:hidden;border:1px solid #e5e7eb;border-radius:1rem;background:#fff;position:relative}
   .viewport{width:100%;height:100%;overflow:hidden}
   .hint{color:#64748b;font-size:.9rem}
   .legend{display:flex;gap:.75rem;align-items:center;color:#475569}
   .lgBox{width:18px;height:18px;border-radius:.5rem;background:var(--bg);border:2px solid var(--border)}
+  .lgBox.dead{background:var(--bg-dead);border-color:#475569}
   svg text{user-select:none}
   .node{filter:drop-shadow(0 1px 0.5px rgba(0,0,0,.15))}
   .zoombar{display:flex;gap:.5rem;margin-left:auto}
+  .stack{display:flex;gap:.5rem;flex-wrap:wrap}
 </style>
 </head>
 <body>
   <div class="toolbar">
     <button class="btn ok" id="btnDemo">載入示例</button>
     <button class="btn sec" id="btnClear">清空</button>
-    <div class="legend"><div class="lgBox"></div><span>離婚虛線、無子女不往下連、婚姻點在水平線中點、配偶同層緊鄰</span></div>
+    <div class="legend" style="gap:1.25rem">
+      <span class="legend"><div class="lgBox"></div>人物節點</span>
+      <span class="legend"><div class="lgBox dead"></div>身故節點（名稱加「（殁）」）</span>
+      <span>離婚：婚線為虛線／有子女仍保留</span>
+    </div>
     <div class="zoombar">
       <button class="btn" id="zoomOut">－</button>
       <button class="btn" id="zoomIn">＋</button>
@@ -86,8 +97,10 @@ HTML = r"""
       <hr style="margin:1rem 0">
       <h3 style="margin:0 0 .5rem">選取與編輯</h3>
       <div id="selInfo" class="hint">尚未選取節點。</div>
-      <div class="row">
-        <button class="btn warn" id="btnDelete">刪除選取</button>
+      <div class="stack" id="actionBtns" style="margin-top:.25rem">
+        <button class="btn muted" id="btnToggleDead" style="display:none"></button>
+        <button class="btn sec" id="btnToggleDivorce" style="display:none"></button>
+        <button class="btn warn" id="btnDelete" style="display:none">刪除選取</button>
       </div>
     </div>
   </div>
@@ -99,12 +112,12 @@ HTML = r"""
   // 外觀與間距
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
   const COUPLE_GAP_MIN = NODE_W + 36;  // 配偶最小水平距離
-  const LAYER_GAP_MIN  = NODE_W + 60;  // 「同層人物」之間的最小水平距離
-  const LAYER_TOLERANCE = 20;          // 判定同一層的 y 容差（像素）
+  const LAYER_GAP_MIN  = NODE_W + 60;  // 同層人物最小水平距離
+  const LAYER_TOLERANCE = 20;          // 判定同層的 y 容差（像素）
 
   // 縮放狀態（用 viewBox 實作 pan/zoom）
-  let vb = {x:0,y:0,w:1000,h:600};  // 目前 viewBox
-  let content = {w:1000,h:600};     // 內容大小（依最終座標計算）
+  let vb = {x:0,y:0,w:1000,h:600};
+  let content = {w:1000,h:600};
   let isPanning = false, panStart = {x:0,y:0}, vbStart = {x:0,y:0};
 
   // 資料
@@ -116,7 +129,7 @@ HTML = r"""
   function demo(){
     const p={}, u={}, list=[
       "陳一郎","陳前妻","陳妻","陳大","陳二","陳三","王子","王子妻","王孫","陳二嫂"
-    ].map(n=>({id:uid("P"), name:n}));
+    ].map(n=>({id:uid("P"), name:n, deceased:false}));
     list.forEach(pp=>p[pp.id]=pp);
     const id = n=>list.find(x=>x.name===n).id;
     const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
@@ -133,7 +146,7 @@ HTML = r"""
     ];
     doc = { persons:p, unions:u, children };
     selected = {type:null,id:null};
-    render(true); // 初次：自動 fit
+    render(true);
   }
 
   function clearAll(){
@@ -150,18 +163,19 @@ HTML = r"""
     const selU = document.getElementById("selUnion");
     [selA,selB,selU].forEach(s=>s.innerHTML="");
     persons.forEach(p=>{
-      const oa=document.createElement("option"); oa.value=p.id; oa.textContent=p.name; selA.appendChild(oa);
-      const ob=document.createElement("option"); ob.value=p.id; ob.textContent=p.name; selB.appendChild(ob);
+      const oa=document.createElement("option"); oa.value=p.id; oa.textContent=p.name+(p.deceased?"（殁）":""); selA.appendChild(oa);
+      const ob=document.createElement("option"); ob.value=p.id; ob.textContent=p.name+(p.deceased?"（殁）":""); selB.appendChild(ob);
     });
     unions.forEach(u=>{
       const [a,b]=u.partners;
       const o=document.createElement("option");
-      o.value=u.id; o.textContent=(doc.persons[a]?.name||"?")+" ↔ "+(doc.persons[b]?.name||"?");
+      const tag = u.status==="divorced" ? "（離）" : "";
+      o.value=u.id; o.textContent=(doc.persons[a]?.name||"?")+" ↔ "+(doc.persons[b]?.name||"?")+tag;
       selU.appendChild(o);
     });
   }
 
-  // 建立 ELK 佈局圖（a→union、b→union + a→b INFLUENCE）
+  // 建立 ELK 佈局圖（垂直距離改半：32）
   function buildElkGraph(){
     const nodes=[], edges=[];
     Object.values(doc.persons).forEach(p=>{
@@ -183,7 +197,7 @@ HTML = r"""
       layoutOptions:{
         "elk.algorithm":"layered",
         "elk.direction":"DOWN",
-        "elk.layered.spacing.nodeNodeBetweenLayers":"64",
+        "elk.layered.spacing.nodeNodeBetweenLayers":"32",   /* << 垂直距離縮小為一半 */
         "elk.spacing.nodeNode":"46",
         "elk.edgeRouting":"ORTHOGONAL",
         "elk.layered.nodePlacement.bk.fixedAlignment":"BALANCED",
@@ -193,7 +207,6 @@ HTML = r"""
     };
   }
 
-  // 以覆寫位置取節點
   function pickNode(layout, id, overrides){
     const n = (layout.children||[]).find(x=>x.id===id);
     if(!n) return null;
@@ -201,14 +214,12 @@ HTML = r"""
     return n;
   }
 
-  // 計算自動 fit 的 viewBox
   function computeFitViewBox(w,h, padding=60){
     return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
   }
 
-  // 依層做最小水平距離修正
+  // 同層最小水平距離
   function enforceLayerMinGap(layout, overrides){
-    // 先收集所有人物節點的最終 (x,y)
     const items = (layout.children||[])
       .filter(n=>!doc.unions[n.id])
       .map(n=>{
@@ -216,7 +227,6 @@ HTML = r"""
         return { id:n.id, x:nn.x, y:nn.y };
       });
 
-    // 分層（y 在容差內視為同層）
     const layers = {};
     items.forEach(it=>{
       const key = Math.round(it.y / LAYER_TOLERANCE);
@@ -224,11 +234,10 @@ HTML = r"""
       layers[key].push(it);
     });
 
-    // 每層由左到右，確保相鄰間距 >= LAYER_GAP_MIN
     Object.values(layers).forEach(arr=>{
       arr.sort((a,b)=>a.x-b.x);
       if(arr.length===0) return;
-      let cursorRight = arr[0].x + NODE_W; // 第一個不用動
+      let cursorRight = arr[0].x + NODE_W;
       for(let i=1;i<arr.length;i++){
         const needLeft = cursorRight + (LAYER_GAP_MIN - NODE_W);
         if(arr[i].x < needLeft){
@@ -248,20 +257,19 @@ HTML = r"""
     host.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
 
     elk.layout(buildElkGraph()).then(layout=>{
-      // 覆寫：配偶同層 ＋ 配偶最小距離
       const overrides = {};
+
+      // 配偶對齊 & 最小距離
       Object.values(doc.unions).forEach(u=>{
         const [a,b]=u.partners;
         const na = (layout.children||[]).find(n=>n.id===a);
         const nb = (layout.children||[]).find(n=>n.id===b);
         if(!na||!nb) return;
 
-        // y 對齊（較上層）
         const yAlign = Math.min(na.y, nb.y);
         overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
         overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
 
-        // 最小水平間距（保證配偶不重疊）
         const left  = na.x <= nb.x ? a : b;
         const right = na.x <= nb.x ? b : a;
         const nL = na.x <= nb.x ? na : nb;
@@ -276,13 +284,13 @@ HTML = r"""
         }
       });
 
-      // 新增：同層之間的最小距離
+      // 同層距離
       enforceLayerMinGap(layout, overrides);
 
-      // === 重新計算「最終實際邊界」(考慮 overrides) ===
+      // 重新計算邊界
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       (layout.children||[]).forEach(n=>{
-        if(doc.unions[n.id]) return; // 只看人物節點就夠
+        if(doc.unions[n.id]) return;
         const nn = pickNode(layout, n.id, overrides);
         if(!nn) return;
         minX = Math.min(minX, nn.x);
@@ -290,14 +298,14 @@ HTML = r"""
         maxX = Math.max(maxX, nn.x + NODE_W);
         maxY = Math.max(maxY, nn.y + NODE_H);
       });
-      if(!isFinite(minX)){ minX = 0; minY = 0; maxX = (layout.width||1000); maxY=(layout.height||600); }
+      if(!isFinite(minX)){ minX=0; minY=0; maxX=(layout.width||1000); maxY=(layout.height||600); }
 
       const w = Math.ceil((maxX - minX) + MARGIN*2);
       const h = Math.ceil((maxY - minY) + MARGIN*2);
       content = {w, h};
       if(autoFit) vb = computeFitViewBox(w, h);
 
-      // --- 建立 SVG（用 viewBox 控制 pan/zoom）---
+      // SVG
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
       svg.setAttribute("width", "100%");
       svg.setAttribute("height", "100%");
@@ -305,7 +313,6 @@ HTML = r"""
       svg.style.background = "#fff";
 
       const root = document.createElementNS("http://www.w3.org/2000/svg","g");
-      // 把整張圖向左上平移，抵銷 minX/minY，確保全部在正座標內
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
@@ -316,7 +323,7 @@ HTML = r"""
         const nb = pickNode(layout, bid, overrides);
         if(!na||!nb) return;
 
-        const y = na.y + NODE_H/2; // 已對齊
+        const y = na.y + NODE_H/2;
         const xLeft  = Math.min(na.x+NODE_W, nb.x);
         const xRight = Math.max(na.x+NODE_W, nb.x);
         const midX   = (na.x + nb.x + NODE_W) / 2;
@@ -358,35 +365,33 @@ HTML = r"""
         }
       });
 
-      // 人物節點（覆寫後位置）
+      // 人物節點（身故 → 灰色 + 名稱加（殁））
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
         const nn = pickNode(layout, n.id, overrides);
+        const person = doc.persons[n.id] || {};
         const g = document.createElementNS("http://www.w3.org/2000/svg","g");
         g.setAttribute("transform", `translate(${nn.x},${nn.y})`);
         const r=document.createElementNS("http://www.w3.org/2000/svg","rect");
         r.setAttribute("rx","16"); r.setAttribute("width",NODE_W); r.setAttribute("height",NODE_H);
-        r.setAttribute("fill","var(--bg)"); r.setAttribute("stroke","var(--border)"); r.setAttribute("stroke-width","2");
+        r.setAttribute("fill", person.deceased ? "var(--bg-dead)" : "var(--bg)");
+        r.setAttribute("stroke", person.deceased ? "#475569" : "var(--border)");
+        r.setAttribute("stroke-width","2");
         r.classList.add("node");
         r.addEventListener("click",()=>{ selected={type:"person", id:n.id}; updateSelectionInfo(); });
         const t=document.createElementNS("http://www.w3.org/2000/svg","text");
         t.setAttribute("x", NODE_W/2); t.setAttribute("y", NODE_H/2+5);
         t.setAttribute("text-anchor","middle"); t.setAttribute("fill","var(--fg)"); t.setAttribute("font-size","14");
-        t.textContent = (doc.persons[n.id]||{}).name || "?";
+        t.textContent = (person.name || "?") + (person.deceased ? "（殁）" : "");
         g.appendChild(r); g.appendChild(t); root.appendChild(g);
       });
 
-      // 掛上到容器
       host.innerHTML=""; host.appendChild(svg);
 
-      // === Pan / Zoom 行為 ===
+      // === Pan / Zoom ===
       function applyViewBox(){ svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); }
-
-      // 拖曳平移
       svg.addEventListener("mousedown", (e)=>{
-        isPanning = true;
-        panStart = {x:e.clientX, y:e.clientY};
-        vbStart = {x:vb.x, y:vb.y, w:vb.w, h:vb.h};
+        isPanning = true; panStart = {x:e.clientX, y:e.clientY}; vbStart = {x:vb.x, y:vb.y, w:vb.w, h:vb.h};
       });
       window.addEventListener("mousemove", (e)=>{
         if(!isPanning) return;
@@ -395,14 +400,12 @@ HTML = r"""
         vb.x = vbStart.x - dx; vb.y = vbStart.y - dy; applyViewBox();
       });
       window.addEventListener("mouseup", ()=>{ isPanning=false; });
-
-      // 滾輪縮放（以指標為中心）
       svg.addEventListener("wheel", (e)=>{
         e.preventDefault();
         const scale = (e.deltaY>0)? 1.1 : 0.9;
         const rect = svg.getBoundingClientRect();
-        const px = (e.clientX - rect.left) / rect.width;   // 0..1
-        const py = (e.clientY - rect.top)  / rect.height;  // 0..1
+        const px = (e.clientX - rect.left) / rect.width;
+        const py = (e.clientY - rect.top)  / rect.height;
         const newW = vb.w * scale, newH = vb.h * scale;
         vb.x = vb.x + vb.w*px - newW*px;
         vb.y = vb.y + vb.h*py - newH*py;
@@ -410,13 +413,11 @@ HTML = r"""
         applyViewBox();
       }, {passive:false});
 
-      // 工具列按鈕
       document.getElementById("zoomIn").onclick = ()=>{ vb.w*=0.9; vb.h*=0.9; applyViewBox(); };
       document.getElementById("zoomOut").onclick= ()=>{ vb.w*=1.1; vb.h*=1.1; applyViewBox(); };
       document.getElementById("zoomFit").onclick= ()=>{ vb = computeFitViewBox(content.w, content.h); applyViewBox(); };
       document.getElementById("zoom100").onclick= ()=>{ vb = {x:0,y:0,w:content.w,h:content.h}; applyViewBox(); };
 
-      // 下載 SVG（以內容原尺寸輸出）
       document.getElementById("btnSVG").onclick = ()=>{
         const svgOut = svg.cloneNode(true);
         svgOut.setAttribute("viewBox", `0 0 ${content.w} ${content.h}`);
@@ -433,26 +434,63 @@ HTML = r"""
     updateSelectionInfo();
   }
 
+  // ——— 編輯區（依選取顯示按鈕：身故 / 離婚 / 刪除） ———
   function updateSelectionInfo(){
     const el = document.getElementById("selInfo");
+    const btnDead = document.getElementById("btnToggleDead");
+    const btnDiv  = document.getElementById("btnToggleDivorce");
+    const btnDel  = document.getElementById("btnDelete");
+
+    btnDead.style.display = "none";
+    btnDiv.style.display  = "none";
+    btnDel.style.display  = "none";
+
     if(!selected.type){ el.textContent="尚未選取節點。"; return; }
+
     if(selected.type==="person"){
       const p = doc.persons[selected.id] || {};
-      el.textContent = "選取人物：" + (p.name || "?") + "（ID: "+selected.id+"）";
+      el.textContent = "選取人物：" + (p.name || "?") + (p.deceased?"（殁）":"") + "（ID: "+selected.id+"）";
+      btnDead.style.display = "inline-block";
+      btnDead.textContent = p.deceased ? "取消身故" : "標記身故";
+      btnDead.onclick = ()=>{ p.deceased = !p.deceased; render(); };
+      btnDel.style.display = "inline-block";
+      btnDel.onclick = ()=>{
+        const pid = selected.id;
+        delete doc.persons[pid];
+        // 保留婚姻資料但會在渲染時無效；清理掉含此人的 union 與 children
+        const keptUnions = {};
+        Object.values(doc.unions).forEach(u=>{ if(u.partners.indexOf(pid)===-1) keptUnions[u.id]=u; });
+        doc.unions = keptUnions;
+        doc.children = doc.children.filter(cl => cl.childId!==pid && !!doc.unions[cl.unionId]);
+        selected={type:null,id:null}; render();
+      };
     }else{
       const u = doc.unions[selected.id] || {};
-      const [a,b] = u.partners||[]; 
-      el.textContent = "選取婚姻：" + (doc.persons[a]?.name||"?") + " ↔ " + (doc.persons[b]?.name||"?") + "（ID: "+selected.id+"）";
+      const [a,b] = u.partners||[];
+      el.textContent = "選取婚姻：" + (doc.persons[a]?.name||"?") + " ↔ " + (doc.persons[b]?.name||"?") +
+                       "（狀態：" + (u.status==="divorced"?"離婚":"婚姻") + "）";
+      btnDiv.style.display = "inline-block";
+      btnDiv.textContent = (u.status==="divorced") ? "恢復婚姻" : "設為離婚";
+      btnDiv.onclick = ()=>{ u.status = (u.status==="divorced") ? "married" : "divorced"; render(); };
+      btnDel.style.display = "inline-block";
+      btnDel.onclick = ()=>{
+        // 刪除婚姻：不刪配偶任何一方；子女連結同時一併移除
+        const uid_ = selected.id;
+        delete doc.unions[uid_];
+        doc.children = doc.children.filter(cl => cl.unionId!==uid_);
+        selected={type:null,id:null}; render();
+      };
     }
   }
 
-  // 事件：資料操作
+  // ——— 事件（建立資料） ———
   document.getElementById("btnDemo").addEventListener("click", ()=>demo());
   document.getElementById("btnClear").addEventListener("click", clearAll);
 
   document.getElementById("btnAddPerson").addEventListener("click", ()=>{
     const name = document.getElementById("namePerson").value.trim();
-    const id = uid("P"); doc.persons[id]={id, name: name || ("新成員 " + (Object.keys(doc.persons).length+1))};
+    const id = uid("P");
+    doc.persons[id]={id, name: name || ("新成員 " + (Object.keys(doc.persons).length+1)), deceased:false};
     document.getElementById("namePerson").value=""; render();
   });
 
@@ -466,12 +504,12 @@ HTML = r"""
   document.getElementById("btnAddChild").addEventListener("click", ()=>{
     const mid = document.getElementById("selUnion").value; if(!mid) return;
     const name = document.getElementById("nameChild").value.trim();
-    const id = uid("P"); doc.persons[id]={id, name: name || ("新子女 " + (doc.children.length+1))};
+    const id = uid("P"); doc.persons[id]={id, name: name || ("新子女 " + (doc.children.length+1)), deceased:false};
     doc.children.push({unionId: mid, childId: id});
     document.getElementById("nameChild").value=""; render();
   });
 
-  render(true); // 初始渲染：置中顯示
+  render(true);
 })();
 </script>
 </body>
