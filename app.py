@@ -54,7 +54,7 @@ HTML = r"""
     <div class="card">
       <div class="canvas" id="canvas"></div>
       <div class="hint" style="margin-top:.5rem">
-        規則：離婚顯示為虛線；無子女的婚姻不往下連；婚姻點在水平線中點；配偶緊鄰同層。
+        規則：離婚顯示為虛線；無子女的婚姻不往下連；婚姻點在水平線中點；配偶**強制同一層**且緊鄰。
       </div>
     </div>
 
@@ -99,14 +99,15 @@ HTML = r"""
 
   function demo(){
     const p={}, u={}, list=[
-      "陳一郎","陳前妻","陳妻","陳大","陳二","陳三","王子","王子妻","王孫"
+      "陳一郎","陳前妻","陳妻","陳大","陳二","陳三","王子","王子妻","王孫","陳二嫂"
     ].map(n=>({id:uid("P"), name:n}));
     list.forEach(pp=>p[pp.id]=pp);
     const id = n=>list.find(x=>x.name===n).id;
     const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
     const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")], status:"married"};
     const m3={id:uid("U"), partners:[id("王子"),id("王子妻")], status:"married"};
-    u[m1.id]=m1; u[m2.id]=m2; u[m3.id]=m3;
+    const m4={id:uid("U"), partners:[id("陳二"),id("陳二嫂")], status:"married"};
+    u[m1.id]=m1; u[m2.id]=m2; u[m3.id]=m3; u[m4.id]=m4;
     const children=[
       {unionId:m1.id, childId:id("王子")},
       {unionId:m2.id, childId:id("陳大")},
@@ -161,7 +162,6 @@ HTML = r"""
       const [a,b]=u.partners;
       edges.push({ id:uid("E"), sources:[a], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
       edges.push({ id:uid("E"), sources:[b], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
-      // 隱形排序邊：偏好 b 在 a 右側、貼近 a
       edges.push({ id:uid("E"), sources:[a], targets:[b],
                    layoutOptions:{ "elk.priority":"1000", "elk.edge.type":"INFLUENCE" }});
     });
@@ -185,12 +185,33 @@ HTML = r"""
     };
   }
 
+  // 取得節點（允許覆寫位置）
+  function pickNode(layout, id, overrides){
+    const n = (layout.children||[]).find(x=>x.id===id);
+    if(!n) return null;
+    if(overrides && overrides[id]) return Object.assign({}, n, overrides[id]);
+    return n;
+  }
+
   function render(){
     syncSelectors();
     const container = document.getElementById("canvas");
     container.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
 
     elk.layout(buildElkGraph()).then(layout=>{
+      // --- 先做「配偶同層」的顯示層覆寫（不改佈局，只改渲染） ---
+      const overrides = {};
+      Object.values(doc.unions).forEach(u=>{
+        const [a,b]=u.partners;
+        const na = (layout.children||[]).find(n=>n.id===a);
+        const nb = (layout.children||[]).find(n=>n.id===b);
+        if(!na||!nb) return;
+        // 取較小的 y（上層），兩人都顯示在同一高度
+        const yAlign = Math.min(na.y, nb.y);
+        if(na.y !== yAlign) overrides[a] = { y: yAlign };
+        if(nb.y !== yAlign) overrides[b] = { y: yAlign };
+      });
+
       const w = (layout.width||0) + MARGIN*2;
       const h = (layout.height||0) + MARGIN*2;
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
@@ -202,15 +223,14 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN},${MARGIN})`);
       svg.appendChild(root);
 
-      // 婚姻水平線 + 中點（離婚虛線；無子女不往下）
+      // 婚姻水平線 + 中點（離婚虛線；有子女才往下）
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
-        const na = (layout.children||[]).find(n=>n.id===aid);
-        const nb = (layout.children||[]).find(n=>n.id===bid);
+        const na = pickNode(layout, aid, overrides);
+        const nb = pickNode(layout, bid, overrides);
         if(!na||!nb) return;
 
-        const ya = na.y + NODE_H/2, yb = nb.y + NODE_H/2;
-        const y = (ya + yb) / 2;
+        const y = na.y + NODE_H/2; // 已經對齊，拿任一即可
         const xLeft  = Math.min(na.x+NODE_W, nb.x);
         const xRight = Math.max(na.x+NODE_W, nb.x);
         const midX   = (na.x + nb.x + NODE_W) / 2;
@@ -239,7 +259,7 @@ HTML = r"""
         const kids = doc.children.filter(cl=>cl.unionId===u.id);
         if(kids.length>0){
           kids.forEach(cl=>{
-            const nc = (layout.children||[]).find(n=>n.id===cl.childId);
+            const nc = pickNode(layout, cl.childId, overrides);
             if(!nc) return;
             const path = document.createElementNS("http://www.w3.org/2000/svg","path");
             const d = `M ${midX} ${y} L ${midX} ${nc.y-12} L ${nc.x+NODE_W/2} ${nc.y-12} L ${nc.x+NODE_W/2} ${nc.y}`;
@@ -252,11 +272,12 @@ HTML = r"""
         }
       });
 
-      // 人物節點
+      // 人物節點（使用覆寫後的位置渲染）
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
+        const nn = pickNode(layout, n.id, overrides);
         const g = document.createElementNS("http://www.w3.org/2000/svg","g");
-        g.setAttribute("transform", `translate(${n.x},${n.y})`);
+        g.setAttribute("transform", `translate(${nn.x},${nn.y})`);
         const r=document.createElementNS("http://www.w3.org/2000/svg","rect");
         r.setAttribute("rx","16"); r.setAttribute("width",NODE_W); r.setAttribute("height",NODE_H);
         r.setAttribute("fill","var(--bg)"); r.setAttribute("stroke","var(--border)"); r.setAttribute("stroke-width","2");
