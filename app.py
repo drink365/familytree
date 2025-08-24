@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from graphviz import Digraph
 from collections import defaultdict, deque
@@ -313,15 +312,20 @@ def draw_tree():
         person_node(dot, pid, p)
 
     # 夫妻（婚姻節點）+ 子女
-    # 我們為每一段婚姻建一個「小圓點」junction，夫妻連到 dot，再由 dot 垂直連到小孩
+    # —— 唯一改動：夫妻之間畫「水平橫線」（現任實線、前任虛線），其餘位置不變 ——
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
 
         style = "dashed" if divorced else "solid"
-        dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
-        dot.edge(b, jn, dir="none", style=style, color=BORDER_COLOR)
+
+        # 夫妻水平線（不改變原本佈局）；孩子仍從中點 jn 往下
+        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+
+        # 用隱形邊讓 jn 停在兩人之間，維持既有版面
+        dot.edge(a, jn, dir="none", style="invis", weight="50")
+        dot.edge(b, jn, dir="none", style="invis", weight="50")
 
         # 讓夫妻併排
         with dot.subgraph() as s:
