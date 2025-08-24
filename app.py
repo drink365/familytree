@@ -313,32 +313,27 @@ def draw_tree():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-# 多段婚姻的水平排序（前任在左、現任在右）
-spouse_groups = {}
-for mid, m in d["marriages"].items():
-    a, b, divorced = m["a"], m["b"], m["divorced"]
-    spouse_groups.setdefault(a, []).append((b, divorced))
-    spouse_groups.setdefault(b, []).append((a, divorced))
-
-for person, lst in spouse_groups.items():
-    if len(lst) < 2:
-        continue
-    left = [sid for sid, div in lst if div]
-    right = [sid for sid, div in lst if not div]
-    if not left and not right:
-        continue
-    with dot.subgraph() as s:
-        s.attr(rank="same", ordering="out")
-        seq = left + [person] + right
-        for n in seq:
-            s.node(n)
-        for i in range(len(seq) - 1):
-            s.edge(seq[i], seq[i+1], style="invis", constraint="false")
-
-    # 夫妻（婚姻節點）+ 子女
-    # 我們為每一段婚姻建一個「小圓點」junction，夫妻連到 dot，再由 dot 垂直連到小孩
+    # 多段婚姻的水平排序（前任在左、現任在右）
+    spouse_groups = {}
     for mid, m in d["marriages"].items():
+        a, b, divorced = m["a"], m["b"], m["divorced"]
+        spouse_groups.setdefault(a, []).append((b, divorced))
+        spouse_groups.setdefault(b, []).append((a, divorced))
 
+    for person, lst in spouse_groups.items():
+        if len(lst) < 2:
+            continue
+        left = [sid for sid, div in lst if div]
+        right = [sid for sid, div in lst if not div]
+        if not left and not right:
+            continue
+        with dot.subgraph() as s:
+            s.attr(rank="same", ordering="out")
+            seq = left + [person] + right
+            for n in seq:
+                s.node(n)
+            for i in range(len(seq) - 1):
+                s.edge(seq[i], seq[i+1], style="invis", constraint="false")
     # 夫妻（婚姻節點）+ 子女
     # 我們為每一段婚姻建一個「小圓點」junction，孩子由此垂直連結
     # 新增 anchor：mid=夫妻中點、a=配偶A下方、b=配偶B下方
