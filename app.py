@@ -313,6 +313,32 @@ def draw_tree():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
+# 針對同一人有多段婚姻的情況，強制水平排序：前任在左、現任在右
+# 透過不可見、無約束的邊形成 a -> person -> b 的順序，避免跨很遠連線
+spouse_groups = {}
+for mid, m in d["marriages"].items():
+    a, b, divorced = m["a"], m["b"], m["divorced"]
+    spouse_groups.setdefault(a, []).append((b, divorced))
+    spouse_groups.setdefault(b, []).append((a, divorced))
+
+for person, lst in spouse_groups.items():
+    if len(lst) < 2:
+        continue
+    # 分左/右：離婚(前任)放左邊，現任(未離)放右邊
+    left = [sid for sid, div in lst if div]     # exes
+    right = [sid for sid, div in lst if not div]  # currents
+    if not left and not right:
+        continue
+    with dot.subgraph() as s:
+        s.attr(rank="same", ordering="out")
+        # 左側依序、person、右側依序
+        seq = left + [person] + right
+        for n in seq:
+            s.node(n)
+        # 用不可見且不影響層級的邊固定左右順序
+        for i in range(len(seq)-1):
+            s.edge(seq[i], seq[i+1], style="invis", constraint="false")
+
     # 夫妻（婚姻節點）+ 子女
     # 我們為每一段婚姻建一個「小圓點」junction，夫妻連到 dot，再由 dot 垂直連到小孩
     for mid, m in d["marriages"].items():
