@@ -12,8 +12,7 @@ HTML = r"""
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Family Tree (ELK)</title>
-<!-- ELK 佈局引擎 -->
+<title>Family Tree</title>
 <script src="https://unpkg.com/elkjs@0.8.2/lib/elk.bundled.js"></script>
 <style>
   :root{
@@ -54,8 +53,8 @@ HTML = r"""
     <button class="btn sec" id="btnClear">清空</button>
     <div class="legend" style="gap:1.25rem">
       <span class="legend"><div class="lgBox"></div>人物節點</span>
-      <span class="legend"><div class="lgBox dead"></div>身故（灰底＋「（殁）」）</span>
-      <span>離婚：婚線為虛線（有子女仍保留）</span>
+      <span class="legend"><div class="lgBox dead"></div>身故節點（名稱加「（殁）」）</span>
+      <span>離婚：婚線為虛線／有子女仍保留</span>
     </div>
     <div class="zoombar">
       <button class="btn" id="zoomOut">－</button>
@@ -72,7 +71,7 @@ HTML = r"""
         <div class="viewport" id="viewport"></div>
       </div>
       <div class="hint" style="margin-top:.5rem">
-        提示：拖曳平移，滾輪縮放（Mac 兩指）；按鈕可置中或回到 100%。
+        提示：滑鼠拖曳可平移；滾輪縮放（Mac 觸控板兩指縮放）；按鈕可置中或回到 100%。
       </div>
     </div>
 
@@ -116,19 +115,19 @@ HTML = r"""
   }
   const elk = new ELK();
 
-  /* 尺寸與間距（可調） */
+  /* 尺寸與間距 */
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 18;     // 夫妻最小距離（固定）
-  const LAYER_GAP_MIN  = NODE_W + 60;     // 同層（非子女）最小距離
+  const COUPLE_GAP_MIN = NODE_W + 18;                 // 夫妻最小距離
+  const LAYER_GAP_MIN  = NODE_W + 60;                 // 非子女同層距離
   const LAYER_TOLERANCE = 20;
-  const SIBLING_GAP_BASE = 36;            // 兄弟姊妹基礎間距
-  const CLUSTER_GAP = 56;                 // 不同婚姻子女群組距離
-  const BUS_STEPS = [-14,-6,6,14,22];     // 同層不同婚姻的 bus 高度輪替
+  const SIBLING_GAP_BASE = 36;                        // 兄弟姊妹基礎間距
+  const MIN_CLUSTER_GAP = Math.max(56, NODE_W * 0.5); // ★ 兩個家庭群組的最小水平距離
+  const BUS_STEPS = [-14,-6,6,14,22];                 // 同層不同婚姻 bus 高度輪替
   const CHILD_TOP_GAP = 18;
 
   /* 視圖狀態 */
-  let vb = {x:0,y:0,w:1000,h:600};
-  let content = {w:1000,h:600};
+  let vb = {x:0,y:0,w:1200,h:680};
+  let content = {w:1200,h:680};
   let isPanning=false, panStart={x:0,y:0}, vbStart={x:0,y:0};
 
   /* 資料 */
@@ -137,7 +136,6 @@ HTML = r"""
 
   const uid = p => p + "_" + Math.random().toString(36).slice(2,9);
 
-  /* ====== 範例／清空 ====== */
   function demo(){
     const p={}, u={}, list=[
       "陳一郎","陳前妻","陳妻",
@@ -169,22 +167,15 @@ HTML = r"""
     ];
     doc = { persons:p, unions:u, children };
     selected = {type:null,id:null};
-
-    // 先重置 viewBox，避免初次載入用到舊尺寸
-    vb = {x:0,y:0,w:1200,h:680};
-    content = {w:1200,h:680};
     render(true);
   }
 
   function clearAll(){
     doc = { persons:{}, unions:{}, children:[] };
     selected = {type:null,id:null};
-    vb = {x:0,y:0,w:1000,h:600};
-    content = {w:1000,h:600};
     render(true);
   }
 
-  /* ====== UI：選單 ====== */
   function syncSelectors(){
     const persons = Object.values(doc.persons);
     const unions  = Object.values(doc.unions);
@@ -205,7 +196,7 @@ HTML = r"""
     });
   }
 
-  /* ====== ELK 佈局構圖 ====== */
+  /* ELK 佈局 */
   function buildElkGraph(){
     const nodes=[], edges=[];
     Object.values(doc.persons).forEach(p=>{
@@ -216,7 +207,7 @@ HTML = r"""
       const [a,b]=u.partners;
       edges.push({ id:uid("E"), sources:[a], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
       edges.push({ id:uid("E"), sources:[b], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
-      // 夫妻之間加一條薄邊，幫助佈局靠近
+      // 夫妻之間薄邊幫助靠近
       edges.push({ id:uid("E"), sources:[a], targets:[b],
                    layoutOptions:{ "elk.priority":"1000", "elk.edge.type":"INFLUENCE" }});
     });
@@ -249,7 +240,7 @@ HTML = r"""
     return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
   }
 
-  /* 同層（非子女）最小距離 */
+  /* 非子女同層推開（保持最小距離） */
   function enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet){
     const items = (layout.children||[])
       .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id))
@@ -282,7 +273,6 @@ HTML = r"""
     });
   }
 
-  /* ====== 渲染 ====== */
   function render(autoFit=false){
     syncSelectors();
 
@@ -321,7 +311,7 @@ HTML = r"""
       const unionKids = {};
       const childrenIdSet = new Set();
       Object.values(doc.unions).forEach(u=>{
-        const kids = doc.children   // 依資料順序，不用 ELK 的 x 排序
+        const kids = doc.children
           .filter(cl=>cl.unionId===u.id)
           .map(cl=>cl.childId);
         if(kids.length>0){ unionKids[u.id]=kids; kids.forEach(id=>childrenIdSet.add(id)); }
@@ -329,7 +319,7 @@ HTML = r"""
 
       enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
 
-      /* 以父母中線置中，手足依輸入順序排列；不同婚姻的孩子群彼此推開 */
+      /* 先以父母婚點中線放置自己的孩子（嚴格先到位），再做同層群組互推 */
       const clustersByLayer = {};
       Object.entries(unionKids).forEach(([uid,kids])=>{
         const u = doc.unions[uid];
@@ -338,6 +328,8 @@ HTML = r"""
         if(!na || !nb) return;
 
         const midX = (na.x + nb.x + NODE_W) / 2;
+        const marriageY = na.y + NODE_H/2;                   // ★ 用婚線 y 分層（更穩定）
+        const layerKey = Math.round(marriageY / LAYER_TOLERANCE);
 
         // 建 block，計算若孩子有配偶，寬度需包含夫妻距離
         const blocks = kids.map(cid=>{
@@ -354,58 +346,61 @@ HTML = r"""
           return { kidId:cid, mateId, hasMate, width, y:k.y };
         }).filter(Boolean);
 
-        const localGap = SIBLING_GAP_BASE + Math.max(0, blocks.length - 3) * 8; // 孩子越多越寬
+        const localGap = SIBLING_GAP_BASE + Math.max(0, blocks.length - 3) * 8;
         const totalWidth = blocks.reduce((s,b)=>s+b.width,0) + (blocks.length-1)*localGap;
-        let startX = midX - totalWidth/2;
 
+        // ★ 先把自己的群組直接置中到父母中線（嚴格先到位）
+        let startX = midX - totalWidth/2;
         blocks.forEach(b=>{
           overrides[b.kidId] = Object.assign({}, overrides[b.kidId]||{}, { x: startX });
           if(b.hasMate){
             const mateX = startX + COUPLE_GAP_MIN + NODE_W;
-            const mate = pickNode(layout, b.mateId, overrides);
             const my = (overrides[b.kidId]?.y ?? b.y);
             overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: my });
           }
           startX += b.width + localGap;
         });
 
-        const layerKey = Math.round((pickNode(layout, kids[0], overrides) || {}).y / LAYER_TOLERANCE);
         const x0 = midX - totalWidth/2, x1 = x0 + totalWidth;
         if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
-        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX });
+        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX, blocks });
       });
 
-      // cluster 互推，維持左右相對順序
-      Object.entries(clustersByLayer).forEach(([k,list])=>{
-        list.sort((a,b)=>a.anchorX - b.anchorX);
+      /* 同層群組左→右掃描，確保群組間至少 MIN_CLUSTER_GAP */
+      Object.values(clustersByLayer).forEach(list=>{
+        list.sort((a,b)=>a.rect.x0 - b.rect.x0);
+        if(!list.length) return;
         let cursorRight = list[0].rect.x1;
         for(let i=1;i<list.length;i++){
-          const wantLeft = cursorRight + CLUSTER_GAP;
+          const wantLeft = cursorRight + MIN_CLUSTER_GAP;
           if(list[i].rect.x0 < wantLeft){
             const shift = wantLeft - list[i].rect.x0;
+            // 平移此群組的所有孩子與配偶
             const kids = unionKids[list[i].unionId] || [];
             kids.forEach(cid=>{
-              const curX = (overrides[cid]?.x ?? pickNode(layout, cid, overrides).x);
+              const curX = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
               overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: curX + shift });
-              // 孩子的配偶一起平移
               const mateUnion = Object.values(doc.unions).find(xx => (xx.partners||[]).includes(cid) && xx.partners.length===2);
               if(mateUnion){
                 const [pa,pb]=mateUnion.partners;
                 const mateId = (pa===cid)? pb : pa;
                 if(mateId && doc.persons[mateId]){
-                  const mx = (overrides[mateId]?.x ?? pickNode(layout, mateId, overrides).x);
-                  const my = (overrides[mateId]?.y ?? pickNode(layout, mateId, overrides).y);
+                  const mx = overrides[mateId]?.x ?? pickNode(layout, mateId, overrides).x;
+                  const my = overrides[mateId]?.y ?? pickNode(layout, mateId, overrides).y;
                   overrides[mateId] = Object.assign({}, overrides[mateId]||{}, { x: mx + shift, y: my });
                 }
               }
             });
-            list[i].rect.x0 += shift; list[i].rect.x1 += shift; list[i].anchorX += shift;
+            // 更新群組外框
+            list[i].rect.x0 += shift;
+            list[i].rect.x1 += shift;
+            list[i].anchorX += shift;
           }
           cursorRight = list[i].rect.x1;
         }
       });
 
-      /* 畫布邊界 */
+      /* 邊界 */
       let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
@@ -423,12 +418,12 @@ HTML = r"""
 
       /* 為同層婚姻分配不重複 bus 高度（避免看成同一條） */
       const laneOffsetByUnion = {};
-      Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
+      Object.values(clustersByLayer).forEach(list=>{
         list.sort((a,b)=>a.anchorX - b.anchorX);
         list.forEach((it,i)=>{ laneOffsetByUnion[it.unionId] = BUS_STEPS[i % BUS_STEPS.length]; });
       });
 
-      /* ====== SVG ====== */
+      /* SVG */
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
       svg.setAttribute("width","100%"); svg.setAttribute("height","100%");
       svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
@@ -438,7 +433,7 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
-      /* 婚姻線 + 中點 + 子女連線 */
+      /* 婚姻線 + 中點 + 子女連線（以自己的父母婚點為起點） */
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = pickNode(layout, aid, overrides);
@@ -450,12 +445,12 @@ HTML = r"""
         const xRight = Math.max(na.x+NODE_W, nb.x);
         const midX   = (na.x + nb.x + NODE_W) / 2;
 
-        const ln = document.createElementNS("http://www.w3.org/2000/svg","line");
-        ln.setAttribute("x1",xLeft); ln.setAttribute("y1",y);
-        ln.setAttribute("x2",xRight); ln.setAttribute("y2",y);
-        ln.setAttribute("stroke","var(--line)"); ln.setAttribute("stroke-width","2");
-        if(u.status==="divorced") ln.setAttribute("stroke-dasharray","6,4");
-        root.appendChild(ln);
+        const line = document.createElementNS("http://www.w3.org/2000/svg","line");
+        line.setAttribute("x1",xLeft); line.setAttribute("y1",y);
+        line.setAttribute("x2",xRight); line.setAttribute("y2",y);
+        line.setAttribute("stroke","var(--line)"); line.setAttribute("stroke-width","2");
+        if(u.status==="divorced") line.setAttribute("stroke-dasharray","6,4");
+        root.appendChild(line);
 
         const dot = document.createElementNS("http://www.w3.org/2000/svg","rect");
         dot.setAttribute("x",midX-5); dot.setAttribute("y",y-5);
@@ -552,7 +547,6 @@ HTML = r"""
     });
   }
 
-  /* ====== 選取區 ====== */
   function updateSelectionInfo(){
     const el   = document.getElementById("selInfo");
     const btnDead = document.getElementById("btnToggleDead");
@@ -567,7 +561,7 @@ HTML = r"""
 
     if(selected.type==="person"){
       const p = doc.persons[selected.id] || {};
-      el.textContent = "選取人物："+(p.name||"?")+(p.deceased?"（殁）":"")+"（ID: "+selected.id+"）";
+      el.textContent = "選取人物：" + (p.name || "?") + (p.deceased?"（殁）":"") + "（ID: "+selected.id+"）";
       btnDead.style.display="inline-block";
       btnDead.textContent = p.deceased ? "取消身故" : "標記身故";
       btnDead.onclick = ()=>{ p.deceased = !p.deceased; render(); };
@@ -599,8 +593,7 @@ HTML = r"""
     }
   }
 
-  /* ====== 綁定事件 ====== */
-  document.getElementById("btnDemo").addEventListener("click", demo);
+  document.getElementById("btnDemo").addEventListener("click", ()=>demo());
   document.getElementById("btnClear").addEventListener("click", clearAll);
 
   document.getElementById("btnAddPerson").addEventListener("click", ()=>{
@@ -622,7 +615,8 @@ HTML = r"""
     const name = document.getElementById("nameChild").value.trim();
     const id = uid("P"); doc.persons[id]={id, name: name || ("新子女 " + (doc.children.length+1)), deceased:false};
     doc.children.push({unionId: mid, childId: id});    // 以資料順序記錄
-    document.getElementById("nameChild").value=""; render();
+    document.getElementById("nameChild").value="";
+    render();
   });
 
   render(true);
