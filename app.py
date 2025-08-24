@@ -13,7 +13,6 @@ HTML = r"""
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Family Tree</title>
-<!-- ELK 佈局引擎（瀏覽器版） -->
 <script src="https://unpkg.com/elkjs@0.8.2/lib/elk.bundled.js"></script>
 <style>
   :root{
@@ -25,7 +24,6 @@ HTML = r"""
   .btn.sec{background:#334155}
   .btn.warn{background:#b91c1c}
   .btn.ok{background:#0f766e}
-  .btn:disabled{opacity:.5;cursor:not-allowed}
   .pane{display:grid;grid-template-columns:2fr 1fr;gap:1rem;padding:1rem}
   .card{background:#fff;border:1px solid #e5e7eb;border-radius:1rem;padding:1rem}
   .row{display:flex;gap:.5rem;align-items:center;margin:.25rem 0}
@@ -42,7 +40,7 @@ HTML = r"""
   <div class="toolbar">
     <button class="btn ok" id="btnDemo">載入示例</button>
     <button class="btn sec" id="btnClear">清空</button>
-    <div class="legend"><div class="lgBox"></div><span>人物節點（婚姻節點為水平線中點的小方點）</span></div>
+    <div class="legend"><div class="lgBox"></div><span>人物節點（婚姻點在水平線中點；離婚為虛線）</span></div>
     <div style="flex:1"></div>
     <button class="btn" id="btnExport">匯出 JSON</button>
     <label class="btn">
@@ -94,19 +92,17 @@ HTML = r"""
   const elk = new ELK();
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
 
-  /** 狀態 **/
   let doc = { persons:{}, unions:{}, children:[] };
   let selected = { type:null, id:null };
 
-  function uid(p){ return p + "_" + Math.random().toString(36).slice(2,9); }
+  const uid = p => p + "_" + Math.random().toString(36).slice(2,9);
 
-  /** 示例資料 **/
   function demo(){
     const p={}, u={}, list=[
       "陳一郎","陳前妻","陳妻","陳大","陳二","陳三","王子","王子妻","王孫"
     ].map(n=>({id:uid("P"), name:n}));
     list.forEach(pp=>p[pp.id]=pp);
-    const id = (n)=>list.find(x=>x.name===n).id;
+    const id = n=>list.find(x=>x.name===n).id;
     const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
     const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")], status:"married"};
     const m3={id:uid("U"), partners:[id("王子"),id("王子妻")], status:"married"};
@@ -129,50 +125,44 @@ HTML = r"""
     render();
   }
 
-  /** 下拉選單同步 **/
   function syncSelectors(){
     const persons = Object.values(doc.persons);
     const unions  = Object.values(doc.unions);
     const selA = document.getElementById("selA");
     const selB = document.getElementById("selB");
     const selU = document.getElementById("selUnion");
-    for (const s of [selA,selB,selU]) s.innerHTML="";
-
-    persons.forEach((p,i)=>{
+    [selA,selB,selU].forEach(s=>s.innerHTML="");
+    persons.forEach(p=>{
       const oa=document.createElement("option"); oa.value=p.id; oa.textContent=p.name; selA.appendChild(oa);
       const ob=document.createElement("option"); ob.value=p.id; ob.textContent=p.name; selB.appendChild(ob);
     });
     unions.forEach(u=>{
       const [a,b]=u.partners;
-      const ou=document.createElement("option"); 
-      ou.value=u.id; 
-      ou.textContent=(doc.persons[a]?.name||"?")+" ↔ "+(doc.persons[b]?.name||"?");
-      selU.appendChild(ou);
+      const o=document.createElement("option");
+      o.value=u.id; o.textContent=(doc.persons[a]?.name||"?")+" ↔ "+(doc.persons[b]?.name||"?");
+      selU.appendChild(o);
     });
   }
 
-  /** 佈局圖（供 ELK 計算位置）
-   *  這次把 partner→union 的邊加回（只給佈局用），確保配偶同層、婚姻點落在兩者之間。
-   *  union→child 邊只在有子女時存在（真實繪圖時也僅在有子女時垂直往下）。
+  /** 關鍵修正：
+   *  讓配偶同層：改成 a→union、b→union（兩邊都指向 union），
+   *  不再用 a→union→b 這種會把 b 推到下一層的寫法。
+   *  婚姻水平線與中點仍由 render() 自行繪製。
    */
   function buildElkGraph(){
     const nodes=[], edges=[];
 
-    // persons
     Object.values(doc.persons).forEach(p=>{
       nodes.push({ id:p.id, width:NODE_W, height:NODE_H, labels:[{text:p.name}] });
     });
 
-    // unions & partner→union（佈局用）
     Object.values(doc.unions).forEach(u=>{
       nodes.push({ id:u.id, width:10, height:10, labels:[{text:""}] });
       const [a,b]=u.partners;
       edges.push({ id:uid("E"), sources:[a], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
-      edges.push({ id:uid("E"), sources:[u.id], targets:[b], layoutOptions:{ "elk.priority":"100" }});
+      edges.push({ id:uid("E"), sources:[b], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
     });
 
-    // union → child（只有有子女的婚姻才需要）
-    const hasKids = new Set(doc.children.map(cl=>cl.unionId));
     doc.children.forEach(cl=>{
       edges.push({ id:uid("E"), sources:[cl.unionId], targets:[cl.childId] });
     });
@@ -209,23 +199,19 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN},${MARGIN})`);
       svg.appendChild(root);
 
-      // 1) 夫妻水平線 + 中點 union（離婚虛線；無子女只畫水平線）
+      // 夫妻水平線 + 中點 union（離婚虛線；無子女不往下）
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = (layout.children||[]).find(n=>n.id===aid);
         const nb = (layout.children||[]).find(n=>n.id===bid);
         if(!na||!nb) return;
 
-        // 取兩人中心 y 的平均，穩定水平
         const ya = na.y + NODE_H/2, yb = nb.y + NODE_H/2;
         const y = (ya + yb) / 2;
-
-        // 水平線左右端（確保由左到右）
         const xLeft  = Math.min(na.x+NODE_W, nb.x);
         const xRight = Math.max(na.x+NODE_W, nb.x);
         const midX   = (na.x + nb.x + NODE_W) / 2;
 
-        // 水平婚姻線
         const line = document.createElementNS("http://www.w3.org/2000/svg","line");
         line.setAttribute("x1", xLeft);
         line.setAttribute("y1", y);
@@ -236,7 +222,6 @@ HTML = r"""
         if(u.status==="divorced") line.setAttribute("stroke-dasharray","6,4");
         root.appendChild(line);
 
-        // 中點 union 小方點（可選取）
         const dot = document.createElementNS("http://www.w3.org/2000/svg","rect");
         dot.setAttribute("x", midX-5);
         dot.setAttribute("y", y-5);
@@ -248,7 +233,7 @@ HTML = r"""
         dot.addEventListener("click",()=>{ selected={type:"union", id:u.id}; updateSelectionInfo(); });
         root.appendChild(dot);
 
-        // 2) 有子女才從中點往下（union→child）
+        // 子女（有才畫）
         const kids = doc.children.filter(cl=>cl.unionId===u.id);
         if(kids.length>0){
           kids.forEach(cl=>{
@@ -265,16 +250,14 @@ HTML = r"""
         }
       });
 
-      // 3) 人物節點（最後畫，避免被線覆蓋）
+      // 人物節點
       (layout.children||[]).forEach(n=>{
-        if(doc.unions[n.id]) return; // union 點不在這裡畫
+        if(doc.unions[n.id]) return;
         const g = document.createElementNS("http://www.w3.org/2000/svg","g");
         g.setAttribute("transform", `translate(${n.x},${n.y})`);
         const r=document.createElementNS("http://www.w3.org/2000/svg","rect");
         r.setAttribute("rx","16"); r.setAttribute("width",NODE_W); r.setAttribute("height",NODE_H);
-        r.setAttribute("fill","var(--bg)");
-        r.setAttribute("stroke","var(--border)");
-        r.setAttribute("stroke-width","2");
+        r.setAttribute("fill","var(--bg)"); r.setAttribute("stroke","var(--border)"); r.setAttribute("stroke-width","2");
         r.classList.add("node");
         r.addEventListener("click",()=>{ selected={type:"person", id:n.id}; updateSelectionInfo(); });
         const t=document.createElementNS("http://www.w3.org/2000/svg","text");
@@ -303,55 +286,43 @@ HTML = r"""
     }
   }
 
-  /** 事件：新增/刪除/匯入/匯出/下載 **/
+  // 事件
   document.getElementById("btnDemo").addEventListener("click", demo);
   document.getElementById("btnClear").addEventListener("click", clearAll);
 
   document.getElementById("btnAddPerson").addEventListener("click", ()=>{
     const name = document.getElementById("namePerson").value.trim();
     const id = uid("P"); doc.persons[id]={id, name: name || ("新成員 " + (Object.keys(doc.persons).length+1))};
-    document.getElementById("namePerson").value="";
-    render();
+    document.getElementById("namePerson").value=""; render();
   });
 
   document.getElementById("btnAddUnion").addEventListener("click", ()=>{
     const a = document.getElementById("selA").value;
     const b = document.getElementById("selB").value;
     if(!a||!b||a===b) return;
-    const id = uid("U"); doc.unions[id]={id, partners:[a,b], status:"married"};
-    render();
+    const id = uid("U"); doc.unions[id]={id, partners:[a,b], status:"married"}; render();
   });
 
   document.getElementById("btnAddChild").addEventListener("click", ()=>{
-    const mid = document.getElementById("selUnion").value;
-    if(!mid) return;
+    const mid = document.getElementById("selUnion").value; if(!mid) return;
     const name = document.getElementById("nameChild").value.trim();
     const id = uid("P"); doc.persons[id]={id, name: name || ("新子女 " + (doc.children.length+1))};
     doc.children.push({unionId: mid, childId: id});
-    document.getElementById("nameChild").value="";
-    render();
+    document.getElementById("nameChild").value=""; render();
   });
 
   document.getElementById("btnDelete").addEventListener("click", ()=>{
     if(!selected.type) return;
     if(selected.type==="person"){
-      const pid = selected.id;
-      delete doc.persons[pid];
-      // 刪除涉及該人的婚姻
-      const keptUnions = {};
-      Object.values(doc.unions).forEach(u=>{
-        if(u.partners.indexOf(pid) === -1) keptUnions[u.id]=u;
-      });
+      const pid = selected.id; delete doc.persons[pid];
+      const keptUnions = {}; Object.values(doc.unions).forEach(u=>{ if(u.partners.indexOf(pid)===-1) keptUnions[u.id]=u; });
       doc.unions = keptUnions;
-      // 刪掉已失效的子女連結與該人成為子女的紀錄
       doc.children = doc.children.filter(cl => cl.childId!==pid && !!doc.unions[cl.unionId]);
     }else{
-      const uid_ = selected.id;
-      delete doc.unions[uid_];
+      const uid_ = selected.id; delete doc.unions[uid_];
       doc.children = doc.children.filter(cl => cl.unionId!==uid_);
     }
-    selected={type:null,id:null};
-    render();
+    selected={type:null,id:null}; render();
   });
 
   document.getElementById("btnExport").addEventListener("click", ()=>{
@@ -365,8 +336,7 @@ HTML = r"""
     const f=e.target.files && e.target.files[0]; if(!f) return;
     const reader=new FileReader();
     reader.onload = (ev)=>{
-      try{
-        const t = JSON.parse(String(ev.target.result||"{}"));
+      try{ const t = JSON.parse(String(ev.target.result||"{}"));
         if(t && t.persons && t.unions && t.children){ doc=t; selected={type:null,id:null}; render(); }
       }catch(err){ console.error(err); }
     };
@@ -382,7 +352,6 @@ HTML = r"""
     URL.revokeObjectURL(url);
   });
 
-  // 初始渲染
   render();
 })();
 </script>
