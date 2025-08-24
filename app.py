@@ -2,218 +2,278 @@
 # -*- coding: utf-8 -*-
 
 import streamlit as st
-from graphviz import Digraph
-from collections import defaultdict
-import uuid
+import math
+from collections import defaultdict, deque
 
-# ---------------- 基本設定 ----------------
-st.set_page_config(page_title="家族樹生成器（最終修正）", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="家族樹（穩定 SVG 版）", page_icon="🌳", layout="wide")
 
-COLOR_BORDER = "#114b5f"
-COLOR_NODE_BG = "#0b3d4f"
-COLOR_NODE_FG = "#ffffff"
+# ========== 視覺參數 ==========
+NODE_W = 120        # 節點寬
+NODE_H = 56         # 節點高
+H_GAP  = 40         # 同一列節點的水平間距
+V_GAP  = 120        # 列與列的垂直距
+FONT   = "14px sans-serif"
 
-def _pid(): return "P_" + uuid.uuid4().hex[:8]
-def _mid(): return "M_" + uuid.uuid4().hex[:8]
+BG     = "#0b3d4f"
+FG     = "#ffffff"
+BORDER = "#114b5f"
+LINE   = "#0f3c4d"
 
-# ---------------- 狀態 ----------------
-def _empty_state():
-    return {"persons": {}, "marriages": {}, "children": []}
+# ========== 內部資料結構 ==========
+def empty_state():
+    return {
+        "persons": {},        # pid -> {"name": str}
+        "marriages": {},      # mid -> {"a": pid, "b": pid, "divorced": bool}
+        "children": []        # {"mid": mid, "child": pid}
+    }
 
 if "data" not in st.session_state:
-    st.session_state.data = _empty_state()
+    st.session_state.data = empty_state()
 
 def clear_all():
-    st.session_state.data = _empty_state()
+    st.session_state.data = empty_state()
 
 def load_demo():
-    """與題圖一致；先清空避免殘留造成錯線"""
+    """載入與你的範例圖一致的資料"""
     clear_all()
-    d = st.session_state.data
-    P, M = d["persons"], d["marriages"]
+    P = st.session_state.data["persons"]
+    M = st.session_state.data["marriages"]
+    C = st.session_state.data["children"]
+
+    def np(name):
+        pid = f"P{len(P)+1}"
+        P[pid] = {"name": name}
+        return pid
+    def nm(a,b,div=False):
+        mid = f"M{len(M)+1}"
+        M[mid] = {"a": a, "b": b, "divorced": div}
+        return mid
 
     # 人物
-    p_f = _pid(); P[p_f] = {"name": "陳一郎"}
-    p_ex = _pid(); P[p_ex] = {"name": "陳前妻"}
-    p_w  = _pid(); P[p_w]  = {"name": "陳妻"}
-    c_a  = _pid(); P[c_a]  = {"name": "陳大"}
-    c_b  = _pid(); P[c_b]  = {"name": "陳二"}
-    c_c  = _pid(); P[c_c]  = {"name": "陳三"}
-    s    = _pid(); P[s]    = {"name": "王子"}
-    sw   = _pid(); P[sw]   = {"name": "王子妻"}
-    g    = _pid(); P[g]    = {"name": "王孫"}
+    chen = np("陳一郎")
+    ex   = np("陳前妻")
+    wife = np("陳妻")
+    c1   = np("陳大")
+    c2   = np("陳二")
+    c3   = np("陳三")
+    wz   = np("王子")
+    wzw  = np("王子妻")
+    ws   = np("王孫")
 
-    # 婚姻（每段婚姻一個 joint node）
-    m_ex  = _mid(); M[m_ex]  = {"a": p_f, "b": p_ex, "divorced": True}
-    m_now = _mid(); M[m_now] = {"a": p_f, "b": p_w,  "divorced": False}
-    m_w   = _mid(); M[m_w]   = {"a": s,   "b": sw,   "divorced": False}
+    # 婚姻
+    mex  = nm(chen, ex, True)
+    mnow = nm(chen, wife, False)
+    mw   = nm(wz,   wzw, False)
 
-    # 子女掛在對應婚姻
-    d["children"].extend([
-        {"mid": m_ex,  "child": s},
-        {"mid": m_now, "child": c_a},
-        {"mid": m_now, "child": c_b},
-        {"mid": m_now, "child": c_c},
-        {"mid": m_w,   "child": g},
-    ])
+    # 子女
+    C += [
+        {"mid": mex,  "child": wz},
+        {"mid": mnow, "child": c1},
+        {"mid": mnow, "child": c2},
+        {"mid": mnow, "child": c3},
+        {"mid": mw,   "child": ws},
+    ]
 
-# ---------------- 工具 ----------------
-def node_person(dot, pid, name):
-    dot.node(
-        pid, name,
-        shape="box",
-        style="rounded,filled",
-        fillcolor=COLOR_NODE_BG,
-        fontcolor=COLOR_NODE_FG,
-        color=COLOR_BORDER,
-        penwidth="1.2",
-        fontsize="14",
-    )
+# ========== 版面計算（手工演算法，避免 Graphviz 路由） ==========
+def build_maps(data):
+    kids_of = defaultdict(list)   # mid -> [child]
+    parents_of = {}               # child -> {a,b}
+    marriages_of = defaultdict(list)  # person -> [mid]
 
-def build_m2kids(data):
-    m2kids = defaultdict(list)
+    for mid, m in data["marriages"].items():
+        a, b = m["a"], m["b"]
+        marriages_of[a].append(mid); marriages_of[b].append(mid)
+
     for rec in data["children"]:
-        mid, child = rec.get("mid"), rec.get("child")
-        if mid in data["marriages"] and child in data["persons"]:
-            m2kids[mid].append(child)
-    return m2kids
+        mid, child = rec["mid"], rec["child"]
+        kids_of[mid].append(child)
+        a = data["marriages"][mid]["a"]
+        b = data["marriages"][mid]["b"]
+        parents_of[child] = {a,b}
 
-# ---------------- 繪圖 ----------------
-def draw_tree():
-    d = st.session_state.data
-    if not d["persons"]:
-        st.info("請先點『載入示範』或使用左側表單新增資料。")
-        return
+    return kids_of, parents_of, marriages_of
 
-    # 使用 ortho，但**指定連接埠**，避免共用長橫線與上挑三角
-    dot = Digraph("family", format="svg", engine="dot")
-    dot.graph_attr.update(
-        rankdir="TB",
-        splines="ortho",
-        nodesep="0.7",
-        ranksep="1.0",
-        concentrate="false",
-        ordering="out",
-        newrank="true",
-    )
+def generations(data):
+    """回傳 person -> level（第幾列），以父母列+1為原則；沒有父母者為 0 列"""
+    kids_of, parents_of, marriages_of = build_maps(data)
 
-    # 1) 人物節點
-    for pid, p in d["persons"].items():
-        node_person(dot, pid, p["name"])
+    level = {}
+    # 找出沒有父母的人（根）
+    roots = [pid for pid in data["persons"].keys() if pid not in parents_of]
+    for r in roots: level[r] = 0
 
-    m2kids = build_m2kids(d)
+    # BFS：父母的孩子在下一列；若 child 有配偶，配偶同列
+    q = deque(roots)
+    seen = set(roots)
+    while q:
+        p = q.popleft()
+        # p 的所有婚姻
+        for mid in marriages_of.get(p, []):
+            # 該婚姻的孩子
+            for c in kids_of.get(mid, []):
+                if c not in level:
+                    level[c] = level[p] + 1
+                if c not in seen:
+                    seen.add(c); q.append(c)
+                # c 的配偶（若有）也放同列
+                for mid2 in marriages_of.get(c, []):
+                    a, b = data["marriages"][mid2]["a"], data["marriages"][mid2]["b"]
+                    spouse = a if b == c else b
+                    if spouse not in level:
+                        level[spouse] = level[c]   # 同列
+                    if spouse not in seen:
+                        seen.add(spouse); q.append(spouse)
+    return level
 
-    # 2) 每段婚姻：夫妻同列 + joint node 鎖在正下方 + 子女直落
-    for mid, m in d["marriages"].items():
-        a, b, divorced = m["a"], m["b"], m.get("divorced", False)
-        jn = f"J_{mid}"   # marriage joint node
-        # 用小方點，易於控制連接埠
-        dot.node(jn, "", shape="box", width="0.02", height="0.02",
-                 style="filled", fillcolor=COLOR_NODE_BG, color=COLOR_BORDER)
+def layout_positions(data):
+    """
+    輸出：pos[pid] = (x,y)；x 依每列分組順序手工排；y = level * V_GAP
+    規則：
+      - 每列由左到右：以「上一列的婚姻 → 其子女(+其配偶)」為一個群組，群組內保持相鄰
+      - 同人只顯示一次；多段婚姻時，該人以其最低的 level 站位
+    """
+    lvl = generations(data)
+    by_level = defaultdict(list)
+    for pid, lv in lvl.items():
+        by_level[lv].append(pid)
 
-        # 夫妻同列（僅限兩人，不把 joint 放進來）
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            s.node(a); s.node(b)
+    # 依序排列每一列
+    pos = {}
+    y_of = lambda lv: lv * V_GAP + 40
 
-        # 顯示夫妻「可見」線（不影響層級）
-        dot.edge(a, b, dir="none",
-                 style=("dashed" if divorced else "solid"),
-                 color=COLOR_BORDER, constraint="false")
+    kids_of, parents_of, marriages_of = build_maps(data)
 
-        # 夫妻「隱形且有約束」線：鎖緊兩人避免被插隊
-        dot.edge(a, b, style="invis", weight="200")  # ★ 關鍵 1
+    # 第一列：沒有父母者，保持出現順序；同一人多段婚姻也只放一個節點
+    x = 40
+    for pid in sorted(by_level.get(0, []), key=lambda p: data["persons"][p]["name"]):
+        pos[pid] = (x, y_of(0))
+        x += NODE_W + H_GAP
 
-        # 高權重隱形邊：把 joint node 鎖在兩人正下方
-        dot.edge(a, jn, style="invis", weight="120", minlen="1")
-        dot.edge(b, jn, style="invis", weight="120", minlen="1")
+    # 從第 1 列起：依上一列的婚姻來決定群組順序
+    max_lv = max(lvl.values()) if lvl else 0
+    for lv in range(1, max_lv+1):
+        x = 40
+        y = y_of(lv)
+        # 找出「父母在 lv-1」的所有婚姻，依父母的橫向順序來展開孩子群組
+        parent_row = [p for p, l in pos.items() if abs(l[1] - y_of(lv-1)) < 1e-6]
+        parent_rank = {p:i for i,p in enumerate(sorted(parent_row, key=lambda p: pos[p][0]))}
 
-        # 子女：同列；由 joint 的南側(s)直落到孩子的北側(n)
-        kids = m2kids.get(mid, [])
-        if kids:
-            with dot.subgraph() as s:
-                s.attr(rank="same")
-                for c in kids:
-                    s.node(c)
+        mids = []
+        for mid, m in data["marriages"].items():
+            a, b = m["a"], m["b"]
+            if a in parent_rank and b in parent_rank:
+                # 父母都在上一列
+                mids.append((min(parent_rank[a], parent_rank[b]), mid))
+        mids.sort()
 
-            # 兄弟姊妹隱形鏈：固定左→右順序，避免配偶節點被丟到最右邊
-            for i in range(len(kids) - 1):
-                dot.edge(kids[i], kids[i+1], style="invis", weight="100")  # ★ 關鍵 2
-
+        placed = set()
+        for _, mid in mids:
+            kids = kids_of.get(mid, [])
             for c in kids:
-                dot.edge(jn, c,
-                         dir="none",
-                         color=COLOR_BORDER,
-                         tailport="s",   # joint 下側出線
-                         headport="n",   # 孩子上側進線
-                         weight="100",
-                         minlen="2")
+                # 先放孩子本身
+                if c not in placed:
+                    pos[c] = (x, y)
+                    x += NODE_W + H_GAP
+                    placed.add(c)
+                # 若孩子有配偶，配偶緊鄰其右
+                for mid2 in marriages_of.get(c, []):
+                    a, b = data["marriages"][mid2]["a"], data["marriages"][mid2]["b"]
+                    spouse = a if b == c else b
+                    if spouse in lvl and lvl[spouse] == lv and spouse not in placed:
+                        pos[spouse] = (x, y)
+                        x += NODE_W + H_GAP
+                        placed.add(spouse)
 
-    st.graphviz_chart(dot, use_container_width=True)
+        # 可能仍有同列但不在上述群組的（例如外部加入的人），補位
+        for pid in by_level.get(lv, []):
+            if pid not in placed:
+                pos[pid] = (x, y)
+                x += NODE_W + H_GAP
+                placed.add(pid)
 
-# ---------------- 介面 ----------------
-st.title("家族樹生成器（最終修正）")
+    return pos
 
+# ========== SVG 繪製 ==========
+def svg_rect(x, y, w, h, rx=16, text=""):
+    return f'''
+    <g>
+      <rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}"
+            fill="{BG}" stroke="{BORDER}" stroke-width="2"/>
+      <text x="{x+w/2}" y="{y+h/2+5}" text-anchor="middle"
+            font-size="14" font-family="sans-serif" fill="{FG}">{text}</text>
+    </g>
+    '''
+
+def svg_line(x1,y1,x2,y2, dashed=False):
+    dash = ' stroke-dasharray="6,6"' if dashed else ""
+    return f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{LINE}" stroke-width="2"{dash}/>\n'
+
+def render_svg(data):
+    pos = layout_positions(data)
+    if not pos:
+        return "<svg/>"
+
+    # 畫布大小
+    max_x = max(x for x,_ in pos.values()) + NODE_W + 40
+    max_y = max(y for _,y in pos.values()) + NODE_H + 80
+
+    kids_of, parents_of, marriages_of = build_maps(data)
+
+    # 夫妻線 + 婚姻點 + 子女線
+    edges = []
+    for mid, m in data["marriages"].items():
+        a, b, divorced = m["a"], m["b"], m.get("divorced", False)
+        if a not in pos or b not in pos: 
+            continue
+        ax, ay = pos[a]; bx, by = pos[b]
+        # 夫妻線
+        y = (ay + by)/2  # 同列；保險點
+        edges.append(svg_line(ax+NODE_W, ay+NODE_H/2, bx, by+NODE_H/2, dashed=divorced))
+        # 婚姻點（在兩人中間下方）
+        jx = (ax + bx + NODE_W)/2
+        jy = max(ay, by) + NODE_H/2 + 8
+        # 子女
+        for c in kids_of.get(mid, []):
+            if c not in pos: 
+                continue
+            cx, cy = pos[c]
+            # 垂直落下： 婚姻點 → 子女上緣
+            edges.append(svg_line(jx, jy, jx, cy-12))
+            # 水平短連到子女中心上方
+            edges.append(svg_line(jx, cy-12, cx+NODE_W/2, cy-12))
+            # 再短垂直到子女框
+            edges.append(svg_line(cx+NODE_W/2, cy-12, cx+NODE_W/2, cy))
+
+    # 節點
+    nodes = []
+    for pid, p in data["persons"].items():
+        if pid not in pos: 
+            continue
+        x, y = pos[pid]
+        nodes.append(svg_rect(x, y, NODE_W, NODE_H, text=p["name"]))
+
+    svg = f'''
+    <svg width="{max_x}" height="{max_y}" xmlns="http://www.w3.org/2000/svg" style="background:#fff">
+      {"".join(edges)}
+      {"".join(nodes)}
+    </svg>
+    '''
+    return svg
+
+# ========== UI ==========
 with st.sidebar:
-    st.markdown("### 操作")
+    st.markdown("## 操作")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("載入示範", use_container_width=True):
             load_demo()
     with c2:
-        if st.button("清空資料", use_container_width=True):
+        if st.button("清空", use_container_width=True):
             clear_all()
 
-    st.markdown("---")
-    st.markdown("### 新增人物")
-    with st.form("f_add_person", clear_on_submit=True):
-        name = st.text_input("姓名*", value="")
-        note = st.text_input("備註（可留白）", value="")
-        if st.form_submit_button("新增人物"):
-            if name.strip():
-                pid = _pid()
-                st.session_state.data["persons"][pid] = {"name": name.strip(), "note": note.strip()}
-                st.success(f"已新增：{name}")
-            else:
-                st.warning("請輸入姓名")
-
-    P = st.session_state.data["persons"]
-    if P:
-        st.markdown("### 新增婚姻/伴侶")
-        with st.form("f_add_marriage"):
-            a = st.selectbox("配偶 A", options=list(P.keys()), format_func=lambda x: P[x]["name"])
-            b = st.selectbox("配偶 B", options=[k for k in P.keys() if k != a], format_func=lambda x: P[x]["name"])
-            divorced = st.checkbox("已離婚（虛線）", value=False)
-            if st.form_submit_button("建立婚姻/伴侶"):
-                exists = any((mm["a"]==a and mm["b"]==b) or (mm["a"]==b and mm["b"]==a)
-                             for mm in st.session_state.data["marriages"].values())
-                if exists:
-                    st.warning("這對配偶關係已存在。")
-                else:
-                    mid = _mid()
-                    st.session_state.data["marriages"][mid] = {"a": a, "b": b, "divorced": divorced}
-                    st.success(f"已建立：{P[a]['name']} ↔ {P[b]['name']}")
-
-    if st.session_state.data["marriages"] and P:
-        st.markdown("### 為婚姻新增子女")
-        with st.form("f_add_child"):
-            mid = st.selectbox(
-                "選擇婚姻/伴侶",
-                options=list(st.session_state.data["marriages"].keys()),
-                format_func=lambda m: f"{P[st.session_state.data['marriages'][m]['a']]['name']} ↔ {P[st.session_state.data['marriages'][m]['b']]['name']}"
-            )
-            child = st.selectbox("子女", options=list(P.keys()), format_func=lambda x: P[x]["name"])
-            if st.form_submit_button("加入子女"):
-                already = any((row["mid"]==mid and row["child"]==child)
-                              for row in st.session_state.data["children"])
-                if already:
-                    st.warning("該子女已在這段婚姻下。")
-                else:
-                    st.session_state.data["children"].append({"mid": mid, "child": child})
-                    st.success(f"已加入子女：{P[child]['name']}")
-
-# 右側畫圖
-draw_tree()
+st.markdown("## 家族樹（穩定 SVG 版）")
+svg = render_svg(st.session_state.data)
+st.components.v1.html(svg, height=700, scrolling=True)
 
 with st.expander("（除錯）目前資料"):
     st.json(st.session_state.data, expanded=False)
