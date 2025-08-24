@@ -313,8 +313,7 @@ def draw_tree():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-# 針對同一人有多段婚姻的情況，強制水平排序：前任在左、現任在右
-# 透過不可見、無約束的邊形成 a -> person -> b 的順序，避免跨很遠連線
+# 多段婚姻的水平排序（前任在左、現任在右）
 spouse_groups = {}
 for mid, m in d["marriages"].items():
     a, b, divorced = m["a"], m["b"], m["divorced"]
@@ -324,63 +323,54 @@ for mid, m in d["marriages"].items():
 for person, lst in spouse_groups.items():
     if len(lst) < 2:
         continue
-    # 分左/右：離婚(前任)放左邊，現任(未離)放右邊
-    left = [sid for sid, div in lst if div]     # exes
-    right = [sid for sid, div in lst if not div]  # currents
+    left = [sid for sid, div in lst if div]
+    right = [sid for sid, div in lst if not div]
     if not left and not right:
         continue
     with dot.subgraph() as s:
         s.attr(rank="same", ordering="out")
-        # 左側依序、person、右側依序
         seq = left + [person] + right
         for n in seq:
             s.node(n)
-        # 用不可見且不影響層級的邊固定左右順序
-        for i in range(len(seq)-1):
+        for i in range(len(seq) - 1):
             s.edge(seq[i], seq[i+1], style="invis", constraint="false")
 
     # 夫妻（婚姻節點）+ 子女
     # 我們為每一段婚姻建一個「小圓點」junction，夫妻連到 dot，再由 dot 垂直連到小孩
     for mid, m in d["marriages"].items():
+
+    # 夫妻（婚姻節點）+ 子女
+    # 我們為每一段婚姻建一個「小圓點」junction，孩子由此垂直連結
+    # 新增 anchor：mid=夫妻中點、a=配偶A下方、b=配偶B下方
+    for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         anchor = m.get("anchor", "mid")
         jn = f"J_{mid}"
-        # 中點節點：預設不可見
-        dot.node(jn, "", shape="point", width="0.01", style="invis")
+        dot.node(jn, "", shape="point", width="0.01", style="invis", color=BORDER_COLOR)
         style = "dashed" if divorced else "solid"
-        # spouses side-by-side
+        # 夫妻併排
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
             s.node(b)
         if anchor == "mid":
-            # 把 a, jn, b 放在同一水平且固定順序，確保是一條完全水平的直線
+            # A–jn–B 橫線；jn 與 A/B 同 rank，孩子從 jn 往下
             with dot.subgraph() as s:
                 s.attr(rank="same")
                 s.node(a)
                 s.node(jn)
                 s.node(b)
-            # 用高權重與指定埠，強制畫成水平直線；jn 隱形但可作為子女的垂直接點
             dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR, weight="100", minlen="1", tailport="e", headport="w")
             dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR, weight="100", minlen="1", tailport="e", headport="w")
         elif anchor == "a":
-            # 先畫夫妻橫線，再由 A 垂直往下到接點
+            # 夫妻橫線 + A 直下接點
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
             dot.edge(a, jn, dir="none", color=BORDER_COLOR)
         elif anchor == "b":
+            # 夫妻橫線 + B 直下接點
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
             dot.edge(b, jn, dir="none", color=BORDER_COLOR)
-            dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
-            dot.edge(b, jn, dir="none", color=BORDER_COLOR)
-
-
-        # 讓夫妻併排
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            s.node(a)
-            s.node(b)
-
-        # 小孩垂直往下
+        # 孩子垂直往下
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
             with dot.subgraph() as s:
