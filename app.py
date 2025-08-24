@@ -16,11 +16,11 @@ HTML = r"""
 <script src="https://unpkg.com/elkjs@0.8.2/lib/elk.bundled.js"></script>
 <style>
   :root{
-    --bg:#0b3d4f;
-    --bg-dead:#6b7280;
+    --bg:#0b3d4f;        /* 節點底色 */
+    --bg-dead:#6b7280;   /* 身故節點底色 */
     --fg:#ffffff;
     --border:#114b5f;
-    --line:#0f3c4d;
+    --line:#0f3c4d;      /* 線條顏色 */
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;background:#f8fafc}
@@ -54,7 +54,7 @@ HTML = r"""
     <div class="legend" style="gap:1.25rem">
       <span class="legend"><div class="lgBox"></div>人物節點</span>
       <span class="legend"><div class="lgBox dead"></div>身故節點（名稱加「（殁）」）</span>
-      <span>離婚：婚線為虛線／有子女仍保留</span>
+      <span>離婚：婚線為虛線；有子女仍保留婚點</span>
     </div>
     <div class="zoombar">
       <button class="btn" id="zoomOut">－</button>
@@ -67,11 +67,9 @@ HTML = r"""
 
   <div class="pane">
     <div class="card">
-      <div class="canvas">
-        <div class="viewport" id="viewport"></div>
-      </div>
+      <div class="canvas"><div class="viewport" id="viewport"></div></div>
       <div class="hint" style="margin-top:.5rem">
-        提示：滑鼠拖曳可平移；滾輪縮放（Mac 觸控板兩指縮放）；按鈕可置中或回到 100%。
+        提示：滑鼠拖曳可平移；滾輪縮放（Mac 兩指）；按鈕可置中或回到 100%。
       </div>
     </div>
 
@@ -83,9 +81,7 @@ HTML = r"""
       </div>
 
       <div class="row">
-        <select id="selA"></select>
-        <span>×</span>
-        <select id="selB"></select>
+        <select id="selA"></select><span>×</span><select id="selB"></select>
         <button class="btn ok" id="btnAddUnion">建立婚姻</button>
       </div>
 
@@ -121,7 +117,7 @@ HTML = r"""
   const LAYER_GAP_MIN  = NODE_W + 60;                 // 非子女同層距離
   const LAYER_TOLERANCE = 20;
   const SIBLING_GAP_BASE = 36;                        // 兄弟姊妹基礎間距
-  const MIN_CLUSTER_GAP = Math.max(56, NODE_W * 0.5); // ★ 兩個家庭群組的最小水平距離
+  const MIN_CLUSTER_GAP = Math.max(56, NODE_W * 0.5); // 同層兩個家庭群組之最小間距
   const BUS_STEPS = [-14,-6,6,14,22];                 // 同層不同婚姻 bus 高度輪替
   const CHILD_TOP_GAP = 18;
 
@@ -275,14 +271,21 @@ HTML = r"""
 
   function render(autoFit=false){
     syncSelectors();
-
     const host = document.getElementById("viewport");
     host.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
 
     elk.layout(buildElkGraph()).then(layout=>{
       const overrides = {};
 
-      /* 夫妻對齊 + 最小夫妻距離 */
+      /* 統計每個人有幾段婚姻（用來避免移動“共用的一側”） */
+      const unionCountByPerson = {};
+      Object.values(doc.unions).forEach(u=>{
+        (u.partners||[]).forEach(pid=>{
+          unionCountByPerson[pid] = (unionCountByPerson[pid]||0)+1;
+        });
+      });
+
+      /* 夫妻對齊 + 最小夫妻距離（盡量只移動非共用的一側） */
       Object.values(doc.unions).forEach(u=>{
         const [a,b]=u.partners;
         const na = (layout.children||[]).find(n=>n.id===a);
@@ -293,21 +296,30 @@ HTML = r"""
         overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
         overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
 
-        const left  = na.x <= nb.x ? a : b;
-        const right = na.x <= nb.x ? b : a;
+        // 確定左右
+        let leftId = na.x <= nb.x ? a : b;
+        let rightId= na.x <= nb.x ? b : a;
         const nL = na.x <= nb.x ? na : nb;
         const nR = na.x <= nb.x ? nb : na;
 
-        const lRight = (overrides[left]?.x ?? nL.x) + NODE_W;
-        const rLeft  = (overrides[right]?.x ?? nR.x);
+        // 避免移動“共用的一側”：若右側是共用、左側不是，就改移左側；反之亦然。
+        const rightShared = (unionCountByPerson[rightId]||0) > 1;
+        const leftShared  = (unionCountByPerson[leftId] ||0) > 1;
+
+        const lRight = (overrides[leftId]?.x ?? nL.x) + NODE_W;
+        const rLeft  = (overrides[rightId]?.x ?? nR.x);
         const gap = rLeft - lRight;
         const need = COUPLE_GAP_MIN - NODE_W - gap;
         if(need > 0){
-          overrides[right] = Object.assign({}, overrides[right]||{}, { x:(overrides[right]?.x ?? nR.x)+need, y:yAlign });
+          if(!rightShared || leftShared){ // 優先推右邊；如果右邊是共用而左邊不是，就推左邊
+            overrides[rightId] = Object.assign({}, overrides[rightId]||{}, { x:(overrides[rightId]?.x ?? nR.x)+need, y:yAlign });
+          }else{
+            overrides[leftId]  = Object.assign({}, overrides[leftId] ||{}, { x:(overrides[leftId]?.x  ?? nL.x)-need, y:yAlign });
+          }
         }
       });
 
-      /* 每段婚姻的子女（保持新增順序） */
+      /* 每段婚姻的子女（保持資料新增順序） */
       const unionKids = {};
       const childrenIdSet = new Set();
       Object.values(doc.unions).forEach(u=>{
@@ -319,19 +331,25 @@ HTML = r"""
 
       enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
 
-      /* 先以父母婚點中線放置自己的孩子（嚴格先到位），再做同層群組互推 */
+      /* 為每段婚姻建立固定 anchor（unionMidX），整個 render 週期不再改變 */
+      const unionMidX = {};     // uid -> 中線 x
+      const unionLineY = {};    // uid -> 婚線 y（分層用）
+      Object.values(doc.unions).forEach(u=>{
+        const [pa,pb]=u.partners;
+        const na = pickNode(layout, pa, overrides);
+        const nb = pickNode(layout, pb, overrides);
+        if(!na || !nb) return;
+        unionMidX[u.id]  = (na.x + nb.x + NODE_W) / 2;
+        unionLineY[u.id] = na.y + NODE_H/2;
+      });
+
+      /* 先把每段婚姻的孩子放在自己的 anchor 正下方（嚴格先到位） */
       const clustersByLayer = {};
       Object.entries(unionKids).forEach(([uid,kids])=>{
-        const u = doc.unions[uid];
-        const na = pickNode(layout, u.partners[0], overrides);
-        const nb = pickNode(layout, u.partners[1], overrides);
-        if(!na || !nb) return;
+        const midX = unionMidX[uid];
+        const marryY = unionLineY[uid];
+        if(midX==null || marryY==null) return;
 
-        const midX = (na.x + nb.x + NODE_W) / 2;
-        const marriageY = na.y + NODE_H/2;                   // ★ 用婚線 y 分層（更穩定）
-        const layerKey = Math.round(marriageY / LAYER_TOLERANCE);
-
-        // 建 block，計算若孩子有配偶，寬度需包含夫妻距離
         const blocks = kids.map(cid=>{
           const k = pickNode(layout, cid, overrides);
           if(!k) return null;
@@ -346,13 +364,14 @@ HTML = r"""
           return { kidId:cid, mateId, hasMate, width, y:k.y };
         }).filter(Boolean);
 
-        const localGap = SIBLING_GAP_BASE + Math.max(0, blocks.length - 3) * 8;
+        const localGap   = SIBLING_GAP_BASE + Math.max(0, blocks.length - 3) * 8;
         const totalWidth = blocks.reduce((s,b)=>s+b.width,0) + (blocks.length-1)*localGap;
-
-        // ★ 先把自己的群組直接置中到父母中線（嚴格先到位）
         let startX = midX - totalWidth/2;
+
         blocks.forEach(b=>{
+          // 孩子就位
           overrides[b.kidId] = Object.assign({}, overrides[b.kidId]||{}, { x: startX });
+          // 若有配偶，一起就位
           if(b.hasMate){
             const mateX = startX + COUPLE_GAP_MIN + NODE_W;
             const my = (overrides[b.kidId]?.y ?? b.y);
@@ -362,11 +381,12 @@ HTML = r"""
         });
 
         const x0 = midX - totalWidth/2, x1 = x0 + totalWidth;
+        const layerKey = Math.round(marryY / LAYER_TOLERANCE);
         if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
-        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX, blocks });
+        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX });
       });
 
-      /* 同層群組左→右掃描，確保群組間至少 MIN_CLUSTER_GAP */
+      /* 同層家庭群組左→右掃描，確保至少 MIN_CLUSTER_GAP，僅推動“後來的群組” */
       Object.values(clustersByLayer).forEach(list=>{
         list.sort((a,b)=>a.rect.x0 - b.rect.x0);
         if(!list.length) return;
@@ -375,11 +395,12 @@ HTML = r"""
           const wantLeft = cursorRight + MIN_CLUSTER_GAP;
           if(list[i].rect.x0 < wantLeft){
             const shift = wantLeft - list[i].rect.x0;
-            // 平移此群組的所有孩子與配偶
+            // 平移此群組的所有孩子與其配偶
             const kids = unionKids[list[i].unionId] || [];
             kids.forEach(cid=>{
               const curX = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
               overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: curX + shift });
+              // 孩子的配偶也一起平移
               const mateUnion = Object.values(doc.unions).find(xx => (xx.partners||[]).includes(cid) && xx.partners.length===2);
               if(mateUnion){
                 const [pa,pb]=mateUnion.partners;
@@ -391,16 +412,14 @@ HTML = r"""
                 }
               }
             });
-            // 更新群組外框
-            list[i].rect.x0 += shift;
-            list[i].rect.x1 += shift;
-            list[i].anchorX += shift;
+            // 更新群組外框 & anchor（孩子是動的，父母 anchor 不動）
+            list[i].rect.x0 += shift; list[i].rect.x1 += shift; list[i].anchorX += shift;
           }
           cursorRight = list[i].rect.x1;
         }
       });
 
-      /* 邊界 */
+      /* 邊界計算（不含婚點） */
       let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
@@ -412,11 +431,10 @@ HTML = r"""
         maxY = Math.max(maxY, nn.y + NODE_H);
       });
       if(!isFinite(minX)){ minX=0; minY=0; maxX=(layout.width||1000); maxY=(layout.height||600); }
-
       const w=Math.ceil((maxX-minX)+MARGIN*2), h=Math.ceil((maxY-minY)+MARGIN*2);
       content={w,h}; if(autoFit) vb = computeFitViewBox(w,h);
 
-      /* 為同層婚姻分配不重複 bus 高度（避免看成同一條） */
+      /* 為同層婚姻分配不同 bus 高度（避免看成同一條） */
       const laneOffsetByUnion = {};
       Object.values(clustersByLayer).forEach(list=>{
         list.sort((a,b)=>a.anchorX - b.anchorX);
@@ -433,17 +451,18 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
-      /* 婚姻線 + 中點 + 子女連線（以自己的父母婚點為起點） */
+      /* 婚姻線 + 中點 + 子女連線（統一用 unionMidX 與 unionLineY） */
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = pickNode(layout, aid, overrides);
         const nb = pickNode(layout, bid, overrides);
         if(!na||!nb) return;
 
-        const y = na.y + NODE_H/2;
+        const y = unionLineY[u.id];      // 固定的婚線 y
+        const midX = unionMidX[u.id];    // 固定的婚線中點
+
         const xLeft  = Math.min(na.x+NODE_W, nb.x);
         const xRight = Math.max(na.x+NODE_W, nb.x);
-        const midX   = (na.x + nb.x + NODE_W) / 2;
 
         const line = document.createElementNS("http://www.w3.org/2000/svg","line");
         line.setAttribute("x1",xLeft); line.setAttribute("y1",y);
