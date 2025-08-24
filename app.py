@@ -54,7 +54,7 @@ HTML = r"""
     <div class="card">
       <div class="canvas" id="canvas"></div>
       <div class="hint" style="margin-top:.5rem">
-        規則：離婚顯示為虛線；無子女的婚姻不往下連；婚姻點在水平線中點。
+        規則：離婚顯示為虛線；無子女的婚姻不往下連；婚姻點在水平線中點；配偶緊鄰同層。
       </div>
     </div>
 
@@ -144,10 +144,10 @@ HTML = r"""
     });
   }
 
-  /** 關鍵修正：
-   *  讓配偶同層：改成 a→union、b→union（兩邊都指向 union），
-   *  不再用 a→union→b 這種會把 b 推到下一層的寫法。
-   *  婚姻水平線與中點仍由 render() 自行繪製。
+  /** 佈局圖
+   *  - a→union、b→union：保證配偶同層
+   *  - a→b（INFLUENCE，高優先級）：提示佈局把 b 排在 a 旁邊
+   *  - union→child：只有有子女才連
    */
   function buildElkGraph(){
     const nodes=[], edges=[];
@@ -161,6 +161,9 @@ HTML = r"""
       const [a,b]=u.partners;
       edges.push({ id:uid("E"), sources:[a], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
       edges.push({ id:uid("E"), sources:[b], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
+      // 隱形排序邊：偏好 b 在 a 右側、貼近 a
+      edges.push({ id:uid("E"), sources:[a], targets:[b],
+                   layoutOptions:{ "elk.priority":"1000", "elk.edge.type":"INFLUENCE" }});
     });
 
     doc.children.forEach(cl=>{
@@ -199,7 +202,7 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN},${MARGIN})`);
       svg.appendChild(root);
 
-      // 夫妻水平線 + 中點 union（離婚虛線；無子女不往下）
+      // 婚姻水平線 + 中點（離婚虛線；無子女不往下）
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = (layout.children||[]).find(n=>n.id===aid);
@@ -233,7 +236,6 @@ HTML = r"""
         dot.addEventListener("click",()=>{ selected={type:"union", id:u.id}; updateSelectionInfo(); });
         root.appendChild(dot);
 
-        // 子女（有才畫）
         const kids = doc.children.filter(cl=>cl.unionId===u.id);
         if(kids.length>0){
           kids.forEach(cl=>{
