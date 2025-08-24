@@ -191,15 +191,19 @@ def draw_tree():
         return
 
     dot = Digraph("Family", format="svg", engine="dot")
-    dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.5", ranksep="0.7")
+    dot.graph_attr.update(
+        rankdir="TB",
+        splines="ortho",
+        nodesep="0.5",
+        ranksep="0.7",
+        concentrate="false",   # 重要：避免把多條邊合併成一條
+    )
 
     # 節點
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 版本識別：FT-v20250824-1219
-
-    # 多段婚姻的水平排序（配偶分列於當事人兩側；不固定左右）
+    # —— 多段婚姻：配偶分列於當事人兩側（不固定左右），且相鄰 ——
     spouse_groups = {}
     for mid, m in d["marriages"].items():
         a, b, _div = m["a"], m["b"], m["divorced"]
@@ -209,55 +213,63 @@ def draw_tree():
     for person, sids in spouse_groups.items():
         if len(sids) < 2:
             continue
-        # 穩定排序（以姓名排序），再交錯分配到左右兩側；不限定誰在左誰在右。
         try:
             sids_sorted = sorted(sids, key=lambda x: d["persons"][x]["name"])
         except Exception:
             sids_sorted = sorted(sids)
-        left = sids_sorted[::2]
+        left  = sids_sorted[::2]
         right = sids_sorted[1::2]
         seq = left + [person] + right
         with dot.subgraph() as s:
             s.attr(rank="same", ordering="out")
             for n in seq:
                 s.node(n)
-            # 用高權重、有約束的不可見邊固定水平相鄰順序，確保「配偶—當事人—配偶」相鄰
+            # 高權重 + 有約束的不可見邊 → 保證水平相鄰
             for i in range(len(seq) - 1):
                 s.edge(seq[i], seq[i+1], style="invis", weight="100", constraint="true", minlen="1")
 
-    # 夫妻（婚姻節點）+ 子女
-    # 我們為每一段婚姻建一個「小圓點」junction，孩子由此垂直連結
+    # —— 夫妻（婚姻接點）+ 子女 —— 
     # anchor：mid=夫妻中點、a=配偶A下方、b=配偶B下方
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         anchor = m.get("anchor", "mid")
         jn = f"J_{mid}"
-        dot.node(jn, "", shape="point", width="0.01", style="invis", color=BORDER_COLOR)
+
+        # 用不可見的小方塊做接點（有上下port，才能強制垂直）
+        dot.node(
+            jn, "",
+            shape="box", width="0.01", height="0.01",
+            style="invis", fixedsize="true", color=BORDER_COLOR
+        )
+
         style = "dashed" if divorced else "solid"
 
-        # 夫妻併排（同一水平）
+        # 夫妻同一水平
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a); s.node(b)
 
         if anchor == "mid":
-            # A–jn–B 橫線；jn 與 A/B 同 rank，孩子從 jn 往下
+            # A — jn — B：兩段可見橫線；jn 與 A/B 同 rank，看起來像一條直線
             with dot.subgraph() as s:
                 s.attr(rank="same")
                 s.node(a); s.node(jn); s.node(b)
-            # 兩段可見橫線（現任=實線、前任=虛線）
-            dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR, weight="100", minlen="1", tailport="e", headport="w")
-            dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR, weight="100", minlen="1", tailport="e", headport="w")
+            dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR,
+                     weight="100", minlen="1", tailport="e", headport="w")
+            dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR,
+                     weight="100", minlen="1", tailport="e", headport="w")
         elif anchor == "a":
-            # 夫妻橫線 + 從 A 垂直下接點（A—B 線固定為橫線）
+            # 夫妻橫線 + 從 A 垂直下接點
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
-            dot.edge(a, jn, dir="none", color=BORDER_COLOR)
+            dot.edge(a, jn, color=BORDER_COLOR,
+                     weight="100", minlen="1", tailport="s", headport="n")
         else:
-            # anchor == "b"：夫妻橫線 + 從 B 垂直下接點
+            # anchor == "b"
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
-            dot.edge(b, jn, dir="none", color=BORDER_COLOR)
+            dot.edge(b, jn, color=BORDER_COLOR,
+                     weight="100", minlen="1", tailport="s", headport="n")
 
-        # 小孩垂直往下
+        # 子女：一律從接點「純垂直」往下，不再形成水平幹線
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
             with dot.subgraph() as s:
@@ -265,42 +277,32 @@ def draw_tree():
                 for c in kids:
                     s.node(c)
             for c in kids:
-                dot.edge(jn, c, color=BORDER_COLOR)
+                dot.edge(jn, c, color=BORDER_COLOR,
+                         weight="100", minlen="1", tailport="s", headport="n")
 
-    # 兄弟姊妹(無共同父母時)用虛線相連，並強制 rank=same
-    # 收集已有共同父母的兄弟姊妹，避免重複畫
+    # —— 無共同父母的兄弟姊妹（虛線水平相連） ——
     _, parent_map = build_child_map()
     def has_same_parents(x, y):
         return parent_map.get(x, set()) and parent_map.get(x, set()) == parent_map.get(y, set())
 
-    # 找出所有兄弟姊妹(無父母關聯且未畫過者)，將其水平排列並用虛線連
-    sib_groups = []
-    visited = set()
+    sib_groups, visited = [], set()
     for pid in d["persons"].keys():
         if pid in visited:
             continue
-        # BFS 搜尋與 pid 互為「手動標記兄弟」且沒有共同父母的人
-        q = deque([pid])
-        group = set([pid])
+        q, group = deque([pid]), set([pid])
         visited.add(pid)
         while q:
             cur = q.popleft()
-            # 透過 sibling_links 蒐集無共同父母的連結
             for x, y in d["sibling_links"]:
                 other = None
-                if x == cur:
-                    other = y
-                elif y == cur:
-                    other = x
+                if x == cur: other = y
+                elif y == cur: other = x
                 if other and other not in visited and not has_same_parents(cur, other):
-                    group.add(other)
-                    visited.add(other)
-                    q.append(other)
+                    group.add(other); visited.add(other); q.append(other)
         if len(group) >= 2:
             sib_groups.append(sorted(list(group)))
 
     for grp in sib_groups:
-        # 強制同 rank 並用虛線連
         with dot.subgraph() as s:
             s.attr(rank="same")
             for node in grp:
@@ -309,6 +311,7 @@ def draw_tree():
             dot.edge(grp[i], grp[i+1], style="dashed", color=BORDER_COLOR)
 
     st.graphviz_chart(dot)
+
 
 # -------------------------------
 # Pages
