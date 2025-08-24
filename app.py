@@ -328,12 +328,15 @@ def draw_tree():
             s.node(a)
             s.node(b)
         if anchor == "mid":
-            # 將 jn 與夫妻同一水平，畫成 A–jn–B 的橫線；jn 不顯示，看起來像一條直線
+            # 把 a, jn, b 放在同一水平且固定順序，確保是一條完全水平的直線
             with dot.subgraph() as s:
                 s.attr(rank="same")
+                s.node(a)
                 s.node(jn)
-            dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
-            dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR)
+                s.node(b)
+            # 用高權重與指定埠，強制畫成水平直線；jn 隱形但可作為子女的垂直接點
+            dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR, weight="100", minlen="1", tailport="e", headport="w")
+            dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR, weight="100", minlen="1", tailport="e", headport="w")
         elif anchor == "a":
             # 先畫夫妻橫線，再由 A 垂直往下到接點
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
