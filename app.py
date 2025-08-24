@@ -109,20 +109,20 @@ HTML = r"""
 (function(){
   const elk = new ELK();
 
-  /* 尺寸與間距（調整） */
+  /* 尺寸與間距 */
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 18;     // ✅ 夫妻最小距離：縮小
-  const LAYER_GAP_MIN  = NODE_W + 60;     // 非子女同層最小距離
+  const COUPLE_GAP_MIN = NODE_W + 18;     // 夫妻最小距離（小）
+  const LAYER_GAP_MIN  = NODE_W + 60;     // 非子女同層距離
   const LAYER_TOLERANCE = 20;
-  const SIBLING_GAP = 36;                 // 兄弟姊妹基礎間距（會動態加大）
-  const CLUSTER_GAP = 56;                 // 不同婚姻的子女群組間距
-  const BUS_OFFSET_STEPS = [-14,-6,6,14,22]; // bus 高度輪替
+  const SIBLING_GAP_BASE = 36;            // 兄弟姊妹基礎間距
+  const CLUSTER_GAP = 56;                 // 不同婚姻子女群組距離
+  const BUS_STEPS = [-14,-6,6,14,22];     // 同層不同婚姻的 bus 高度輪替
   const CHILD_TOP_GAP = 18;
 
   /* 視圖狀態 */
   let vb = {x:0,y:0,w:1000,h:600};
   let content = {w:1000,h:600};
-  let isPanning = false, panStart = {x:0,y:0}, vbStart = {x:0,y:0};
+  let isPanning=false, panStart={x:0,y:0}, vbStart={x:0,y:0};
 
   /* 資料 */
   let doc = { persons:{}, unions:{}, children:[] };
@@ -134,7 +134,7 @@ HTML = r"""
     const p={}, u={}, list=[
       "陳一郎","陳前妻","陳妻",
       "陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
-      "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A"
+      "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A","三孩B"
     ].map(n=>({id:uid("P"), name:n, deceased:false}));
     list.forEach(pp=>p[pp.id]=pp);
     const id = n=>list.find(x=>x.name===n).id;
@@ -157,6 +157,7 @@ HTML = r"""
       {unionId:m5.id, childId:id("二孩B")},
       {unionId:m5.id, childId:id("二孩C")},
       {unionId:m6.id, childId:id("三孩A")},
+      {unionId:m6.id, childId:id("三孩B")},
     ];
     doc = { persons:p, unions:u, children };
     selected = {type:null,id:null};
@@ -298,72 +299,64 @@ HTML = r"""
         }
       });
 
-      /* 子女資料（群組） */
+      /* 每段婚姻的子女（保持新增順序） */
       const unionKids = {};
       const childrenIdSet = new Set();
       Object.values(doc.unions).forEach(u=>{
-        const kids = doc.children.filter(cl=>cl.unionId===u.id).map(cl=>cl.childId);
+        const kids = doc.children   // ☆ 依資料順序，不再用 ELK 的 x 排序
+          .filter(cl=>cl.unionId===u.id)
+          .map(cl=>cl.childId);
         if(kids.length>0){ unionKids[u.id]=kids; kids.forEach(id=>childrenIdSet.add(id)); }
       });
 
       enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
 
-      /* —— 以父母婚點為中心，排兄弟姊妹「區塊」（孩子+配偶） —— */
+      /* —— 以父母婚點為中心，直接按資料順序排手足區塊 —— */
       const clustersByLayer = {};
       Object.entries(unionKids).forEach(([uid,kids])=>{
         const u = doc.unions[uid];
         const na = pickNode(layout, u.partners[0], overrides);
         const nb = pickNode(layout, u.partners[1], overrides);
         if(!na || !nb) return;
-        const midX = (na.x + nb.x + NODE_W) / 2;   // anchor
 
-        const kidNodes = kids
-          .map(id=>pickNode(layout, id, overrides))
-          .filter(Boolean)
-          .sort((a,b)=>a.x - b.x);
-        if(kidNodes.length===0) return;
-
-        const layerKey = Math.round(kidNodes[0].y / LAYER_TOLERANCE);
-
-        const blocks = kidNodes.map(k=>{
-          const myUnions = Object.values(doc.unions).filter(xx => (xx.partners||[]).includes(k.id));
-          const myMateUnion = myUnions[0];
-          let hasMate = false, mateId = null, hasGrandKids = false;
-          if (myMateUnion) {
-            const [pa,pb] = myMateUnion.partners;
-            mateId = (pa===k.id)? pb : pa;
+        const midX = (na.x + nb.x + NODE_W) / 2;  // 只用父母中線
+        // 依資料順序建立 blocks，不以 ELK.x 排序
+        const blocks = kids.map(cid=>{
+          const k = pickNode(layout, cid, overrides);
+          if(!k) return null;
+          const mateUnion = Object.values(doc.unions).find(xx => (xx.partners||[]).includes(cid) && xx.partners.length===2);
+          let hasMate=false, mateId=null;
+          if(mateUnion){
+            const [pa,pb]=mateUnion.partners;
+            mateId = (pa===cid)? pb : pa;
             hasMate = !!mateId && !!doc.persons[mateId];
-            // 是否有第三代（讓同代孩子間距可加大）
-            hasGrandKids = doc.children.some(cl => cl.unionId === myMateUnion.id);
           }
           const width = hasMate ? (NODE_W + COUPLE_GAP_MIN + NODE_W) : NODE_W;
-          return { kidId:k.id, mateId, hasMate, hasGrandKids, width, y: k.y };
-        });
+          return { kidId:cid, mateId, hasMate, width, y:k.y };
+        }).filter(Boolean);
 
-        // ✅ 動態兄弟姊妹間距：孩子越多，越加寬（每多一個 +8）
-        const localGap = SIBLING_GAP + Math.max(0, blocks.length - 3) * 8;
-
-        const totalWidth = blocks.reduce((s,b)=> s+b.width, 0) + (blocks.length-1)*localGap;
-        let startX = midX - totalWidth/2;
+        const localGap = SIBLING_GAP_BASE + Math.max(0, blocks.length - 3) * 8;
+        const totalWidth = blocks.reduce((s,b)=>s+b.width,0) + (blocks.length-1)*localGap;
+        let startX = midX - totalWidth/2;               // 以父母中線置中
 
         blocks.forEach(b=>{
           const childX = startX;
           overrides[b.kidId] = Object.assign({}, overrides[b.kidId]||{}, { x: childX });
-          if (b.hasMate) {
+          if(b.hasMate){
             const mateX = childX + COUPLE_GAP_MIN + NODE_W;
             overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: overrides[b.kidId]?.y ?? b.y });
           }
           startX += b.width + localGap;
         });
 
-        const x0 = midX - totalWidth/2;
-        const x1 = x0 + totalWidth;
+        const layerKey = Math.round((pickNode(layout, kids[0], overrides) || {}).y / LAYER_TOLERANCE);
+        const x0 = midX - totalWidth/2, x1 = x0 + totalWidth;
         if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
         clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX });
       });
 
-      /* 群組互推（用 anchor 排序） */
-      Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
+      /* 群組互推（用 anchor 排序，維持左右相對順序） */
+      Object.entries(clustersByLayer).forEach(([k,list])=>{
         list.sort((a,b)=>a.anchorX - b.anchorX);
         let cursorRight = list[0].rect.x1;
         for(let i=1;i<list.length;i++){
@@ -374,16 +367,15 @@ HTML = r"""
             kids.forEach(cid=>{
               const curX = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
               overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: curX + shift });
-              // 連配偶一起移
-              const myUnions = Object.values(doc.unions).filter(xx => (xx.partners||[]).includes(cid));
-              const mateUnion = myUnions[0];
-              if (mateUnion) {
-                const [pa,pb] = mateUnion.partners;
+              // 把孩子的配偶也一起平移
+              const mateUnion = Object.values(doc.unions).find(xx => (xx.partners||[]).includes(cid) && xx.partners.length===2);
+              if(mateUnion){
+                const [pa,pb]=mateUnion.partners;
                 const mateId = (pa===cid)? pb : pa;
-                if (mateId && doc.persons[mateId]) {
-                  const curMateX = overrides[mateId]?.x ?? pickNode(layout, mateId, overrides).x;
-                  const curMateY = overrides[mateId]?.y ?? pickNode(layout, mateId, overrides).y;
-                  overrides[mateId] = Object.assign({}, overrides[mateId]||{}, { x: curMateX + shift, y: curMateY });
+                if(mateId && doc.persons[mateId]){
+                  const mx = overrides[mateId]?.x ?? pickNode(layout, mateId, overrides).x;
+                  const my = overrides[mateId]?.y ?? pickNode(layout, mateId, overrides).y;
+                  overrides[mateId] = Object.assign({}, overrides[mateId]||{}, { x: mx + shift, y: my });
                 }
               }
             });
@@ -394,7 +386,7 @@ HTML = r"""
       });
 
       /* 邊界 */
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
         const nn = pickNode(layout, n.id, overrides);
@@ -406,26 +398,21 @@ HTML = r"""
       });
       if(!isFinite(minX)){ minX=0; minY=0; maxX=(layout.width||1000); maxY=(layout.height||600); }
 
-      const w = Math.ceil((maxX - minX) + MARGIN*2);
-      const h = Math.ceil((maxY - minY) + MARGIN*2);
-      content = {w, h};
-      if(autoFit) vb = computeFitViewBox(w, h);
+      const w=Math.ceil((maxX-minX)+MARGIN*2), h=Math.ceil((maxY-minY)+MARGIN*2);
+      content={w,h}; if(autoFit) vb = computeFitViewBox(w,h);
 
-      /* ➜ 為每層的婚姻分配「不重複的 bus 高度」 */
+      /* 為同層婚姻分配不重複 bus 高度（避免看成同一條） */
       const laneOffsetByUnion = {};
       Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
         list.sort((a,b)=>a.anchorX - b.anchorX);
-        list.forEach((it,i)=>{
-          laneOffsetByUnion[it.unionId] = BUS_OFFSET_STEPS[i % BUS_OFFSET_STEPS.length];
-        });
+        list.forEach((it,i)=>{ laneOffsetByUnion[it.unionId] = BUS_STEPS[i % BUS_STEPS.length]; });
       });
 
       /* SVG */
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-      svg.setAttribute("width", "100%");
-      svg.setAttribute("height", "100%");
+      svg.setAttribute("width","100%"); svg.setAttribute("height","100%");
       svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
-      svg.style.background = "#fff";
+      svg.style.background="#fff";
 
       const root = document.createElementNS("http://www.w3.org/2000/svg","g");
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
@@ -444,40 +431,32 @@ HTML = r"""
         const midX   = (na.x + nb.x + NODE_W) / 2;
 
         const line = document.createElementNS("http://www.w3.org/2000/svg","line");
-        line.setAttribute("x1", xLeft);
-        line.setAttribute("y1", y);
-        line.setAttribute("x2", xRight);
-        line.setAttribute("y2", y);
-        line.setAttribute("stroke","var(--line)");
-        line.setAttribute("stroke-width","2");
+        line.setAttribute("x1",xLeft); line.setAttribute("y1",y);
+        line.setAttribute("x2",xRight); line.setAttribute("y2",y);
+        line.setAttribute("stroke","var(--line)"); line.setAttribute("stroke-width","2");
         if(u.status==="divorced") line.setAttribute("stroke-dasharray","6,4");
         root.appendChild(line);
 
         const dot = document.createElementNS("http://www.w3.org/2000/svg","rect");
-        dot.setAttribute("x", midX-5);
-        dot.setAttribute("y", y-5);
-        dot.setAttribute("width", 10);
-        dot.setAttribute("height", 10);
-        dot.setAttribute("fill","var(--bg)");
-        dot.setAttribute("stroke","var(--border)");
+        dot.setAttribute("x",midX-5); dot.setAttribute("y",y-5);
+        dot.setAttribute("width",10); dot.setAttribute("height",10);
+        dot.setAttribute("fill","var(--bg)"); dot.setAttribute("stroke","var(--border)");
         dot.setAttribute("stroke-width","2");
         dot.addEventListener("click",()=>{ selected={type:"union", id:u.id}; updateSelectionInfo(); });
         root.appendChild(dot);
 
         const kids = (unionKids[u.id]||[]);
         if(kids.length>0){
-          const offBase = laneOffsetByUnion[u.id] ?? 0;   // ✅ 同層不同婚姻給不同高度
+          const offBase = laneOffsetByUnion[u.id] ?? 0;
           kids.forEach(cid=>{
             const nc = pickNode(layout, cid, overrides);
             if(!nc) return;
             const childTop = nc.y;
             let busY = childTop + offBase;
             busY = Math.min(busY, childTop - CHILD_TOP_GAP);
-
             const cx = nc.x + NODE_W/2;
             const path = document.createElementNS("http://www.w3.org/2000/svg","path");
-            const d = `M ${midX} ${y} L ${midX} ${busY} L ${cx} ${busY} L ${cx} ${childTop}`;
-            path.setAttribute("d", d);
+            path.setAttribute("d", `M ${midX} ${y} L ${midX} ${busY} L ${cx} ${busY} L ${cx} ${childTop}`);
             path.setAttribute("fill","none");
             path.setAttribute("stroke","var(--line)");
             path.setAttribute("stroke-width","2");
@@ -501,7 +480,7 @@ HTML = r"""
         r.classList.add("node");
         r.addEventListener("click",()=>{ selected={type:"person", id:n.id}; updateSelectionInfo(); });
         const t=document.createElementNS("http://www.w3.org/2000/svg","text");
-        t.setAttribute("x", NODE_W/2); t.setAttribute("y", NODE_H/2+5);
+        t.setAttribute("x",NODE_W/2); t.setAttribute("y",NODE_H/2+5);
         t.setAttribute("text-anchor","middle"); t.setAttribute("fill","var(--fg)"); t.setAttribute("font-size","14");
         t.textContent = (person.name || "?") + (person.deceased ? "（殁）" : "");
         g.appendChild(r); g.appendChild(t); root.appendChild(g);
@@ -511,29 +490,23 @@ HTML = r"""
 
       /* Pan / Zoom */
       function applyViewBox(){ svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); }
-      svg.addEventListener("mousedown", (e)=>{
-        isPanning = true; panStart = {x:e.clientX, y:e.clientY}; vbStart = {x:vb.x, y:vb.y, w:vb.w, h:vb.h};
-      });
-      window.addEventListener("mousemove", (e)=>{
+      svg.addEventListener("mousedown",(e)=>{ isPanning=true; panStart={x:e.clientX,y:e.clientY}; vbStart={x:vb.x,y:vb.y,w:vb.w,h:vb.h}; });
+      window.addEventListener("mousemove",(e)=>{
         if(!isPanning) return;
-        const dx = (e.clientX - panStart.x) * (vb.w / svg.clientWidth);
-        const dy = (e.clientY - panStart.y) * (vb.h / svg.clientHeight);
+        const dx=(e.clientX-panStart.x)*(vb.w/svg.clientWidth);
+        const dy=(e.clientY-panStart.y)*(vb.h/svg.clientHeight);
         vb.x = vbStart.x - dx; vb.y = vbStart.y - dy; applyViewBox();
       });
-      window.addEventListener("mouseup", ()=>{ isPanning=false; });
-      svg.addEventListener("wheel", (e)=>{
+      window.addEventListener("mouseup",()=>{ isPanning=false; });
+      svg.addEventListener("wheel",(e)=>{
         e.preventDefault();
-        const scale = (e.deltaY>0)? 1.1 : 0.9;
-        const rect = svg.getBoundingClientRect();
-        const px = (e.clientX - rect.left) / rect.width;
-        const py = (e.clientY - rect.top)  / rect.height;
-        const newW = vb.w * scale, newH = vb.h * scale;
-        vb.x = vb.x + vb.w*px - newW*px;
-        vb.y = vb.y + vb.h*py - newH*py;
-        vb.w = newW; vb.h = newH;
-        applyViewBox();
-      }, {passive:false});
-
+        const s=(e.deltaY>0)?1.1:0.9;
+        const rect=svg.getBoundingClientRect();
+        const px=(e.clientX-rect.left)/rect.width, py=(e.clientY-rect.top)/rect.height;
+        const nw=vb.w*s, nh=vb.h*s;
+        vb.x = vb.x + vb.w*px - nw*px; vb.y = vb.y + vb.h*py - nh*py;
+        vb.w = nw; vb.h = nh; applyViewBox();
+      },{passive:false});
       document.getElementById("zoomIn").onclick = ()=>{ vb.w*=0.9; vb.h*=0.9; applyViewBox(); };
       document.getElementById("zoomOut").onclick= ()=>{ vb.w*=1.1; vb.h*=1.1; applyViewBox(); };
       document.getElementById("zoomFit").onclick= ()=>{ vb = computeFitViewBox(content.w, content.h); applyViewBox(); };
@@ -555,26 +528,25 @@ HTML = r"""
     updateSelectionInfo();
   }
 
-  /* 右側編輯 */
   function updateSelectionInfo(){
     const el = document.getElementById("selInfo");
     const btnDead = document.getElementById("btnToggleDead");
-    const btnDiv  = document.getElementById("btnToggleDivorce");
+    theBtnToggleDivorce = document.getElementById("btnToggleDivorce");
     const btnDel  = document.getElementById("btnDelete");
 
-    btnDead.style.display = "none";
-    btnDiv.style.display  = "none";
-    btnDel.style.display  = "none";
+    btnDead.style.display="none";
+    theBtnToggleDivorce.style.display="none";
+    btnDel.style.display="none";
 
     if(!selected.type){ el.textContent="尚未選取節點。"; return; }
 
     if(selected.type==="person"){
       const p = doc.persons[selected.id] || {};
       el.textContent = "選取人物：" + (p.name || "?") + (p.deceased?"（殁）":"") + "（ID: "+selected.id+"）";
-      btnDead.style.display = "inline-block";
+      btnDead.style.display="inline-block";
       btnDead.textContent = p.deceased ? "取消身故" : "標記身故";
       btnDead.onclick = ()=>{ p.deceased = !p.deceased; render(); };
-      btnDel.style.display = "inline-block";
+      btnDel.style.display="inline-block";
       btnDel.onclick = ()=>{
         const pid = selected.id;
         delete doc.persons[pid];
@@ -586,13 +558,13 @@ HTML = r"""
       };
     }else{
       const u = doc.unions[selected.id] || {};
-      const [a,b] = u.partners||[];
+      const [a,b]=u.partners||[];
       el.textContent = "選取婚姻：" + (doc.persons[a]?.name||"?") + " ↔ " + (doc.persons[b]?.name||"?") +
                        "（狀態：" + (u.status==="divorced"?"離婚":"婚姻") + "）";
-      btnDiv.style.display = "inline-block";
-      btnDiv.textContent = (u.status==="divorced") ? "恢復婚姻" : "設為離婚";
-      btnDiv.onclick = ()=>{ u.status = (u.status==="divorced") ? "married" : "divorced"; render(); };
-      btnDel.style.display = "inline-block";
+      theBtnToggleDivorce.style.display="inline-block";
+      theBtnToggleDivorce.textContent = (u.status==="divorced")?"恢復婚姻":"設為離婚";
+      theBtnToggleDivorce.onclick = ()=>{ u.status = (u.status==="divorced")?"married":"divorced"; render(); };
+      btnDel.style.display="inline-block";
       btnDel.onclick = ()=>{
         const uid_ = selected.id;
         delete doc.unions[uid_];
@@ -623,7 +595,7 @@ HTML = r"""
     const mid = document.getElementById("selUnion").value; if(!mid) return;
     const name = document.getElementById("nameChild").value.trim();
     const id = uid("P"); doc.persons[id]={id, name: name || ("新子女 " + (doc.children.length+1)), deceased:false};
-    doc.children.push({unionId: mid, childId: id});
+    doc.children.push({unionId: mid, childId: id});    // 以資料順序記錄
     document.getElementById("nameChild").value=""; render();
   });
 
