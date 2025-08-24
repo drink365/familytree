@@ -313,25 +313,29 @@ def draw_tree():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 多段婚姻的水平排序（前任在左、現任在右）
+    # 多段婚姻的水平排序（配偶分列於當事人兩側；不固定左右）
     spouse_groups = {}
     for mid, m in d["marriages"].items():
-        a, b, divorced = m["a"], m["b"], m["divorced"]
-        spouse_groups.setdefault(a, []).append((b, divorced))
-        spouse_groups.setdefault(b, []).append((a, divorced))
+        a, b, _div = m["a"], m["b"], m["divorced"]
+        spouse_groups.setdefault(a, []).append(b)
+        spouse_groups.setdefault(b, []).append(a)
 
-    for person, lst in spouse_groups.items():
-        if len(lst) < 2:
+    for person, sids in spouse_groups.items():
+        if len(sids) < 2:
             continue
-        left = [sid for sid, div in lst if div]
-        right = [sid for sid, div in lst if not div]
-        if not left and not right:
-            continue
+        # 穩定排序（以名字排序），再交錯分配到左右兩側；不限定誰在左誰在右
+        try:
+            sids_sorted = sorted(sids, key=lambda x: d["persons"][x]["name"])
+        except Exception:
+            sids_sorted = sorted(sids)
+        left = sids_sorted[::2]
+        right = sids_sorted[1::2]
+        seq = left + [person] + right
         with dot.subgraph() as s:
             s.attr(rank="same", ordering="out")
-            seq = left + [person] + right
             for n in seq:
                 s.node(n)
+            # 用不可見邊固定水平相鄰順序；當只有兩位配偶時，會是 [配偶1, 當事人, 配偶2]
             for i in range(len(seq) - 1):
                 s.edge(seq[i], seq[i+1], style="invis", constraint="false")
     # 夫妻（婚姻節點）+ 子女
