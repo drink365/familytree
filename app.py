@@ -366,30 +366,32 @@ def tab_relations():
                 st.success(f"已建立婚姻：{display_name(p1)}－{display_name(p2)}（{'離婚' if divorced else '在婚'}）")
                 st.rerun()
 
-    st.markdown("### 把子女掛到父母（某段婚姻）")
-    with st.form("form_attach_child"):
-        # 可選婚姻清單（美化顯示）
-        mar_display = []
-        mar_ids = []
-        for mid, m in d["marriages"].items():
-            a, b = display_name(m["p1"]), display_name(m["p2"])
-            tag = "（離婚）" if m["divorced"] else "（在婚）"
-            mar_display.append(f"{a}－{b} {tag}")
-            mar_ids.append(mid)
-        if not mar_ids:
-            st.info("目前尚無婚姻，請先在上方建立婚姻。")
-        else:
-            which = st.selectbox("選擇父母（某段婚姻）", ["請選擇"] + mar_ids,
-                                 format_func=lambda x: (mar_display[mar_ids.index(x)] if x != "請選擇" else "請選擇"))
-            child = st.selectbox("子女", ["請選擇"] + persons, format_func=lambda x: display_name(x) if x != "請選擇" else "請選擇")
-            ok2 = st.form_submit_button("掛上子女")
-            if ok2:
-                if which == "請選擇" or child == "請選擇":
-                    st.error("請選擇婚姻與子女")
-                else:
-                    attach_child(which, child)
-                    st.success(f"已將「{display_name(child)}」掛到：{mar_display[mar_ids.index(which)]}")
-                    st.rerun()
+st.markdown("### 把子女掛到父母（某段婚姻）")
+with st.form("form_attach_child"):
+    mar_display = []
+    mar_ids = []
+    for mid, m in d["marriages"].items():
+        a, b = display_name(m["p1"]), display_name(m["p2"])
+        tag = "（離婚）" if m["divorced"] else "（在婚）"
+        mar_display.append(f"{a}－{b} {tag}")
+        mar_ids.append(mid)
+
+    if not mar_ids:
+        st.info("目前尚無婚姻，請先在上方建立婚姻。")
+    else:
+        which = st.selectbox("選擇父母（某段婚姻）", ["請選擇"] + mar_ids,
+                             format_func=lambda x: (mar_display[mar_ids.index(x)] if x != "請選擇" else "請選擇"))
+        child = st.selectbox("子女", ["請選擇"] + persons, format_func=lambda x: display_name(x) if x != "請選擇" else "請選擇")
+
+        submit_child = st.form_submit_button("掛上子女")  # 這裡加了提交按鈕
+        if submit_child:
+            if which == "請選擇" or child == "請選擇":
+                st.error("請選擇婚姻與子女")
+            else:
+                attach_child(which, child)
+                st.success(f"已將「{display_name(child)}」掛到：{mar_display[mar_ids.index(which)]}")
+                st.rerun()
+
 
     st.markdown("### 設定兄弟姐妹（無父母資料也能掛）")
     with st.form("form_siblings"):
