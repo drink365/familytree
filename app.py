@@ -292,33 +292,34 @@ def draw_tree():
     dot = Digraph("Family", format="svg", engine="dot")
     dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.5", ranksep="0.7")
 
-    # 節點
+    # 1) 先畫所有人物節點
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 夫妻 + 子女（回到原本布局，只新增水平夫妻線與隱形子女接點）
+    # 2) 夫妻（一段婚姻 = 一個 joint node），孩子從 joint node 往下
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
-        style = "dashed" if divorced else "solid"
+        jn = f"J_{mid}"  # joint node
+        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
 
-        # 1) 夫妻水平線（直接連 a-b），保持 rank 與相對位置穩定
-        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR)
+        # 水平夫妻線：現任實線、離婚虛線；不影響層級
+        dot.edge(a, b, dir="none", style=("dashed" if divorced else "solid"),
+                 color=BORDER_COLOR, constraint="false")
 
-        # 2) 讓夫妻併排（與你原本相同）
+        # 用隱形高權重邊把 joint node 鎖在兩人中間
+        dot.edge(a, jn, dir="none", style="invis", weight="50")
+        dot.edge(b, jn, dir="none", style="invis", weight="50")
+
+        # 讓夫妻併排
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
             s.node(b)
 
-        # 3) 子女接點：放在夫妻中間；用隱形高權重邊把接點「拉」到中線
-        jn = f"J_{mid}"
-        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR, style="invis")
-        dot.edge(a, jn, dir="none", style="invis", weight="8")
-        dot.edge(b, jn, dir="none", style="invis", weight="8")
-
-        # 4) 子女：與原本一樣，保持同一排，再由接點垂直連下去
+        # 子女：從 joint node 往下（垂直）
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
+            # 先保證孩子們同一橫列
             with dot.subgraph() as s:
                 s.attr(rank="same")
                 for c in kids:
@@ -326,14 +327,14 @@ def draw_tree():
             for c in kids:
                 dot.edge(jn, c, color=BORDER_COLOR)
 
-    # 兄弟姊妹(無共同父母時)用虛線相連，並強制 rank=same（保持原本做法）
-    _, parent_map = build_child_map()
-    def has_same_parents(x, y):
+    # 3) 兄弟姊妹（非同父母）以虛線相連，並強制同一橫列
+    def _same_parents(x, y):
+        _, parent_map = build_child_map()
         return parent_map.get(x, set()) and parent_map.get(x, set()) == parent_map.get(y, set())
 
     for a, b in d["sibling_links"]:
-        if has_same_parents(a, b):
-            continue
+        if _same_parents(a, b):
+            continue  # 同父母不需要另外畫
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
