@@ -320,8 +320,10 @@ def draw_tree():
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
 
         style = "dashed" if divorced else "solid"
-        dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
-        dot.edge(b, jn, dir="none", style=style, color=BORDER_COLOR)
+        # 夫妻橫線
+        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR)
+        # 小孩接點
+        dot.edge(jn, jn, style="invis")
 
         # 讓夫妻併排
         with dot.subgraph() as s:
