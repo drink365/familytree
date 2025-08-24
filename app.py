@@ -319,11 +319,9 @@ def draw_tree():
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
         style = "dashed" if divorced else "solid"
-        # 夫妻橫線（現任=實線、前任=虛線）。使用 constraint="false" 避免影響上下層排版
-        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
-        # 以不可見的連線把配偶與婚姻接點綁定，讓孩子從接點垂直往下
-        dot.edge(a, jn, dir="none", style="invis")
-        dot.edge(b, jn, dir="none", style="invis")
+        # 以「婚姻接點」作為夫妻連線中點，讓孩子能從中點往下
+        dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
+        dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR)
 
         # 讓夫妻併排
         with dot.subgraph() as s:
