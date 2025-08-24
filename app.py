@@ -4,7 +4,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Family Tree (Pan & Zoom)", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="Family Tree (Pan & Zoom + Min Gap)", page_icon="🌳", layout="wide")
 
 HTML = r"""
 <!DOCTYPE html>
@@ -98,7 +98,9 @@ HTML = r"""
 
   // 外觀與間距
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 36; // 避免配偶重疊的最小水平間距
+  const COUPLE_GAP_MIN = NODE_W + 36;  // 配偶最小水平距離
+  const LAYER_GAP_MIN  = NODE_W + 60;  // 「同層人物」之間的最小水平距離
+  const LAYER_TOLERANCE = 20;          // 判定同一層的 y 容差（像素）
 
   // 縮放狀態（用 viewBox 實作 pan/zoom）
   let vb = {x:0,y:0,w:1000,h:600};  // 目前 viewBox
@@ -204,13 +206,49 @@ HTML = r"""
     return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
   }
 
+  // 依層做最小水平距離修正
+  function enforceLayerMinGap(layout, overrides){
+    // 先收集所有人物節點的最終 (x,y)
+    const items = (layout.children||[])
+      .filter(n=>!doc.unions[n.id])
+      .map(n=>{
+        const nn = pickNode(layout, n.id, overrides) || n;
+        return { id:n.id, x:nn.x, y:nn.y };
+      });
+
+    // 分層（y 在容差內視為同層）
+    const layers = {};
+    items.forEach(it=>{
+      const key = Math.round(it.y / LAYER_TOLERANCE);
+      if(!layers[key]) layers[key]=[];
+      layers[key].push(it);
+    });
+
+    // 每層由左到右，確保相鄰間距 >= LAYER_GAP_MIN
+    Object.values(layers).forEach(arr=>{
+      arr.sort((a,b)=>a.x-b.x);
+      if(arr.length===0) return;
+      let cursorRight = arr[0].x + NODE_W; // 第一個不用動
+      for(let i=1;i<arr.length;i++){
+        const needLeft = cursorRight + (LAYER_GAP_MIN - NODE_W);
+        if(arr[i].x < needLeft){
+          const shift = needLeft - arr[i].x;
+          const cur = overrides[arr[i].id]?.x ?? arr[i].x;
+          overrides[arr[i].id] = Object.assign({}, overrides[arr[i].id]||{}, { x: cur + shift });
+          arr[i].x = cur + shift;
+        }
+        cursorRight = arr[i].x + NODE_W;
+      }
+    });
+  }
+
   function render(autoFit=false){
     syncSelectors();
     const host = document.getElementById("viewport");
     host.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
 
     elk.layout(buildElkGraph()).then(layout=>{
-      // 覆寫：配偶同層 ＋ 最小水平間距
+      // 覆寫：配偶同層 ＋ 配偶最小距離
       const overrides = {};
       Object.values(doc.unions).forEach(u=>{
         const [a,b]=u.partners;
@@ -223,7 +261,7 @@ HTML = r"""
         overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
         overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
 
-        // 最小水平間距
+        // 最小水平間距（保證配偶不重疊）
         const left  = na.x <= nb.x ? a : b;
         const right = na.x <= nb.x ? b : a;
         const nL = na.x <= nb.x ? na : nb;
@@ -237,6 +275,9 @@ HTML = r"""
           overrides[right] = Object.assign({}, overrides[right]||{}, { x:(overrides[right]?.x ?? nR.x)+need, y:yAlign });
         }
       });
+
+      // 新增：同層之間的最小距離
+      enforceLayerMinGap(layout, overrides);
 
       // === 重新計算「最終實際邊界」(考慮 overrides) ===
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
