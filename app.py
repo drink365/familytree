@@ -116,10 +116,10 @@ HTML = r"""
   const LAYER_TOLERANCE = 20;             // 判定同層 y 容差
   const SIBLING_GAP = 36;                 // 同一婚姻兄弟姊妹間距（排「區塊」）
   const CLUSTER_GAP = 56;                 // 不同婚姻孩子群組的最小距離
-  const BUS_OFFSET_STEPS = [-12,-4,4,12,20]; // 不同婚姻子女水平線的偏移候選（避免重疊）
-  const CHILD_TOP_GAP = 18;               // 子女水平線至少高於 child 頂部
+  const BUS_OFFSET_STEPS = [-12,-4,4,12,20];
+  const CHILD_TOP_GAP = 18;
 
-  /* 視圖狀態（viewBox 方式 pan/zoom） */
+  /* 視圖狀態 */
   let vb = {x:0,y:0,w:1000,h:600};
   let content = {w:1000,h:600};
   let isPanning = false, panStart = {x:0,y:0}, vbStart = {x:0,y:0};
@@ -189,7 +189,6 @@ HTML = r"""
     });
   }
 
-  /* ELK 佈局 */
   function buildElkGraph(){
     const nodes=[], edges=[];
     Object.values(doc.persons).forEach(p=>{
@@ -211,7 +210,7 @@ HTML = r"""
       layoutOptions:{
         "elk.algorithm":"layered",
         "elk.direction":"DOWN",
-        "elk.layered.spacing.nodeNodeBetweenLayers":"32",  /* 層距縮半：32 */
+        "elk.layered.spacing.nodeNodeBetweenLayers":"32",
         "elk.spacing.nodeNode":"46",
         "elk.edgeRouting":"ORTHOGONAL",
         "elk.layered.nodePlacement.bk.fixedAlignment":"BALANCED",
@@ -232,7 +231,6 @@ HTML = r"""
     return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
   }
 
-  /* 只針對「非孩子」做同層推開（避免把孩子推去別家） */
   function enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet){
     const items = (layout.children||[])
       .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id))
@@ -265,7 +263,6 @@ HTML = r"""
     });
   }
 
-  /* 婚姻車道偏移（避免不同婚姻的水平線重疊） */
   function hashInt(s){ let h=0; for(let i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; } return h>>>0; }
   function busYOffset(unionId){ const h = hashInt(unionId); return BUS_OFFSET_STEPS[h % BUS_OFFSET_STEPS.length]; }
 
@@ -277,7 +274,7 @@ HTML = r"""
     elk.layout(buildElkGraph()).then(layout=>{
       const overrides = {};
 
-      /* 配偶對齊 & 配偶最小距離 */
+      /* 配偶對齊 & 最小夫妻距離 */
       Object.values(doc.unions).forEach(u=>{
         const [a,b]=u.partners;
         const na = (layout.children||[]).find(n=>n.id===a);
@@ -302,7 +299,6 @@ HTML = r"""
         }
       });
 
-      /* —— 每段婚姻的孩子（群組） —— */
       const unionKids = {};
       const childrenIdSet = new Set();
       Object.values(doc.unions).forEach(u=>{
@@ -310,17 +306,16 @@ HTML = r"""
         if(kids.length>0){ unionKids[u.id]=kids; kids.forEach(id=>childrenIdSet.add(id)); }
       });
 
-      /* 只對非孩子做同層推開 */
       enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
 
-      /* —— 以父母婚點為中心，排兄弟姊妹「區塊」（孩子+配偶） —— */
-      const clustersByLayer = {};  // { layerKey: [ {unionId, rect:{x0,x1}} ] }
+      /* 以父母婚點為中心，排兄弟姊妹「區塊」（孩子+配偶） */
+      const clustersByLayer = {};
       Object.entries(unionKids).forEach(([uid,kids])=>{
         const u = doc.unions[uid];
         const na = pickNode(layout, u.partners[0], overrides);
         const nb = pickNode(layout, u.partners[1], overrides);
         if(!na || !nb) return;
-        const midX = (na.x + nb.x + NODE_W) / 2;
+        const midX = (na.x + nb.x + NODE_W) / 2;   // ★ anchorX
 
         const kidNodes = kids
           .map(id=>pickNode(layout, id, overrides))
@@ -330,10 +325,9 @@ HTML = r"""
 
         const layerKey = Math.round(kidNodes[0].y / LAYER_TOLERANCE);
 
-        // 把每個孩子視為「區塊」：若有配偶，區塊寬度 = child + couple-gap + mate
         const blocks = kidNodes.map(k=>{
           const myUnions = Object.values(doc.unions).filter(xx => (xx.partners||[]).includes(k.id));
-          const myMateUnion = myUnions[0];  // 簡化：取第一段婚姻（需要可自定策略）
+          const myMateUnion = myUnions[0];
           let hasMate = false, mateId = null;
           if (myMateUnion) {
             const [pa,pb] = myMateUnion.partners;
@@ -348,12 +342,10 @@ HTML = r"""
         let startX = midX - totalWidth/2;
 
         blocks.forEach(b=>{
-          const blockLeft = startX;
-          const childX = blockLeft;  // 孩子在左邊，配偶在右
+          const childX = startX;
           overrides[b.kidId] = Object.assign({}, overrides[b.kidId]||{}, { x: childX });
           if (b.hasMate) {
             const mateX = childX + COUPLE_GAP_MIN + NODE_W;
-            // y 對齊：以子女 y 為準
             overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: overrides[b.kidId]?.y ?? b.y });
           }
           startX += b.width + SIBLING_GAP;
@@ -362,18 +354,17 @@ HTML = r"""
         const x0 = midX - totalWidth/2;
         const x1 = x0 + totalWidth;
         if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
-        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1} });
+        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX }); // ★ 保留 anchorX
       });
 
-      // —— 群組之間互推，維持最小距離 —— //
+      /* 群組互推：用 anchorX 排序，避免因群組太寬打亂左右順序 */
       Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
-        list.sort((a,b)=>a.rect.x0 - b.rect.x0);
+        list.sort((a,b)=>a.anchorX - b.anchorX); // ★ 改用 anchorX
         let cursorRight = list[0].rect.x1;
         for(let i=1;i<list.length;i++){
           const wantLeft = cursorRight + CLUSTER_GAP;
           if(list[i].rect.x0 < wantLeft){
             const shift = wantLeft - list[i].rect.x0;
-            // 整個群組右移：把群組內的孩子與其配偶一起位移
             const kids = unionKids[list[i].unionId] || [];
             kids.forEach(cid=>{
               const curX = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
@@ -392,12 +383,13 @@ HTML = r"""
               }
             });
             list[i].rect.x0 += shift; list[i].rect.x1 += shift;
+            list[i].anchorX += shift; // ★ anchorX 也跟著移
           }
           cursorRight = list[i].rect.x1;
         }
       });
 
-      /* 邊界（考慮 overrides） */
+      /* 邊界 */
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
@@ -426,7 +418,7 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
-      /* 婚姻水平線 + 中點 + 子女（車道 + 至少 CHILD_TOP_GAP 高度） */
+      /* 婚姻線 + 中點 + 子女（不同婚姻車道） */
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = pickNode(layout, aid, overrides);
@@ -438,7 +430,6 @@ HTML = r"""
         const xRight = Math.max(na.x+NODE_W, nb.x);
         const midX   = (na.x + nb.x + NODE_W) / 2;
 
-        // 婚姻水平線
         const line = document.createElementNS("http://www.w3.org/2000/svg","line");
         line.setAttribute("x1", xLeft);
         line.setAttribute("y1", y);
@@ -449,7 +440,6 @@ HTML = r"""
         if(u.status==="divorced") line.setAttribute("stroke-dasharray","6,4");
         root.appendChild(line);
 
-        // 婚姻點
         const dot = document.createElementNS("http://www.w3.org/2000/svg","rect");
         dot.setAttribute("x", midX-5);
         dot.setAttribute("y", y-5);
@@ -461,7 +451,6 @@ HTML = r"""
         dot.addEventListener("click",()=>{ selected={type:"union", id:u.id}; updateSelectionInfo(); });
         root.appendChild(dot);
 
-        // 子女連線
         const kids = (unionKids[u.id]||[]);
         if(kids.length>0){
           const offBase = busYOffset(u.id);
@@ -470,7 +459,7 @@ HTML = r"""
             if(!nc) return;
             const childTop = nc.y;
             let busY = childTop + offBase;
-            busY = Math.min(busY, childTop - CHILD_TOP_GAP); // 確保有高度
+            busY = Math.min(busY, childTop - CHILD_TOP_GAP);
 
             const cx = nc.x + NODE_W/2;
             const path = document.createElementNS("http://www.w3.org/2000/svg","path");
@@ -484,7 +473,7 @@ HTML = r"""
         }
       });
 
-      /* 人物節點（身故顯示） */
+      /* 人物節點 */
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
         const nn = pickNode(layout, n.id, overrides);
@@ -553,7 +542,6 @@ HTML = r"""
     updateSelectionInfo();
   }
 
-  /* 右側操作（身故 / 離婚 / 刪除） */
   function updateSelectionInfo(){
     const el = document.getElementById("selInfo");
     const btnDead = document.getElementById("btnToggleDead");
@@ -600,7 +588,6 @@ HTML = r"""
     }
   }
 
-  /* 建立資料 */
   document.getElementById("btnDemo").addEventListener("click", ()=>demo());
   document.getElementById("btnClear").addEventListener("click", clearAll);
 
