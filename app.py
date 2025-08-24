@@ -1,6 +1,6 @@
 import streamlit as st
 from graphviz import Digraph
-from collections import defaultdict, deque)
+from collections import defaultdict, deque
 
 # -------------------------------
 # Session & Data
@@ -28,6 +28,7 @@ def next_id():
 # -------------------------------
 
 def ensure_person(name, sex="男", alive=True, note=""):
+    """Find or create person by name; return pid."""
     d = st.session_state.data
     for pid, p in d["persons"].items():
         if p["name"] == name:
@@ -37,6 +38,7 @@ def ensure_person(name, sex="男", alive=True, note=""):
     return pid
 
 def add_marriage(a, b, divorced=False):
+    """Return mid if created; if same pair exists, return that mid."""
     d = st.session_state.data
     for mid, m in d["marriages"].items():
         if {m["a"], m["b"]} == {a, b}:
@@ -75,7 +77,7 @@ def load_demo(clear=True):
     chensan= ensure_person("陳三",   "男", True)
     w_sun  = ensure_person("王孫",   "男", True)
 
-    # 婚姻
+    # 婚姻：現任、前任
     mid_now = add_marriage(yilang, wife,   divorced=False)
     mid_ex  = add_marriage(yilang, exwife, divorced=True)
 
@@ -132,6 +134,7 @@ def pick_from(label, options, key):
 # -------------------------------
 
 def build_child_map():
+    """mid -> (father, mother), parent_map[child] = set(parents)"""
     d = st.session_state.data
     mid_parents = {}
     children_by_parent = defaultdict(list)
@@ -312,7 +315,7 @@ def draw_tree():
             # 夫妻中點 -> 匯流點（唯一會影響縱向布局的邊）
             dot.edge(jn, bus, color=BORDER_COLOR, minlen="2")
 
-            # 把 bus、lvl、所有孩子放在同一排（強制下一層）
+            # 把 bus、lvl、所有孩子放在同一排（穩定在下一層）
             with dot.subgraph() as s:
                 s.attr(rank="same")
                 s.node(bus)
@@ -320,10 +323,10 @@ def draw_tree():
                 for c in kids:
                     s.node(c)
 
-            # 再用一條隱形邊把 bus 與 lvl 綁緊，避免 bus 浮動
+            # 隱形邊防止 bus 漂動
             dot.edge(bus, lvl, style="invis", weight="50")
 
-            # 從匯流點分到孩子（僅顯示，不參與布局）
+            # 從匯流點分到孩子（不參與布局）
             for c in kids:
                 dot.edge(bus, c, color=BORDER_COLOR, dir="none", constraint="false")
 
@@ -456,7 +459,7 @@ def page_relations():
         sib  = pick_from("要掛為其兄弟姊妹者", list_person_options(include_empty=True), key="sib_other")
         ok = st.form_submit_button("建立兄弟姊妹關係")
         if ok:
-            if not base or not sib:
+            if not base or not sib:   # 修正了中文「或」造成的 SyntaxError
                 st.warning("請選擇兩個人。")
             elif base == sib:
                 st.warning("同一個人無法建立兄弟姊妹關係。")
