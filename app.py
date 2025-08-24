@@ -29,6 +29,7 @@ HTML = r"""
   .row{display:flex;gap:.5rem;align-items:center;margin:.25rem 0}
   select,input[type=text]{border:1px solid #cbd5e1;border-radius:.75rem;padding:.45rem .6rem}
   .canvas{height:720px;overflow:auto;border:1px solid #e5e7eb;border-radius:1rem;background:#fff}
+  .canvas svg{width:auto;height:auto;display:block} /* 關鍵：不要為配合容器而縮放 */
   .hint{color:#64748b;font-size:.9rem}
   .legend{display:flex;gap:.75rem;align-items:center;color:#475569}
   .lgBox{width:18px;height:18px;border-radius:.5rem;background:var(--bg);border:2px solid var(--border)}
@@ -54,7 +55,7 @@ HTML = r"""
     <div class="card">
       <div class="canvas" id="canvas"></div>
       <div class="hint" style="margin-top:.5rem">
-        規則：離婚顯示為虛線；無子女的婚姻不往下連；婚姻點在水平線中點；配偶**強制同一層**且緊鄰。
+        規則：離婚顯示為虛線；無子女的婚姻不往下連；婚姻點在水平線中點；配偶同層緊鄰，並保證最小間距。畫布可水平/垂直捲動。
       </div>
     </div>
 
@@ -91,6 +92,7 @@ HTML = r"""
 (function(){
   const elk = new ELK();
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
+  const COUPLE_GAP_MIN = NODE_W + 36; // 最小橫向間距（避免重疊）
 
   let doc = { persons:{}, unions:{}, children:[] };
   let selected = { type:null, id:null };
@@ -145,11 +147,7 @@ HTML = r"""
     });
   }
 
-  /** 佈局圖
-   *  - a→union、b→union：保證配偶同層
-   *  - a→b（INFLUENCE，高優先級）：提示佈局把 b 排在 a 旁邊
-   *  - union→child：只有有子女才連
-   */
+  // 佈局圖（a→union、b→union + a→b INFLUENCE）
   function buildElkGraph(){
     const nodes=[], edges=[];
 
@@ -185,7 +183,7 @@ HTML = r"""
     };
   }
 
-  // 取得節點（允許覆寫位置）
+  // 取節點，若有覆寫就使用覆寫
   function pickNode(layout, id, overrides){
     const n = (layout.children||[]).find(x=>x.id===id);
     if(!n) return null;
@@ -199,19 +197,39 @@ HTML = r"""
     container.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
 
     elk.layout(buildElkGraph()).then(layout=>{
-      // --- 先做「配偶同層」的顯示層覆寫（不改佈局，只改渲染） ---
+      // 覆寫集：強制同層 + 最小橫向間距
       const overrides = {};
       Object.values(doc.unions).forEach(u=>{
         const [a,b]=u.partners;
         const na = (layout.children||[]).find(n=>n.id===a);
         const nb = (layout.children||[]).find(n=>n.id===b);
         if(!na||!nb) return;
-        // 取較小的 y（上層），兩人都顯示在同一高度
+
+        // 1) 同層（以較上層為準）
         const yAlign = Math.min(na.y, nb.y);
-        if(na.y !== yAlign) overrides[a] = { y: yAlign };
-        if(nb.y !== yAlign) overrides[b] = { y: yAlign };
+        if(na.y !== yAlign) overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
+        if(nb.y !== yAlign) overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
+
+        // 2) 最小間距：確保水平方向不重疊（把右邊的人往右推）
+        const aX = na.x, bX = nb.x;
+        const leftId  = aX <= bX ? a : b;
+        const rightId = aX <= bX ? b : a;
+        const nLeft  = aX <= bX ? na : nb;
+        const nRight = aX <= bX ? nb : na;
+
+        const leftXRightEdge  = (overrides[leftId]?.x ?? nLeft.x) + NODE_W;
+        const rightXLeftEdge  = (overrides[rightId]?.x ?? nRight.x);
+        const gap = rightXLeftEdge - leftXRightEdge;
+
+        if(gap < (COUPLE_GAP_MIN - NODE_W)) {
+          const need = COUPLE_GAP_MIN - NODE_W - gap; // 要再多多少距離
+          const newRightX = (overrides[rightId]?.x ?? nRight.x) + need;
+          overrides[rightId] = Object.assign({}, overrides[rightId]||{}, { x: newRightX, y: yAlign });
+          overrides[leftId]  = Object.assign({}, overrides[leftId] ||{}, { y: yAlign });
+        }
       });
 
+      // 畫 SVG（固定像素尺寸，容器自動出捲軸）
       const w = (layout.width||0) + MARGIN*2;
       const h = (layout.height||0) + MARGIN*2;
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
@@ -230,7 +248,7 @@ HTML = r"""
         const nb = pickNode(layout, bid, overrides);
         if(!na||!nb) return;
 
-        const y = na.y + NODE_H/2; // 已經對齊，拿任一即可
+        const y = na.y + NODE_H/2; // 已對齊
         const xLeft  = Math.min(na.x+NODE_W, nb.x);
         const xRight = Math.max(na.x+NODE_W, nb.x);
         const midX   = (na.x + nb.x + NODE_W) / 2;
