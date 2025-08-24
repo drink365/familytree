@@ -1,478 +1,394 @@
 # app.py
-# ==========================================================
-# 家族平台（Graphviz 家族樹 + 台灣民法法定繼承試算）
-# - 友善操作：只用表單新增/修改，不需要上傳/下載任何 JSON
-# - 家族樹：前任在左、本人置中、現任在右；三代分層；在婚實線、離婚虛線
-# - 人物：性別＋已過世（男=淡藍、女=淡紅、已故=灰並加「（殁）」）
-# - 法定繼承：配偶為當然繼承人，只與「第一個有人的順位」共同繼承
-# - 首頁加上「本圖以陳一郎家族譜為示範」與「馬上輸入自己的資料」按鈕
-# ==========================================================
-
-from typing import Dict, List, Tuple
 import streamlit as st
 from graphviz import Digraph
+from collections import defaultdict, deque
 
-# =============== 外觀設定 ===============
-st.set_page_config(page_title="家族平台｜家族樹＋法定繼承", layout="wide")
-PRIMARY = "#184a5a"
-ACCENT = "#0e2d3b"
-COLOR_MALE = "#D2E9FF"      # 男：淡藍
-COLOR_FEMALE = "#FFD2D2"    # 女：淡紅
-COLOR_DECEASED = "#D9D9D9"  # 已故：灰
+st.set_page_config(page_title="家族平台（人物｜關係｜法定繼承｜家族樹）", layout="wide")
 
-st.markdown("""
-<style>
-.stApp {background-color: #f7fbfd;}
-.big-title {font-size: 32px; font-weight: 800; color:#0e2d3b; letter-spacing:1px;}
-.subtle {color:#55707a}
-.pill {
-  display:inline-block; padding:6px 10px; border-radius:999px;
-  background:#e7f3f6; color:#184a5a; font-size:12px; margin-right:8px;
-}
-.card {
-  border:1px solid #e8eef0; border-radius:12px; padding:14px 16px; background:#fff;
-  margin-bottom:12px;
-}
-.cta {
-  display:flex; gap:12px; align-items:center; padding:12px 16px;
-  background:#fff; border:1px dashed #cfe3ea; border-radius:12px;
-}
-.cta .title {font-weight:700; color:#0e2d3b}
-.cta .desc {color:#55707a; font-size:14px}
-.small {font-size:12px;color:#6b8791}
-hr {border: none; border-top: 1px solid #e8eef0; margin: 8px 0 16px;}
-</style>
-""", unsafe_allow_html=True)
+# -----------------------------
+# 顏色與樣式
+# -----------------------------
+MALE_COLOR    = "#d9ecff"  # 淡藍
+FEMALE_COLOR  = "#ffe0e6"  # 淡紅
+DECEASED_COLOR= "#e6e6e6"  # 灰
+NODE_BORDER   = "#16465f"
+LINE_COLOR    = "#1f4b63"
 
-st.markdown('<div class="big-title">🌳 家族平台（家族樹＋法定繼承）</div>', unsafe_allow_html=True)
-st.markdown('<div class="subtle">前任在左、本人置中、現任在右；三代分層；台灣民法法定繼承（嚴格順位制）</div>', unsafe_allow_html=True)
-st.write("")
+def node_style_by_person(p):
+    if p.get("deceased"):
+        return {
+            "shape": "box",
+            "style": "filled",
+            "fillcolor": DECEASED_COLOR,
+            "color": NODE_BORDER,
+            "fontcolor": "#333333",
+            "penwidth": "1.2",
+        }
+    if p.get("gender") == "女":
+        return {
+            "shape": "box",
+            "style": "filled",
+            "fillcolor": FEMALE_COLOR,
+            "color": NODE_BORDER,
+            "fontcolor": "#0e2531",
+            "penwidth": "1.2",
+        }
+    # 預設男
+    return {
+        "shape": "box",
+        "style": "filled",
+        "fillcolor": MALE_COLOR,
+        "color": NODE_BORDER,
+        "fontcolor": "#0e2531",
+        "penwidth": "1.2",
+    }
 
-# =============== 初始示範資料（首次載入用） ===============
-DEMO = {
-    "persons": {
-        "c_yilang": {"name": "陳一郎", "gender": "男", "deceased": False},
-        "c_wife": {"name": "陳妻", "gender": "女", "deceased": False},
-        "c_exwife": {"name": "陳前妻", "gender": "女", "deceased": False},
-        "wang_zi": {"name": "王子", "gender": "男", "deceased": False},
-        "wang_zi_wife": {"name": "王子妻", "gender": "女", "deceased": False},
-        "wang_sun": {"name": "王孫", "gender": "男", "deceased": False},
-        "chen_da": {"name": "陳大", "gender": "男", "deceased": False},
-        "chen_er": {"name": "陳二", "gender": "男", "deceased": False},
-        "chen_san": {"name": "陳三", "gender": "男", "deceased": False},
-    },
-    "marriages": [
-        {"id": "m_current", "a": "c_yilang", "b": "c_wife", "status": "current"},
-        {"id": "m_ex", "a": "c_yilang", "b": "c_exwife", "status": "ex"},
-        {"id": "m_wang", "a": "wang_zi", "b": "wang_zi_wife", "status": "current"},
-    ],
-    "children": [
-        {"marriage_id": "m_current", "children": ["chen_da","chen_er","chen_san"]},
-        {"marriage_id": "m_ex", "children": ["wang_zi"]},
-        {"marriage_id": "m_wang", "children": ["wang_sun"]},
-    ]
-}
-if "data" not in st.session_state:
-    st.session_state["data"] = DEMO
-if "just_cleared" not in st.session_state:
-    st.session_state["just_cleared"] = False
+# -----------------------------
+# 資料初始化
+# -----------------------------
+def init_data():
+    return {
+        "persons": {},     # pid -> {name, gender, deceased}
+        "marriages": [],   # [{id, a, b, divorced}]
+        "children": [],    # [{marriage_id, children:[pid,...]}]
+        "_seq": 1          # id 產生器
+    }
 
-# =============== 共用工具 ===============
-def normalize(s: str) -> str:
-    return (s or "").strip()
+def next_id():
+    st.session_state.data["_seq"] += 1
+    return f"P{st.session_state.data['_seq']}"
 
-def ensure_person_id(data: dict, name: str, gender: str = "男", deceased: bool = False) -> str:
-    """依姓名尋找/建立人物；自動更新性別與是否已過世。"""
-    name = normalize(name)
-    if not name:
-        raise ValueError("姓名不可空白")
-    persons = data.setdefault("persons", {})
-    # 已存在 → 更新
-    for pid, info in persons.items():
-        if info.get("name") == name:
-            info["gender"] = gender or info.get("gender") or "男"
-            info["deceased"] = bool(deceased)
+def next_mid():
+    st.session_state.data["_seq"] += 1
+    return f"M{st.session_state.data['_seq']}"
+
+def ensure_person_id(data, name, gender, deceased=False):
+    # 以「同名+性別」視為同一人（簡化處理）
+    for pid, p in data["persons"].items():
+        if p["name"] == name and p.get("gender") == gender:
+            # 更新過世狀態
+            if deceased: p["deceased"] = True
             return pid
-    # 新增
-    base = "p_" + "".join(ch if ch.isalnum() else "_" for ch in name)
-    pid = base; i = 1
-    while pid in persons:
-        i += 1; pid = f"{base}_{i}"
-    persons[pid] = {"name": name, "gender": gender, "deceased": bool(deceased)}
+    pid = next_id()
+    data["persons"][pid] = {"name": name, "gender": gender, "deceased": deceased}
     return pid
 
-def map_children(children_list: List[dict]) -> Dict[str, List[str]]:
-    return {c["marriage_id"]: list(c.get("children", [])) for c in children_list}
+def load_demo():
+    data = init_data()
+    # 人
+    yilang = ensure_person_id(data, "陳一郎", "男")
+    exwife = ensure_person_id(data, "陳前妻", "女")
+    wife   = ensure_person_id(data, "陳妻", "女")
+    wangzi = ensure_person_id(data, "王子", "男")
+    wz_wife= ensure_person_id(data, "王子妻", "女")
+    wz_sun = ensure_person_id(data, "王孫", "男")
+    a      = ensure_person_id(data, "陳大", "男")
+    b      = ensure_person_id(data, "陳二", "男")
+    c      = ensure_person_id(data, "陳三", "男")
 
-def marriages_of(pid: str, marriages: List[dict]) -> List[dict]:
-    return [m for m in marriages if m["a"] == pid or m["b"] == pid]
+    # 婚姻
+    m_ex = {"id": next_mid(), "a": yilang, "b": exwife, "divorced": True}
+    m_w  = {"id": next_mid(), "a": yilang, "b": wife,   "divorced": False}
+    m_wz = {"id": next_mid(), "a": wangzi, "b": wz_wife, "divorced": False}
+    data["marriages"] = [m_ex, m_w, m_wz]
 
-def partner_of(m: dict, pid: str) -> str:
-    return m["b"] if m["a"] == pid else m["a"]
+    # 子女
+    data["children"] = [
+        {"marriage_id": m_ex["id"], "children": [wangzi]},
+        {"marriage_id": m_w["id"],  "children": [a, b, c]},
+        {"marriage_id": m_wz["id"], "children": [wz_sun]},
+    ]
+    return data
 
-def current_spouses_of(pid: str, marriages: List[dict]) -> List[str]:
-    return [partner_of(m, pid) for m in marriages if (m["a"] == pid or m["b"] == pid) and m.get("status") == "current"]
+if "data" not in st.session_state:
+    st.session_state.data = load_demo()
 
-def ex_spouses_of(pid: str, marriages: List[dict]) -> List[str]:
-    return [partner_of(m, pid) for m in marriages if (m["a"] == pid or m["b"] == pid) and m.get("status") == "ex"]
+data = st.session_state.data
 
-def children_of_via_marriage(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
-    kids: List[str] = []
-    for m in marriages:
-        if m["a"] == pid or m["b"] == pid:
-            kids += ch_map.get(m["id"], [])
-    seen, ordered = set(), []
-    for k in kids:
-        if k not in seen:
-            seen.add(k); ordered.append(k)
-    return ordered
+# -----------------------------
+# 工具：反查父母、子女、兄弟姊妹、祖父母
+# -----------------------------
+def build_parent_map(data):
+    # child -> set(parents)
+    parents_of = defaultdict(set)
+    marriage_of = {}
+    for m in data["marriages"]:
+        marriage_of[m["id"]] = (m["a"], m["b"])
+    for ck in data["children"]:
+        mid = ck["marriage_id"]
+        if mid not in marriage_of:
+            continue
+        pa, pb = marriage_of[mid]
+        for ch in ck["children"]:
+            parents_of[ch].add(pa); parents_of[ch].add(pb)
+    return parents_of, marriage_of
 
-def parents_of_person(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
-    parents: List[str] = []
-    for m in marriages:
-        if pid in ch_map.get(m["id"], []):
-            for p in [m["a"], m["b"]]:
-                if p not in parents:
-                    parents.append(p)
-    return parents
+def children_of_person(data, pid):
+    res = []
+    for ck in data["children"]:
+        if ck["marriage_id"] in {m["id"] for m in data["marriages"] if m["a"] == pid or m["b"] == pid}:
+            res.extend(ck["children"])
+    return list(dict.fromkeys(res))
 
-def siblings_of_person(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
-    sibs = set()
-    for m in marriages:
-        kids = ch_map.get(m["id"], [])
-        if pid in kids:
-            for k in kids:
-                if k != pid:
-                    sibs.add(k)
-    for par in parents_of_person(pid, marriages, ch_map):
-        for m in marriages_of(par, marriages):
-            kids = ch_map.get(m["id"], [])
-            for k in kids:
-                if k != pid:
-                    sibs.add(k)
-    return list(sorted(sibs))
+def descendants_of(data, pid):
+    parents_of, marriage_of = build_parent_map(data)
+    # 建 child->children 查找
+    kids_by_parent = defaultdict(list)
+    for ck in data["children"]:
+        pa, pb = marriage_of.get(ck["marriage_id"], (None, None))
+        for ch in ck["children"]:
+            if pa: kids_by_parent[pa].append(ch)
+            if pb: kids_by_parent[pb].append(ch)
+    res = []
+    q = deque(kids_by_parent.get(pid, []))
+    seen = set()
+    while q:
+        c = q.popleft()
+        if c in seen: continue
+        seen.add(c)
+        res.append(c)
+        for nxt in kids_by_parent.get(c, []):
+            q.append(nxt)
+    return res
 
-def grandparents_of_person(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
+def parents_of_person(data, pid):
+    parents_of, _ = build_parent_map(data)
+    return list(parents_of.get(pid, []))
+
+def siblings_of(data, pid):
+    # 共享任一父/母的都視為兄弟姐妹（同父同母或半血親），排除自己
+    parents = set(parents_of_person(data, pid))
+    if not parents: return []
+    sib = set()
+    for ck in data["children"]:
+        for ch in ck["children"]:
+            if ch == pid: continue
+            if parents & set(parents_of_person(data, ch)):
+                sib.add(ch)
+    return list(sib)
+
+def grandparents_of(data, pid):
     gps = set()
-    for par in parents_of_person(pid, marriages, ch_map):
-        for g in parents_of_person(par, marriages, ch_map):
-            gps.add(g)
-    return list(sorted(gps))
+    for p in parents_of_person(data, pid):
+        gps.update(parents_of_person(data, p))
+    return list(gps)
 
-def node_color(info: dict) -> str:
-    if info.get("deceased"):
-        return COLOR_DECEASED
-    return COLOR_MALE if info.get("gender") == "男" else COLOR_FEMALE
+# -----------------------------
+# 法定繼承：配偶為當然繼承人 + 最前順位
+# -----------------------------
+def spouses_of(data, pid):
+    sp = []
+    for m in data["marriages"]:
+        if m["a"] == pid:
+            sp.append((m["b"], m["divorced"]))
+        elif m["b"] == pid:
+            sp.append((m["a"], m["divorced"]))
+    return sp
 
-def node_label(info: dict) -> str:
-    return f"{info.get('name','')}（殁）" if info.get("deceased") else info.get("name","")
+def legal_heirs_ordered(data, decedent_id):
+    """回傳『配偶放最前』+ 有哪一順位的人"""
+    # 先抓配偶（包含已離婚者不列入繼承）
+    spouse_alive = [sid for sid, divorced in spouses_of(data, decedent_id) if not divorced]
 
-def pick_root(data: dict) -> str:
-    """選關係『最多』的人當根（婚姻＋子女＋現任加權），若平手取字典序最小 id。"""
-    persons = data.get("persons", {})
-    marriages = data.get("marriages", [])
-    children = data.get("children", [])
-    if not persons:
-        return ""
-    ch_map = map_children(children)
-    score = {pid: 0 for pid in persons}
-    for m in marriages:
-        score[m["a"]] += 1; score[m["b"]] += 1
-    for mid, kids in ch_map.items():
-        for k in kids:
-            score[k] += 1
-    for pid in persons:
-        if current_spouses_of(pid, marriages):
-            score[pid] += 2
-    best = sorted(score.items(), key=lambda x: (-x[1], x[0]))[0][0]
-    return best
+    # 第一順位：直系卑親屬（所有後代）
+    des = [p for p in descendants_of(data, decedent_id) if not data["persons"][p].get("deceased")]
+    if des:
+        principal = des
+        rank_name = "第一順位（直系卑親屬）"
+    else:
+        # 第二：父母
+        pa = [p for p in parents_of_person(data, decedent_id) if not data["persons"][p].get("deceased")]
+        if pa:
+            principal = pa
+            rank_name = "第二順位（父母）"
+        else:
+            # 第三：兄弟姐妹
+            sib = [p for p in siblings_of(data, decedent_id) if not data["persons"][p].get("deceased")]
+            if sib:
+                principal = sib
+                rank_name = "第三順位（兄弟姐妹）"
+            else:
+                # 第四：祖父母
+                gp = [p for p in grandparents_of(data, decedent_id) if not data["persons"][p].get("deceased")]
+                principal = gp
+                rank_name = "第四順位（祖父母）"
 
-# =============== 家族樹 ===============
-def build_graph(data: dict, root_id: str) -> Digraph:
-    dot = Digraph(comment="Family Tree", engine="dot", format="svg")
-    dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.45", ranksep="0.7")
-    dot.edge_attr.update({"color": PRIMARY})
+    # 整理人名，配偶優先
+    heirs = []
+    for s in spouse_alive:
+        heirs.append(s)
+    for h in principal:
+        if h not in heirs:
+            heirs.append(h)
+    return heirs, rank_name
 
-    persons = data.get("persons", {})
-    marriages = data.get("marriages", [])
-    children = data.get("children", [])
-    ch_map = map_children(children)
+# -----------------------------
+# 家族樹：Graphviz（無區塊；同代同層；前任左/現任右；子女垂直）
+# -----------------------------
+def draw_tree(data: dict) -> Digraph:
+    dot = Digraph(engine="dot", format="svg")
+    dot.attr(rankdir="TB", splines="ortho", nodesep="0.5", ranksep="0.8")
+    dot.attr("graph", bgcolor="white")
+    dot.attr("edge", color=LINE_COLOR, penwidth="1.2")
 
-    # 節點：顏色與（殁）標記
-    for pid, info in persons.items():
-        dot.node(pid, node_label(info), shape="box", style="filled",
-                 fillcolor=node_color(info), color=ACCENT, penwidth="1.2",
-                 fontcolor="black")
+    # 父母地圖
+    parents_of_map, marriage_of = build_parent_map(data)
 
-    # 婚姻 junction + 父母邊
-    for m in marriages:
-        mid = m["id"]; a, b = m["a"], m["b"]
-        dotted = (m.get("status") == "ex")
-        dot.node(mid, "", shape="point", width="0.02", color=PRIMARY)
-        style = "dashed" if dotted else "solid"
+    # 先建立所有人節點（帶顏色、(殁) 後綴）
+    for pid, p in data["persons"].items():
+        label = p["name"] + ("（殁）" if p.get("deceased") else "")
+        style = node_style_by_person(p)
+        dot.node(pid, label=label, **style)
+
+    # 建婚姻節點 + 線
+    for m in data["marriages"]:
+        mid = m["id"]; a = m["a"]; b = m["b"]; divorced = m["divorced"]
+        # 小圓點作為結合點
+        dot.node(mid, "", shape="point", width="0.03", color=LINE_COLOR)
+        # 婚姻線
+        style = "dashed" if divorced else "solid"
         dot.edge(a, mid, dir="none", style=style)
         dot.edge(b, mid, dir="none", style=style)
-        with dot.subgraph() as s:
-            s.attr(rank="same"); s.node(a); s.node(b)
-
-    # 子女：同層；左→右不可見固定（避免重疊）
-    for mid, kids in ch_map.items():
-        if not kids:
-            continue
+        # 夫妻同層
         with dot.subgraph() as s:
             s.attr(rank="same")
-            for cid in kids: s.node(cid)
-        for i in range(len(kids)-1):
-            dot.edge(kids[i], kids[i+1], style="invis", weight="200")
-        for cid in kids:
-            dot.edge(mid, cid)
+            s.node(a); s.node(b)
 
-    # 鎖「前任→本人→現任」橫向順序（保證前任在左、現任在右）
-    ex_map = {pid: [] for pid in persons}
-    cur_map = {pid: [] for pid in persons}
-    for m in marriages:
-        a, b, status = m["a"], m["b"], m.get("status")
-        if status == "ex":
-            ex_map[a].append(b); ex_map[b].append(a)
-        elif status == "current":
-            cur_map[a].append(b); cur_map[b].append(a)
-    for me in persons:
-        exes = ex_map.get(me, [])
-        curs = cur_map.get(me, [])
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            for x in exes: s.node(x)
-            s.node(me)
-            for c in curs: s.node(c)
-        chain = exes + [me] + curs
-        for i in range(len(chain)-1):
-            dot.edge(chain[i], chain[i+1], style="invis", weight="9999")
+    # 子女從婚姻節點垂直往下
+    for ck in data["children"]:
+        mid = ck["marriage_id"]
+        for ch in ck["children"]:
+            dot.edge(mid, ch)
 
-    # 三代分層（根第1層、其子女第2層、孫輩第3層；把根的婚姻junction壓回第一層）
-    gen0 = {root_id} | set(current_spouses_of(root_id, marriages)) | set(ex_spouses_of(root_id, marriages))
-    gen1 = set(children_of_via_marriage(root_id, marriages_of(root_id, marriages), ch_map))
-    gen2 = set()
-    for kid in list(gen1):
-        gen2 |= set(children_of_via_marriage(kid, marriages_of(kid, marriages), ch_map))
+    # 排序：若某人同時有前任與現任 -> 無形邊：前任 -> 本人 -> 現任
+    # 找某人所有婚姻，分成 ex/current
+    marriages_by_person = defaultdict(list)
+    for m in data["marriages"]:
+        marriages_by_person[m["a"]].append(m)
+        marriages_by_person[m["b"]].append(m)
 
-    if gen0:
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            for p in gen0: s.node(p)
-        for m in marriages_of(root_id, marriages):
+    for person, m_list in marriages_by_person.items():
+        exes = [m for m in m_list if m["divorced"]]
+        curs = [m for m in m_list if not m["divorced"]]
+        # 取對象pid
+        def spouse_id(m, person):
+            return m["b"] if m["a"] == person else m["a"]
+        if exes or curs:
             with dot.subgraph() as s:
-                s.attr(rank="same"); s.node(m["id"])
-    if gen1:
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            for p in gen1: s.node(p)
-    if gen2:
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            for p in gen2: s.node(p)
+                s.attr(rank="same")
+                # 先把前任們排左
+                prev = None
+                for m in exes:
+                    ex_id = spouse_id(m, person)
+                    s.node(ex_id)
+                    if prev:
+                        s.edge(prev, ex_id, style="invis", weight="100")
+                    prev = ex_id
+                # 中間是本人
+                s.node(person)
+                if prev:
+                    s.edge(prev, person, style="invis", weight="100")
+                    prev = person
+                else:
+                    prev = person
+                # 右側現任
+                for m in curs:
+                    cur_id = spouse_id(m, person)
+                    s.node(cur_id)
+                    s.edge(prev, cur_id, style="invis", weight="100")
+                    prev = cur_id
 
     return dot
 
-# =============== 法定繼承（嚴格順位制） ===============
-def intestate_shares_tw(data: dict, decedent: str) -> Tuple[Dict[str, float], str, List[str]]:
-    persons = data.get("persons", {})
-    marriages = data.get("marriages", [])
-    children = data.get("children", [])
-    ch_map = map_children(children)
+# -----------------------------
+# 介面：抬頭與導覽
+# -----------------------------
+st.title("🌳 家族平台（人物｜關係｜法定繼承｜家族樹）")
+st.caption("本圖以「陳一郎家族」為示範。你可以按下右側的「馬上輸入自己的資料」，清空示範並開始建立你自己的家族。")
 
-    def avg(ids: List[str], portion: float, res: Dict[str, float]):
-        if not ids: return
-        each = portion / len(ids)
-        for i in ids:
-            res[i] = res.get(i, 0) + each
+colA, colB = st.columns([1,1])
+with colA:
+    if st.button("📥 重新載入示範家族"):
+        st.session_state.data = load_demo()
+        st.success("已載入示範資料。")
+with colB:
+    if st.button("✏️ 馬上輸入自己的資料（清空示範）"):
+        st.session_state.data = init_data()
+        st.success("已清空，開始輸入你自己的家族資料吧！")
 
-    spouse_list = current_spouses_of(decedent, marriages)
-    spouse = spouse_list[0] if spouse_list else None
+st.divider()
 
-    group_children = children_of_via_marriage(decedent, marriages_of(decedent, marriages), ch_map)
-    group_parents  = parents_of_person(decedent, marriages, ch_map)
-    group_sibs     = siblings_of_person(decedent, marriages, ch_map)
-    group_grand    = grandparents_of_person(decedent, marriages, ch_map)
+tab_people, tab_rel, tab_inherit, tab_tree = st.tabs(
+    ["👤 人物", "🔗 關係（婚姻 / 子女）", "⚖️ 法定繼承試算", "🧭 家族樹"]
+)
 
-    shares: Dict[str, float] = {}
-
-    # ① 子女
-    if group_children:
-        base = group_children + ([spouse] if spouse else [])
-        avg(base, 1.0, shares)  # 與子女並存：配偶視同一子，均分
-        return shares, "順位①（直系卑親屬）", [persons.get(x, {}).get("name", x) for x in base]
-    # ② 父母
-    if group_parents:
-        if spouse:
-            shares[spouse] = 0.5; avg(group_parents, 0.5, shares)
-            return shares, "順位②（父母）", [persons.get(spouse, {}).get("name", spouse)] + [persons.get(x, {}).get("name", x) for x in group_parents]
-        else:
-            avg(group_parents, 1.0, shares)
-            return shares, "順位②（父母）", [persons.get(x, {}).get("name", x) for x in group_parents]
-    # ③ 兄弟姊妹
-    if group_sibs:
-        if spouse:
-            shares[spouse] = 0.5; avg(group_sibs, 0.5, shares)
-            return shares, "順位③（兄弟姊妹）", [persons.get(spouse, {}).get("name", spouse)] + [persons.get(x, {}).get("name", x) for x in group_sibs]
-        else:
-            avg(group_sibs, 1.0, shares)
-            return shares, "順位③（兄弟姊妹）", [persons.get(x, {}).get("name", x) for x in group_sibs]
-    # ④ 祖父母
-    if group_grand:
-        if spouse:
-            shares[spouse] = 2/3; avg(group_grand, 1/3, shares)
-            return shares, "順位④（祖父母）", [persons.get(spouse, {}).get("name", spouse)] + [persons.get(x, {}).get("name", x) for x in group_grand]
-        else:
-            avg(group_grand, 1.0, shares)
-            return shares, "順位④（祖父母）", [persons.get(x, {}).get("name", x) for x in group_grand]
-
-    if spouse:
-        return {spouse: 1.0}, "僅配偶", [persons.get(spouse, {}).get("name", spouse)]
-    return {}, "無繼承人（資料不足）", []
-
-# =============== 首頁 CTA（示範說明＋清空資料） ===============
-with st.container():
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.markdown(
-            """
-            <div class="cta">
-              <div>
-                <div class="title">本圖以「陳一郎家族譜」為示範</div>
-                <div class="desc">點擊右側按鈕，清空示範資料，開始建立您自己的家族樹。</div>
-              </div>
-            """, unsafe_allow_html=True
-        )
-    with c2:
-        if st.button("馬上輸入自己的資料", use_container_width=True):
-            st.session_state["data"] = {"persons": {}, "marriages": [], "children": []}
-            st.session_state["just_cleared"] = True
-    st.markdown("</div>", unsafe_allow_html=True)
-
-if st.session_state.get("just_cleared"):
-    st.success("已清空示範資料。請到下方「👤 人物／關係管理」分頁，先新增人物，再建立婚姻，最後把子女掛到父母。")
-    st.session_state["just_cleared"] = False  # 只提示一次
-
-# =============== 分頁 ===============
-tab_tree, tab_inherit, tab_manage = st.tabs(["🧭 家族樹", "⚖️ 法定繼承試算", "👤 人物／關係管理"])
-
-# ---------- 家族樹（自動選根） ----------
-with tab_tree:
-    data = st.session_state["data"]
-    persons = data.get("persons", {})
-    if not persons:
-        st.info("請先到「人物／關係管理」新增一些人物與關係。")
-    else:
-        root_id = pick_root(data)
-        root_name = data["persons"][root_id]["name"]
-        st.caption(f"本圖自動以「{root_name}」為中心（關係最多），顯示其三代分層。")
-        dot = build_graph(data, root_id)
-        st.graphviz_chart(dot.source, use_container_width=True)
-
-# ---------- 法定繼承 ----------
-with tab_inherit:
-    data = st.session_state["data"]
-    persons = data.get("persons", {})
-    if not persons:
-        st.info("請先到「人物／關係管理」新增一些人物與關係。")
-    else:
-        default_pid = pick_root(data)
-        decedent = st.selectbox(
-            "被繼承人（可改選）",
-            options=list(persons.keys()),
-            index=list(persons.keys()).index(default_pid) if default_pid in persons else 0,
-            format_func=lambda x: persons[x]["name"],
-        )
-        shares, note, heirs_used = intestate_shares_tw(data, decedent)
-
-        st.markdown("#### 結果")
-        if not shares:
-            st.warning("目前資料不足，尚無法判定繼承人。")
-        else:
-            cols = st.columns(min(3, len(shares)))
-            i = 0
-            for pid, ratio in shares.items():
-                info = persons.get(pid, {})
-                color = node_color(info)
-                name = node_label(info)
-                with cols[i % len(cols)]:
-                    st.markdown(
-                        f"""
-                        <div class="card" style="background:{color}33">
-                          <div class="subtle">繼承人</div>
-                          <div style="font-size:20px;font-weight:700;color:{ACCENT}">{name}</div>
-                          <div style="font-size:32px;font-weight:800;color:{PRIMARY};margin-top:4px;">{ratio:.2%}</div>
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                i += 1
-            st.markdown(f'<div class="subtle">採用：{note}（配偶為當然繼承人；僅與第一個有人的順位共同繼承）。</div>', unsafe_allow_html=True)
-
-# ---------- 人物／關係管理（表單式，皆含 submit 按鈕） ----------
-with tab_manage:
-    data = st.session_state["data"]
-    persons = data.get("persons", {})
-    marriages = data.get("marriages", [])
-    children = data.get("children", [])
-
-    st.markdown("### 👤 新增／修改人物")
+# -----------------------------
+# 人物
+# -----------------------------
+with tab_people:
+    st.subheader("新增人物")
     with st.form("form_person", clear_on_submit=True):
         name = st.text_input("姓名 *")
         gender = st.selectbox("性別 *", ["男", "女"])
-        deceased = st.checkbox("已過世（圖上會顯示灰底與「（殁）」）", value=False)
-        ok = st.form_submit_button("儲存人物")   # ✅ 提交按鈕
+        deceased = st.checkbox("此人已過世", value=False)
+        ok = st.form_submit_button("新增 / 更新")
         if ok:
-            try:
-                pid = ensure_person_id(data, name, gender, deceased)
-                st.success(f"人物已儲存：{name}")
-            except Exception as e:
-                st.error(f"失敗：{e}")
+            if not name.strip():
+                st.error("請輸入姓名")
+            else:
+                pid = ensure_person_id(st.session_state.data, name.strip(), gender, deceased)
+                st.success(f"已新增 / 更新：{st.session_state.data['persons'][pid]['name']}")
 
-    st.markdown("---")
-    st.markdown("### 💍 建立／更新婚姻（現任/前任）")
+    st.subheader("現有人物")
+    if not st.session_state.data["persons"]:
+        st.info("目前尚無人物，請在上方新增。")
+    else:
+        for pid, p in st.session_state.data["persons"].items():
+            label = p["name"] + ("（殁）" if p.get("deceased") else "")
+            st.write(f"- {label}｜性別：{p.get('gender','?')}")
+
+# -----------------------------
+# 關係（婚姻／子女）
+# -----------------------------
+with tab_rel:
+    st.subheader("建立一段婚姻")
     with st.form("form_marriage", clear_on_submit=True):
-        a_name = st.text_input("配偶 A（姓名） *")
-        b_name = st.text_input("配偶 B（姓名） *")
-        status = st.selectbox("關係狀態", ["current", "ex"])
-        ok2 = st.form_submit_button("儲存婚姻")  # ✅ 提交按鈕
-        if ok2:
-            try:
-                # 若人物不存在會自動新增（性別先給預設，之後可在上方表單修正）
-                a_id = ensure_person_id(data, a_name, "男", False)
-                b_id = ensure_person_id(data, b_name, "女", False)
-                if a_id == b_id:
-                    st.error("同一人不能與自己結婚")
+        persons_opts = list(st.session_state.data["persons"].keys())
+        def fmt(x): 
+            p = st.session_state.data["persons"][x]
+            return p["name"] + ("（殁）" if p.get("deceased") else "")
+        if len(persons_opts) >= 2:
+            p1 = st.selectbox("配偶 A *", persons_opts, format_func=fmt)
+            p2 = st.selectbox("配偶 B *", [k for k in persons_opts if k != p1], format_func=fmt)
+            divorced = st.checkbox("這段婚姻已離婚？（離婚會顯示虛線）", value=False)
+            ok2 = st.form_submit_button("建立婚姻")
+            if ok2:
+                # 檢查是否已有同一對
+                duplicated = False
+                for m in st.session_state.data["marriages"]:
+                    if {m["a"], m["b"]} == {p1, p2}:
+                        duplicated = True; break
+                if duplicated:
+                    st.warning("這段婚姻已存在。")
                 else:
-                    # 檢查是否已有這對的婚姻
-                    mid = None
-                    for m in marriages:
-                        if {m["a"], m["b"]} == {a_id, b_id}:
-                            mid = m["id"]; break
-                    if not mid:
-                        base = f"m_{min(a_id,b_id)}_{max(a_id,b_id)}"
-                        mid = base; i = 1
-                        ids = {m["id"] for m in marriages}
-                        while mid in ids:
-                            i += 1; mid = f"{base}_{i}"
-                        marriages.append({"id": mid, "a": a_id, "b": b_id, "status": status})
-                        st.success(f"婚姻已建立：{data['persons'][a_id]['name']} × {data['persons'][b_id]['name']}（{status}）")
-                    else:
-                        for m in marriages:
-                            if m["id"] == mid:
-                                m["status"] = status
-                                st.success(f"婚姻已更新：{data['persons'][a_id]['name']} × {data['persons'][b_id]['name']} → {status}")
-                                break
-            except Exception as e:
-                st.error(f"失敗：{e}")
+                    st.session_state.data["marriages"].append(
+                        {"id": next_mid(), "a": p1, "b": p2, "divorced": divorced}
+                    )
+                    st.success(f"已建立婚姻：{fmt(p1)} － {fmt(p2)}")
+        else:
+            st.info("請先在『人物』頁籤新增至少兩人。")
+            st.form_submit_button("（無法建立）")
 
-    st.markdown("---")
-    st.markdown("### 👶 把子女掛到父母（某段婚姻）")
-    # 以目前婚姻做下拉
-    marriage_options = {
-        m["id"]: f"{data['persons'].get(m['a'],{}).get('name','?')} × {data['persons'].get(m['b'],{}).get('name','?')}（{m.get('status','')}）"
-        for m in marriages
-    }
+    # 子女
+    st.subheader("把子女掛到父母（某段婚姻）")
+    # 準備婚姻選單
+    marriage_options = {}
+    for m in st.session_state.data["marriages"]:
+        a = st.session_state.data["persons"].get(m["a"], {"name": "?"})["name"]
+        b = st.session_state.data["persons"].get(m["b"], {"name": "?"})["name"]
+        tag = "（離婚）" if m["divorced"] else "（在婚）"
+        marriage_options[m["id"]] = f"{a} － {b} {tag}"
+
     with st.form("form_child", clear_on_submit=True):
         if marriage_options:
             mid_pick = st.selectbox("選擇父母（婚姻）", options=list(marriage_options.keys()),
@@ -480,48 +396,68 @@ with tab_manage:
             child_name = st.text_input("子女姓名 *")
             child_gender = st.selectbox("子女性別 *", ["男", "女"])
             child_deceased = st.checkbox("子女已過世", value=False)
-            ok3 = st.form_submit_button("加入子女")  # ✅ 提交按鈕
+            ok3 = st.form_submit_button("加入子女")
             if ok3:
-                try:
-                    cid = ensure_person_id(data, child_name, child_gender, child_deceased)
-                    # 寫入 children 結構
+                if not child_name.strip():
+                    st.error("請輸入子女姓名")
+                else:
+                    cid = ensure_person_id(st.session_state.data, child_name.strip(), child_gender, child_deceased)
+                    # 掛到 children 結構
                     found = False
-                    for c in children:
+                    for c in st.session_state.data["children"]:
                         if c["marriage_id"] == mid_pick:
                             if cid not in c["children"]:
                                 c["children"].append(cid)
                             found = True; break
                     if not found:
-                        children.append({"marriage_id": mid_pick, "children": [cid]})
-                    st.success(f"已加入：{data['persons'][cid]['name']} → {marriage_options[mid_pick]}")
-                except Exception as e:
-                    st.error(f"失敗：{e}")
+                        st.session_state.data["children"].append({"marriage_id": mid_pick, "children":[cid]})
+                    st.success(f"已加入：{st.session_state.data['persons'][cid]['name']} → {marriage_options[mid_pick]}")
         else:
             st.info("目前尚無婚姻，請先在上方建立一段婚姻。")
+            st.form_submit_button("（無法加入子女）")
 
-    st.markdown("---")
-    st.markdown("#### 目前人物（摘要）")
-    if persons:
-        cols = st.columns(3)
-        items = list(persons.items())
-        for i, (pid, info) in enumerate(items):
-            with cols[i % 3]:
-                st.markdown(
-                    f"""
-                    <div class="card">
-                      <div style="font-weight:700;color:{ACCENT}">{node_label(info)}</div>
-                      <div class="small">性別：{info.get('gender','')}</div>
-                    </div>
-                    """, unsafe_allow_html=True
-                )
+    st.subheader("已建立婚姻")
+    if not st.session_state.data["marriages"]:
+        st.info("尚無婚姻。")
     else:
-        st.caption("尚未建立任何人物。")
+        for m in st.session_state.data["marriages"]:
+            a = st.session_state.data["persons"].get(m["a"], {"name": "?"})["name"]
+            b = st.session_state.data["persons"].get(m["b"], {"name": "?"})["name"]
+            st.write(f"- {a} － {b}｜{'離婚' if m['divorced'] else '在婚'}")
 
-    st.markdown("#### 目前關係（摘要）")
-    if marriages:
-        for m in marriages:
-            a = data["persons"].get(m["a"],{}).get("name","?")
-            b = data["persons"].get(m["b"],{}).get("name","?")
-            st.markdown(f"- **{a} × {b}**（{m.get('status','')}）")
+# -----------------------------
+# 法定繼承試算
+# -----------------------------
+with tab_inherit:
+    st.subheader("法定繼承試算（民法第 1138 條）")
+    st.caption("配偶為當然繼承人，並與最前順位（直系卑親屬 / 父母 / 兄弟姐妹 / 祖父母）共同繼承。只要有前順位，就不會往後順位。")
+    persons_opts = list(st.session_state.data["persons"].keys())
+    if not persons_opts:
+        st.info("請先在『人物』頁籤新增人物。")
     else:
-        st.caption("尚未建立任何婚姻。")
+        def fmt(x):
+            p = st.session_state.data["persons"][x]
+            return p["name"] + ("（殁）" if p.get("deceased") else "")
+        decedent = st.selectbox("選擇被繼承人", persons_opts, format_func=fmt)
+        heirs, rank_name = legal_heirs_ordered(st.session_state.data, decedent)
+        st.write(f"**順位判定**：{rank_name}")
+        if not heirs:
+            st.warning("找不到任何繼承人（可能全數過世或血親資料不足）。")
+        else:
+            st.write("**繼承人（配偶最前）**：")
+            cols = st.columns(min(4, len(heirs)))
+            for i, pid in enumerate(heirs):
+                p = st.session_state.data["persons"][pid]
+                label = p["name"] + ("（殁）" if p.get("deceased") else "")
+                cols[i % len(cols)].write(f"- {label}（{p.get('gender','?')}）")
+
+# -----------------------------
+# 家族樹
+# -----------------------------
+with tab_tree:
+    st.subheader("家族樹（前任在左・本人置中・現任在右；同代同層；子女垂直）")
+    if not st.session_state.data["persons"]:
+        st.info("請先新增人物與關係。")
+    else:
+        dot = draw_tree(st.session_state.data)
+        st.graphviz_chart(dot, use_container_width=True)
