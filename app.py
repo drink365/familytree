@@ -4,7 +4,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Family Tree (stable lanes)", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="Family Tree (clustered children)", page_icon="🌳", layout="wide")
 
 HTML = r"""
 <!DOCTYPE html>
@@ -111,13 +111,15 @@ HTML = r"""
 
   /* 尺寸與間距 */
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 36;   // 配偶最小水平距離
-  const LAYER_GAP_MIN  = NODE_W + 60;   // 同層人物最小水平距離
-  const LAYER_TOLERANCE = 20;           // 判定同層 y 容差
-  const BUS_OFFSET_STEPS = [-12, -4, 4, 12, 20]; // 子女水平線的偏移候選
-  const CHILD_TOP_GAP = 18;             // <<< 新增：子女頂部以上至少預留的垂直高度
+  const COUPLE_GAP_MIN = NODE_W + 36;     // 配偶最小水平距離
+  const LAYER_GAP_MIN  = NODE_W + 60;     // 同層人物最小水平距離（非孩子）
+  const LAYER_TOLERANCE = 20;             // 判定同層 y 容差
+  const SIBLING_GAP = 36;                 // ★ 同一婚姻兄弟姊妹之間的距離
+  const CLUSTER_GAP = 56;                 // ★ 不同婚姻孩子群組之間的最小距離
+  const BUS_OFFSET_STEPS = [-12,-4,4,12,20]; // 不同婚姻的水平車道
+  const CHILD_TOP_GAP = 18;               // 子女水平線至少高於 child 頂部
 
-  /* 視圖狀態（用 viewBox pan/zoom） */
+  /* 視圖狀態（viewBox 方式 pan/zoom） */
   let vb = {x:0,y:0,w:1000,h:600};
   let content = {w:1000,h:600};
   let isPanning = false, panStart = {x:0,y:0}, vbStart = {x:0,y:0};
@@ -130,7 +132,8 @@ HTML = r"""
 
   function demo(){
     const p={}, u={}, list=[
-      "陳一郎","陳前妻","陳妻","陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
+      "陳一郎","陳前妻","陳妻",
+      "陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
       "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A"
     ].map(n=>({id:uid("P"), name:n, deceased:false}));
     list.forEach(pp=>p[pp.id]=pp);
@@ -229,10 +232,10 @@ HTML = r"""
     return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
   }
 
-  /* 同層最小水平距離 */
-  function enforceLayerMinGap(layout, overrides){
+  /* —— 只針對「非孩子」做同層推開 —— */
+  function enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet){
     const items = (layout.children||[])
-      .filter(n=>!doc.unions[n.id])
+      .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id))  // ★ 跳過第三代孩子，避免把孩子推去別家
       .map(n=>{
         const nn = pickNode(layout, n.id, overrides) || n;
         return { id:n.id, x:nn.x, y:nn.y };
@@ -263,13 +266,8 @@ HTML = r"""
   }
 
   /* 婚姻車道偏移（避免不同婚姻的水平線重疊） */
-  function hashInt(s){
-    let h=0; for(let i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; } return h>>>0;
-  }
-  function busYOffset(unionId){
-    const h = hashInt(unionId);
-    return BUS_OFFSET_STEPS[h % BUS_OFFSET_STEPS.length];
-  }
+  function hashInt(s){ let h=0; for(let i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; } return h>>>0; }
+  function busYOffset(unionId){ const h = hashInt(unionId); return BUS_OFFSET_STEPS[h % BUS_OFFSET_STEPS.length]; }
 
   function render(autoFit=false){
     syncSelectors();
@@ -304,8 +302,68 @@ HTML = r"""
         }
       });
 
-      /* 同層人物最小距離 */
-      enforceLayerMinGap(layout, overrides);
+      /* —— 先記錄每段婚姻的孩子們（群組） —— */
+      const unionKids = {};
+      const childrenIdSet = new Set();
+      Object.values(doc.unions).forEach(u=>{
+        const kids = doc.children.filter(cl=>cl.unionId===u.id).map(cl=>cl.childId);
+        if(kids.length>0){ unionKids[u.id]=kids; kids.forEach(id=>childrenIdSet.add(id)); }
+      });
+
+      /* —— 只對「非孩子」做同層推開 —— */
+      enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
+
+      /* —— 以父母婚點 midX 為中心，排兄弟姊妹；群組之間再推開 —— */
+      const clustersByLayer = {};  // { layerKey: [ {unionId, childIds[], rect:{x0,x1}, yKey } ] }
+      Object.entries(unionKids).forEach(([uid,kids])=>{
+        // 取父母兩人的位置，算出 midX
+        const u = doc.unions[uid];
+        const na = pickNode(layout, u.partners[0], overrides);
+        const nb = pickNode(layout, u.partners[1], overrides);
+        if(!na || !nb) return;
+        const midX = (na.x + nb.x + NODE_W) / 2;
+
+        // 以 ELK 排出來的 x 由小到大（或使用現有順序），做兄弟姊妹水平排列
+        const kidNodes = kids
+          .map(id=>pickNode(layout, id, overrides))
+          .filter(Boolean)
+          .sort((a,b)=>a.x - b.x);
+
+        if(kidNodes.length===0) return;
+        const layerKey = Math.round(kidNodes[0].y / LAYER_TOLERANCE);
+
+        const width = kidNodes.length*NODE_W + (kidNodes.length-1)*SIBLING_GAP;
+        let startX = midX - width/2;
+
+        // 暫存 override（先不推開群組之間）
+        kidNodes.forEach((n,i)=>{
+          const x = startX + i*(NODE_W+SIBLING_GAP);
+          overrides[n.id] = Object.assign({}, overrides[n.id]||{}, { x });
+        });
+
+        const x0 = startX, x1 = startX + width;
+        if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
+        clustersByLayer[layerKey].push({ unionId: uid, childIds: kidNodes.map(n=>n.id), rect:{x0,x1} });
+      });
+
+      // —— 群組之間互推，維持最小距離 CLUSTER_GAP —— //
+      Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
+        list.sort((a,b)=>a.rect.x0 - b.rect.x0);
+        let cursorRight = list[0].rect.x1;
+        for(let i=1;i<list.length;i++){
+          const wantLeft = cursorRight + CLUSTER_GAP;
+          if(list[i].rect.x0 < wantLeft){
+            const shift = wantLeft - list[i].rect.x0;
+            // 整個群組右移
+            list[i].childIds.forEach(cid=>{
+              const cur = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
+              overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: cur + shift });
+            });
+            list[i].rect.x0 += shift; list[i].rect.x1 += shift;
+          }
+          cursorRight = list[i].rect.x1;
+        }
+      });
 
       /* 邊界（考慮 overrides） */
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -336,7 +394,7 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
-      /* 婚姻水平線 + 中點 + 子女（每段婚姻使用不同水平車道） */
+      /* 婚姻水平線 + 中點 + 子女（車道 + 至少 CHILD_TOP_GAP 高度） */
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = pickNode(layout, aid, overrides);
@@ -371,20 +429,18 @@ HTML = r"""
         dot.addEventListener("click",()=>{ selected={type:"union", id:u.id}; updateSelectionInfo(); });
         root.appendChild(dot);
 
-        // 子女連線：不同婚姻不同車道；且至少在孩子頂部上方 CHILD_TOP_GAP
-        const kids = doc.children.filter(cl=>cl.unionId===u.id);
+        // 子女連線
+        const kids = (unionKids[u.id]||[]);
         if(kids.length>0){
           const offBase = busYOffset(u.id);
-          kids.forEach(cl=>{
-            const nc = pickNode(layout, cl.childId, overrides);
+          kids.forEach(cid=>{
+            const nc = pickNode(layout, cid, overrides);
             if(!nc) return;
             const childTop = nc.y;
-            // 預設車道位置（可能略高或略低）
             let busY = childTop + offBase;
-            // 確保車道不會比 childTop 低於 CHILD_TOP_GAP：至少在上方保留高度
-            busY = Math.min(busY, childTop - CHILD_TOP_GAP);
+            busY = Math.min(busY, childTop - CHILD_TOP_GAP); // 確保有高度
 
-            const cx   = nc.x + NODE_W/2;
+            const cx = nc.x + NODE_W/2;
             const path = document.createElementNS("http://www.w3.org/2000/svg","path");
             const d = `M ${midX} ${y} L ${midX} ${busY} L ${cx} ${busY} L ${cx} ${childTop}`;
             path.setAttribute("d", d);
