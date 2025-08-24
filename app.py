@@ -460,73 +460,43 @@ HTML = r"""
   }
 
   /* 範例與新增 */
-  function demo(){
-    const p={}, u={}, list=[
-      "陳一郎","陳前妻","陳妻",
-      "陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
-      "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A","三孩B"
-    ].map(n=>({id:uid("P"), name:n, deceased:false}));
-    list.forEach(pp=>p[pp.id]=pp);
-    const id = n=>list.find(x=>x.name===n).id;
+function demo(){
+  const p={}, u={}, list=[
+    "陳一郎","陳前妻","陳妻",
+    "陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
+    "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A","三孩B"
+  ].map(n=>({id:uid("P"), name:n, deceased:false}));
+  list.forEach(pp=>p[pp.id]=pp);
+  const id = n=>list.find(x=>x.name===n).id;
 
-    const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
-    const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")],   status:"married"};
-    const m3={id:uid("U"), partners:[id("王子"),id("王子妻")],   status:"married"};
-    const m4={id:uid("U"), partners:[id("陳大"),id("陳大嫂")],   status:"married"};
-    const m5={id:uid("U"), partners:[id("陳二"),id("陳二嫂")],   status:"married"};
-    const m6={id:uid("U"), partners:[id("陳三"),id("陳三嫂")],   status:"married"};
-    [m1,m2,m3,m4,m5,m6].forEach(mm=>u[mm.id]=mm);
+  const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
+  const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")],   status:"married"};
+  const m3={id:uid("U"), partners:[id("王子"),id("王子妻")],   status:"married"};
+  const m4={id:uid("U"), partners:[id("陳大"),id("陳大嫂")],   status:"married"};
+  const m5={id:uid("U"), partners:[id("陳二"),id("陳二嫂")],   status:"married"};
+  const m6={id:uid("U"), partners:[id("陳三"),id("陳三嫂")],   status:"married"};
+  [m1,m2,m3,m4,m5,m6].forEach(mm=>u[mm.id]=mm);
 
-    const children=[
-      {unionId:m1.id, childId:id("王子")},
-      {unionId:m2.id, childId:id("陳大")},
-      {unionId:m2.id, childId:id("陳二")},
-      {unionId:m2.id, childId:id("陳三")},
-      {unionId:m3.id, childId:id("王孫")},
-      {unionId:m5.id, childId:id("二孩A")},
-      {unionId:m5.id, childId:id("二孩B")},
-      {unionId:m5.id, childId:id("二孩C")},
-      {unionId:m6.id, childId:id("三孩A")},
-      {unionId:m6.id, childId:id("三孩B")},
-    ];
-    doc = { persons:p, unions:u, children };
-    selected = {type:null,id:null};
-    render(true);
-  }
+  const children=[
+    {unionId:m1.id, childId:id("王子")},
+    {unionId:m2.id, childId:id("陳大")},
+    {unionId:m2.id, childId:id("陳二")},
+    {unionId:m2.id, childId:id("陳三")},
+    {unionId:m3.id, childId:id("王孫")},
+    {unionId:m5.id, childId:id("二孩A")},
+    {unionId:m5.id, childId:id("二孩B")},
+    {unionId:m5.id, childId:id("二孩C")},
+    {unionId:m6.id, childId:id("三孩A")},
+    {unionId:m6.id, childId:id("三孩B")},
+  ];
+  doc = { persons:p, unions:u, children };
+  selected = {type:null,id:null};
 
-  function clearAll(){
-    doc = { persons:{}, unions:{}, children:[] };
-    selected = {type:null,id:null};
-    render(true);
-  }
-
-  document.getElementById("btnDemo").addEventListener("click", ()=>demo());
-  document.getElementById("btnClear").addEventListener("click", clearAll);
-
-  document.getElementById("btnAddPerson").addEventListener("click", ()=>{
-    const name=document.getElementById("namePerson").value.trim();
-    const id=uid("P");
-    doc.persons[id]={id,name:(name||"新成員"),deceased:false};
-    document.getElementById("namePerson").value=""; render();
-  });
-
-  document.getElementById("btnAddUnion").addEventListener("click", ()=>{
-    const a=document.getElementById("selA").value;
-    const b=document.getElementById("selB").value;
-    if(!a||!b||a===b) return;
-    const id=uid("U"); doc.unions[id]={id,partners:[a,b],status:"married"}; render();
-  });
-
-  document.getElementById("btnAddChild").addEventListener("click", ()=>{
-    const mid=document.getElementById("selUnion").value; if(!mid) return;
-    const name=document.getElementById("nameChild").value.trim();
-    const id=uid("P");
-    doc.persons[id]={id,name:(name||"新子女"),deceased:false};
-    doc.children.push({unionId:mid, childId:id});  // 依建立順序呈現
-    document.getElementById("nameChild").value=""; render();
-  });
-
+  // 確保初次渲染有正確 viewBox
+  vb = {x:0,y:0,w:1200,h:680};
   render(true);
+}
+
 })();
 </script>
 </body>
