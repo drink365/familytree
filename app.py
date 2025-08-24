@@ -4,7 +4,7 @@
 import streamlit as st
 import streamlit.components.v1 as components
 
-st.set_page_config(page_title="Family Tree - Stable Layout", page_icon="🌳", layout="wide")
+st.set_page_config(page_title="Family Tree (Pan & Zoom)", page_icon="🌳", layout="wide")
 
 HTML = r"""
 <!DOCTYPE html>
@@ -18,7 +18,8 @@ HTML = r"""
   :root{
     --bg:#0b3d4f; --fg:#ffffff; --border:#114b5f; --line:#0f3c4d;
   }
-  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;background:#f8fafc}
   .toolbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;border-bottom:1px solid #e5e7eb;padding:.75rem 1rem;background:#fff;position:sticky;top:0;z-index:10}
   .btn{background:#075985;color:#fff;border:none;border-radius:.75rem;padding:.5rem .75rem;cursor:pointer}
   .btn.sec{background:#334155}
@@ -28,34 +29,37 @@ HTML = r"""
   .card{background:#fff;border:1px solid #e5e7eb;border-radius:1rem;padding:1rem}
   .row{display:flex;gap:.5rem;align-items:center;margin:.25rem 0}
   select,input[type=text]{border:1px solid #cbd5e1;border-radius:.75rem;padding:.45rem .6rem}
-  .canvas{height:720px;overflow:auto;border:1px solid #e5e7eb;border-radius:1rem;background:#fff}
-  .canvas svg{width:auto;height:auto;display:block} /* 關鍵：不要為配合容器而縮放 */
+  .canvas{height:720px;overflow:hidden;border:1px solid #e5e7eb;border-radius:1rem;background:#fff;position:relative}
+  .viewport{width:100%;height:100%;overflow:hidden}
   .hint{color:#64748b;font-size:.9rem}
   .legend{display:flex;gap:.75rem;align-items:center;color:#475569}
   .lgBox{width:18px;height:18px;border-radius:.5rem;background:var(--bg);border:2px solid var(--border)}
   svg text{user-select:none}
   .node{filter:drop-shadow(0 1px 0.5px rgba(0,0,0,.15))}
+  .zoombar{display:flex;gap:.5rem;margin-left:auto}
 </style>
 </head>
 <body>
   <div class="toolbar">
     <button class="btn ok" id="btnDemo">載入示例</button>
     <button class="btn sec" id="btnClear">清空</button>
-    <div class="legend"><div class="lgBox"></div><span>人物節點（婚姻點在水平線中點；離婚為虛線）</span></div>
-    <div style="flex:1"></div>
-    <button class="btn" id="btnExport">匯出 JSON</button>
-    <label class="btn">
-      匯入 JSON
-      <input type="file" id="fileImport" accept="application/json" style="display:none">
-    </label>
-    <button class="btn" id="btnSVG">下載 SVG</button>
+    <div class="legend"><div class="lgBox"></div><span>離婚虛線、無子女不往下連、婚姻點在水平線中點、配偶同層緊鄰</span></div>
+    <div class="zoombar">
+      <button class="btn" id="zoomOut">－</button>
+      <button class="btn" id="zoomIn">＋</button>
+      <button class="btn" id="zoomFit">置中顯示</button>
+      <button class="btn" id="zoom100">100%</button>
+      <button class="btn" id="btnSVG">下載 SVG</button>
+    </div>
   </div>
 
   <div class="pane">
     <div class="card">
-      <div class="canvas" id="canvas"></div>
+      <div class="canvas">
+        <div class="viewport" id="viewport"></div>
+      </div>
       <div class="hint" style="margin-top:.5rem">
-        規則：離婚顯示為虛線；無子女的婚姻不往下連；婚姻點在水平線中點；配偶同層緊鄰，並保證最小間距。畫布可水平/垂直捲動。
+        提示：滑鼠拖曳可平移；滾輪縮放（Mac 觸控板兩指縮放）；按鈕可置中或回到 100%。
       </div>
     </div>
 
@@ -91,9 +95,17 @@ HTML = r"""
 <script>
 (function(){
   const elk = new ELK();
-  const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 36; // 最小橫向間距（避免重疊）
 
+  // 外觀與間距
+  const NODE_W = 140, NODE_H = 56, MARGIN = 48;
+  const COUPLE_GAP_MIN = NODE_W + 36; // 避免配偶重疊的最小水平間距
+
+  // 縮放狀態（用 viewBox 實作 pan/zoom）
+  let vb = {x:0,y:0,w:1000,h:600};  // 目前 viewBox
+  let content = {w:1000,h:600};     // 內容大小（佈局結果）
+  let isPanning = false, panStart = {x:0,y:0}, vbStart = {x:0,y:0};
+
+  // 資料
   let doc = { persons:{}, unions:{}, children:[] };
   let selected = { type:null, id:null };
 
@@ -119,13 +131,13 @@ HTML = r"""
     ];
     doc = { persons:p, unions:u, children };
     selected = {type:null,id:null};
-    render();
+    render(true); // 初次：自動 fit
   }
 
   function clearAll(){
     doc = { persons:{}, unions:{}, children:[] };
     selected = {type:null,id:null};
-    render();
+    render(true);
   }
 
   function syncSelectors(){
@@ -147,14 +159,12 @@ HTML = r"""
     });
   }
 
-  // 佈局圖（a→union、b→union + a→b INFLUENCE）
+  // 建立 ELK 佈局圖（a→union、b→union + a→b INFLUENCE）
   function buildElkGraph(){
     const nodes=[], edges=[];
-
     Object.values(doc.persons).forEach(p=>{
       nodes.push({ id:p.id, width:NODE_W, height:NODE_H, labels:[{text:p.name}] });
     });
-
     Object.values(doc.unions).forEach(u=>{
       nodes.push({ id:u.id, width:10, height:10, labels:[{text:""}] });
       const [a,b]=u.partners;
@@ -163,11 +173,9 @@ HTML = r"""
       edges.push({ id:uid("E"), sources:[a], targets:[b],
                    layoutOptions:{ "elk.priority":"1000", "elk.edge.type":"INFLUENCE" }});
     });
-
     doc.children.forEach(cl=>{
       edges.push({ id:uid("E"), sources:[cl.unionId], targets:[cl.childId] });
     });
-
     return {
       id:"root",
       layoutOptions:{
@@ -183,7 +191,7 @@ HTML = r"""
     };
   }
 
-  // 取節點，若有覆寫就使用覆寫
+  // 以覆寫位置取節點
   function pickNode(layout, id, overrides){
     const n = (layout.children||[]).find(x=>x.id===id);
     if(!n) return null;
@@ -191,13 +199,18 @@ HTML = r"""
     return n;
   }
 
-  function render(){
+  // 計算自動 fit 的 viewBox
+  function computeFitViewBox(w,h, padding=60){
+    return { x:-padding, y:-padding, w:w+padding*2, h:h+padding*2 };
+  }
+
+  function render(autoFit=false){
     syncSelectors();
-    const container = document.getElementById("canvas");
-    container.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
+    const host = document.getElementById("viewport");
+    host.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
 
     elk.layout(buildElkGraph()).then(layout=>{
-      // 覆寫集：強制同層 + 最小橫向間距
+      // 覆寫：配偶同層 ＋ 最小水平間距
       const overrides = {};
       Object.values(doc.unions).forEach(u=>{
         const [a,b]=u.partners;
@@ -205,37 +218,38 @@ HTML = r"""
         const nb = (layout.children||[]).find(n=>n.id===b);
         if(!na||!nb) return;
 
-        // 1) 同層（以較上層為準）
+        // y 對齊（較上層）
         const yAlign = Math.min(na.y, nb.y);
-        if(na.y !== yAlign) overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
-        if(nb.y !== yAlign) overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
+        overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
+        overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
 
-        // 2) 最小間距：確保水平方向不重疊（把右邊的人往右推）
-        const aX = na.x, bX = nb.x;
-        const leftId  = aX <= bX ? a : b;
-        const rightId = aX <= bX ? b : a;
-        const nLeft  = aX <= bX ? na : nb;
-        const nRight = aX <= bX ? nb : na;
+        // 最小水平間距
+        const left  = na.x <= nb.x ? a : b;
+        const right = na.x <= nb.x ? b : a;
+        const nL = na.x <= nb.x ? na : nb;
+        const nR = na.x <= nb.x ? nb : na;
 
-        const leftXRightEdge  = (overrides[leftId]?.x ?? nLeft.x) + NODE_W;
-        const rightXLeftEdge  = (overrides[rightId]?.x ?? nRight.x);
-        const gap = rightXLeftEdge - leftXRightEdge;
-
-        if(gap < (COUPLE_GAP_MIN - NODE_W)) {
-          const need = COUPLE_GAP_MIN - NODE_W - gap; // 要再多多少距離
-          const newRightX = (overrides[rightId]?.x ?? nRight.x) + need;
-          overrides[rightId] = Object.assign({}, overrides[rightId]||{}, { x: newRightX, y: yAlign });
-          overrides[leftId]  = Object.assign({}, overrides[leftId] ||{}, { y: yAlign });
+        const lRight = (overrides[left]?.x ?? nL.x) + NODE_W;
+        const rLeft  = (overrides[right]?.x ?? nR.x);
+        const gap = rLeft - lRight;
+        const need = COUPLE_GAP_MIN - NODE_W - gap;
+        if(need > 0){
+          overrides[right] = Object.assign({}, overrides[right]||{}, { x:(overrides[right]?.x ?? nR.x)+need, y:yAlign });
         }
       });
 
-      // 畫 SVG（固定像素尺寸，容器自動出捲軸）
-      const w = (layout.width||0) + MARGIN*2;
-      const h = (layout.height||0) + MARGIN*2;
+      // 尺寸
+      const w = Math.ceil((layout.width||0) + MARGIN*2);
+      const h = Math.ceil((layout.height||0) + MARGIN*2);
+      content = {w, h};
+      if(autoFit) vb = computeFitViewBox(w, h);
+
+      // --- 建立 SVG（用 viewBox 控制 pan/zoom）---
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-      svg.setAttribute("width", w);
-      svg.setAttribute("height", h);
-      svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+      svg.setAttribute("width", "100%");     // 佔滿容器
+      svg.setAttribute("height", "100%");    // 佔滿容器
+      svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+      svg.style.background = "#fff";
 
       const root = document.createElementNS("http://www.w3.org/2000/svg","g");
       root.setAttribute("transform", `translate(${MARGIN},${MARGIN})`);
@@ -290,7 +304,7 @@ HTML = r"""
         }
       });
 
-      // 人物節點（使用覆寫後的位置渲染）
+      // 人物節點（覆寫後位置）
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
         const nn = pickNode(layout, n.id, overrides);
@@ -308,7 +322,59 @@ HTML = r"""
         g.appendChild(r); g.appendChild(t); root.appendChild(g);
       });
 
-      container.innerHTML=""; container.appendChild(svg);
+      // 掛上到容器
+      host.innerHTML=""; host.appendChild(svg);
+
+      // === Pan / Zoom 行為 ===
+      function applyViewBox(){ svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`); }
+
+      // 拖曳平移
+      svg.addEventListener("mousedown", (e)=>{
+        isPanning = true;
+        panStart = {x:e.clientX, y:e.clientY};
+        vbStart = {x:vb.x, y:vb.y, w:vb.w, h:vb.h};
+      });
+      window.addEventListener("mousemove", (e)=>{
+        if(!isPanning) return;
+        const dx = (e.clientX - panStart.x) * (vb.w / svg.clientWidth);
+        const dy = (e.clientY - panStart.y) * (vb.h / svg.clientHeight);
+        vb.x = vbStart.x - dx; vb.y = vbStart.y - dy; applyViewBox();
+      });
+      window.addEventListener("mouseup", ()=>{ isPanning=false; });
+
+      // 滾輪縮放（以指標為中心）
+      svg.addEventListener("wheel", (e)=>{
+        e.preventDefault();
+        const scale = (e.deltaY>0)? 1.1 : 0.9;
+        const rect = svg.getBoundingClientRect();
+        const px = (e.clientX - rect.left) / rect.width;   // 0..1
+        const py = (e.clientY - rect.top)  / rect.height;  // 0..1
+        const newW = vb.w * scale, newH = vb.h * scale;
+        vb.x = vb.x + vb.w*px - newW*px;
+        vb.y = vb.y + vb.h*py - newH*py;
+        vb.w = newW; vb.h = newH;
+        applyViewBox();
+      }, {passive:false});
+
+      // 工具列按鈕
+      document.getElementById("zoomIn").onclick = ()=>{ vb.w*=0.9; vb.h*=0.9; applyViewBox(); };
+      document.getElementById("zoomOut").onclick= ()=>{ vb.w*=1.1; vb.h*=1.1; applyViewBox(); };
+      document.getElementById("zoomFit").onclick= ()=>{ vb = computeFitViewBox(content.w, content.h); applyViewBox(); };
+      document.getElementById("zoom100").onclick= ()=>{ vb = {x:0,y:0,w:content.w,h:content.h}; applyViewBox(); };
+
+      // 下載 SVG
+      document.getElementById("btnSVG").onclick = ()=>{
+        // 以「內容原尺寸」輸出
+        const svgOut = svg.cloneNode(true);
+        svgOut.setAttribute("viewBox", `0 0 ${content.w} ${content.h}`);
+        svgOut.setAttribute("width", content.w);
+        svgOut.setAttribute("height", content.h);
+        const s = new XMLSerializer().serializeToString(svgOut);
+        const blob = new Blob([s], {type:"image/svg+xml;charset=utf-8"});
+        const url = URL.createObjectURL(blob);
+        const a=document.createElement("a"); a.href=url; a.download="family-tree.svg"; a.click();
+        URL.revokeObjectURL(url);
+      };
     });
 
     updateSelectionInfo();
@@ -327,8 +393,8 @@ HTML = r"""
     }
   }
 
-  // 事件
-  document.getElementById("btnDemo").addEventListener("click", demo);
+  // 事件：資料操作
+  document.getElementById("btnDemo").addEventListener("click", ()=>render(true) || demo());
   document.getElementById("btnClear").addEventListener("click", clearAll);
 
   document.getElementById("btnAddPerson").addEventListener("click", ()=>{
@@ -366,38 +432,12 @@ HTML = r"""
     selected={type:null,id:null}; render();
   });
 
-  document.getElementById("btnExport").addEventListener("click", ()=>{
-    const blob = new Blob([JSON.stringify(doc,null,2)], {type:"application/json"});
-    const url = URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download="family-tree.json"; a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  document.getElementById("fileImport").addEventListener("change", (e)=>{
-    const f=e.target.files && e.target.files[0]; if(!f) return;
-    const reader=new FileReader();
-    reader.onload = (ev)=>{
-      try{ const t = JSON.parse(String(ev.target.result||"{}"));
-        if(t && t.persons && t.unions && t.children){ doc=t; selected={type:null,id:null}; render(); }
-      }catch(err){ console.error(err); }
-    };
-    reader.readAsText(f);
-  });
-
-  document.getElementById("btnSVG").addEventListener("click", ()=>{
-    const svg = document.querySelector("#canvas svg"); if(!svg) return;
-    const s = new XMLSerializer().serializeToString(svg);
-    const blob = new Blob([s], {type:"image/svg+xml;charset=utf-8"});
-    const url = URL.createObjectURL(blob);
-    const a=document.createElement("a"); a.href=url; a.download="family-tree.svg"; a.click();
-    URL.revokeObjectURL(url);
-  });
-
-  render();
+  // 初始
+  render(true);
 })();
 </script>
 </body>
 </html>
 """
 
-components.html(HTML, height=840, scrolling=True)
+components.html(HTML, height=860, scrolling=True)
