@@ -6,10 +6,6 @@
 # - 人物：性別＋已過世（男=淡藍、女=淡紅、已故=灰並加「（殁）」）
 # - 法定繼承：配偶為當然繼承人，只與「第一個有人的順位」共同繼承
 # - 首頁加上「本圖以陳一郎家族譜為示範」與「馬上輸入自己的資料」按鈕
-#
-# requirements.txt 建議：
-#   streamlit==1.37.0
-#   graphviz==0.20.3
 # ==========================================================
 
 from typing import Dict, List, Tuple
@@ -172,7 +168,7 @@ def node_label(info: dict) -> str:
     return f"{info.get('name','')}（殁）" if info.get("deceased") else info.get("name","")
 
 def pick_root(data: dict) -> str:
-    """選關係『最多』的人當根（婚姻＋子女），若平手取字典序最小 id。"""
+    """選關係『最多』的人當根（婚姻＋子女＋現任加權），若平手取字典序最小 id。"""
     persons = data.get("persons", {})
     marriages = data.get("marriages", [])
     children = data.get("children", [])
@@ -219,7 +215,7 @@ def build_graph(data: dict, root_id: str) -> Digraph:
         with dot.subgraph() as s:
             s.attr(rank="same"); s.node(a); s.node(b)
 
-    # 子女：同層；左→右不可見固定
+    # 子女：同層；左→右不可見固定（避免重疊）
     for mid, kids in ch_map.items():
         if not kids:
             continue
@@ -231,7 +227,7 @@ def build_graph(data: dict, root_id: str) -> Digraph:
         for cid in kids:
             dot.edge(mid, cid)
 
-    # 鎖「前任→本人→現任」橫向順序
+    # 鎖「前任→本人→現任」橫向順序（保證前任在左、現任在右）
     ex_map = {pid: [] for pid in persons}
     cur_map = {pid: [] for pid in persons}
     for m in marriages:
@@ -353,11 +349,9 @@ with st.container():
             st.session_state["just_cleared"] = True
     st.markdown("</div>", unsafe_allow_html=True)
 
-# 若剛清空，顯示引導卡
 if st.session_state.get("just_cleared"):
-    st.success("已清空示範資料。請到下方「👤 人物／關係管理」分頁，從『新增／修改人物』開始輸入家族成員，接著建立婚姻，再把子女掛到父母。")
-    # 只提示一次
-    st.session_state["just_cleared"] = False
+    st.success("已清空示範資料。請到下方「👤 人物／關係管理」分頁，先新增人物，再建立婚姻，最後把子女掛到父母。")
+    st.session_state["just_cleared"] = False  # 只提示一次
 
 # =============== 分頁 ===============
 tab_tree, tab_inherit, tab_manage = st.tabs(["🧭 家族樹", "⚖️ 法定繼承試算", "👤 人物／關係管理"])
@@ -415,7 +409,7 @@ with tab_inherit:
                 i += 1
             st.markdown(f'<div class="subtle">採用：{note}（配偶為當然繼承人；僅與第一個有人的順位共同繼承）。</div>', unsafe_allow_html=True)
 
-# ---------- 人物／關係管理（表單式） ----------
+# ---------- 人物／關係管理（表單式，皆含 submit 按鈕） ----------
 with tab_manage:
     data = st.session_state["data"]
     persons = data.get("persons", {})
@@ -427,7 +421,7 @@ with tab_manage:
         name = st.text_input("姓名 *")
         gender = st.selectbox("性別 *", ["男", "女"])
         deceased = st.checkbox("已過世（圖上會顯示灰底與「（殁）」）", value=False)
-        ok = st.form_submit_button("儲存人物")
+        ok = st.form_submit_button("儲存人物")   # ✅ 提交按鈕
         if ok:
             try:
                 pid = ensure_person_id(data, name, gender, deceased)
@@ -441,7 +435,7 @@ with tab_manage:
         a_name = st.text_input("配偶 A（姓名） *")
         b_name = st.text_input("配偶 B（姓名） *")
         status = st.selectbox("關係狀態", ["current", "ex"])
-        ok2 = st.form_submit_button("儲存婚姻")
+        ok2 = st.form_submit_button("儲存婚姻")  # ✅ 提交按鈕
         if ok2:
             try:
                 # 若人物不存在會自動新增（性別先給預設，之後可在上方表單修正）
@@ -486,7 +480,7 @@ with tab_manage:
             child_name = st.text_input("子女姓名 *")
             child_gender = st.selectbox("子女性別 *", ["男", "女"])
             child_deceased = st.checkbox("子女已過世", value=False)
-            ok3 = st.form_submit_button("加入子女")
+            ok3 = st.form_submit_button("加入子女")  # ✅ 提交按鈕
             if ok3:
                 try:
                     cid = ensure_person_id(data, child_name, child_gender, child_deceased)
