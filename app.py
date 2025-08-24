@@ -14,7 +14,7 @@ st.set_page_config(page_title="🧬 家庭樹 Family Tree", page_icon="🧬", la
 # ------------------------------
 
 def init_data():
-    """Ensure base schema exists in session state."""
+    """Ensure base schema exists in session state and coerce types."""
     if "data" not in st.session_state:
         st.session_state.data = {
             "persons": {},      # pid -> {name, gender, deceased, birth_year, tag}
@@ -54,7 +54,7 @@ def ensure_schema_types():
             d["marriages"] = conv
         else:
             d["marriages"] = {}
-    # children
+    # children list only
     if not isinstance(d.get("children"), list):
         d["children"] = []
     # seq
@@ -124,7 +124,7 @@ def add_person(name: str, gender: str, deceased: bool=False, birth_year: Optiona
         "name": name.strip(),
         "gender": gender,
         "deceased": bool(deceased),
-        "birth_year": int(birth_year) if birth_year else None,
+        "birth_year": int(birth_year) if birth_year is not None else None,
         "tag": tag.strip() if tag else "",
     }
     return pid
@@ -136,15 +136,15 @@ def update_person(pid: str, **kwargs):
 
 
 def delete_person(pid: str):
-    # Remove from marriages & children maps safely
     d = st.session_state.data
     # Remove marriages where pid participated
-    to_delete = [mid for mid, m in d["marriages"].items() if m["a"] == pid or m["b"] == pid]
+    to_delete = [mid for mid, m in d["marriages"].items() if m.get("a") == pid or m.get("b") == pid]
     for mid in to_delete:
         delete_marriage(mid)
     # Remove from children arrays
     for row in d["children"]:
-        row["children"] = [c for c in row["children"] if c != pid]
+        if isinstance(row, dict):
+            row["children"] = [c for c in row.get("children", []) if c != pid]
     # Finally remove the person
     if pid in d["persons"]:
         del d["persons"][pid]
@@ -167,14 +167,14 @@ def delete_marriage(mid: str):
     d = st.session_state.data
     if mid in d["marriages"]:
         del d["marriages"][mid]
-    d["children"] = [row for row in d["children"] if row.get("marriage_id") != mid]
+    d["children"] = [row for row in d["children"] if isinstance(row, dict) and row.get("marriage_id") != mid]
 
 
 def attach_children(mid: str, kids: List[str]):
     d = st.session_state.data
     # find existing row for this marriage
     for row in d["children"]:
-        if row.get("marriage_id") == mid:
+        if isinstance(row, dict) and row.get("marriage_id") == mid:
             existing = set(row.get("children", []))
             row["children"] = list(existing.union(set(kids)))
             return
@@ -184,7 +184,7 @@ def attach_children(mid: str, kids: List[str]):
 def remove_child(mid: str, pid: str):
     d = st.session_state.data
     for row in d["children"]:
-        if row.get("marriage_id") == mid:
+        if isinstance(row, dict) and row.get("marriage_id") == mid:
             row["children"] = [c for c in row.get("children", []) if c != pid]
             break
 
@@ -194,26 +194,31 @@ def remove_child(mid: str, pid: str):
 # ------------------------------
 
 def marriages_of(pid: str) -> List[str]:
-    return [mid for mid, m in st.session_state.data["marriages"].items() if m["a"] == pid or m["b"] == pid]
+    return [mid for mid, m in st.session_state.data.get("marriages", {}).items() if isinstance(m, dict) and (m.get("a") == pid or m.get("b") == pid)]
 
 
 def children_of_marriage(mid: str) -> List[str]:
-    for row in st.session_state.data["children"]:
-        if row.get("marriage_id") == mid:
+    for row in st.session_state.data.get("children", []):
+        if isinstance(row, dict) and row.get("marriage_id") == mid:
             return row.get("children", [])
     return []
 
 
 def sort_siblings_by_age(child_ids: List[str]) -> List[str]:
-    persons = st.session_state.data["persons"]
+    persons = st.session_state.data.get("persons", {})
     with_year = [cid for cid in child_ids if persons.get(cid, {}).get("birth_year")]
     no_year   = [cid for cid in child_ids if not persons.get(cid, {}).get("birth_year")]
     with_year.sort(key=lambda c: persons[c].get("birth_year"))  # 早生在左（年份小在左）
     return with_year + no_year
 
 
+def _escape_label(s: str) -> str:
+    # Ensure Graphviz-safe label
+    return s.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+
+
 def person_label(pid: str) -> str:
-    p = st.session_state.data["persons"].get(pid, {})
+    p = st.session_state.data.get("persons", {}).get(pid, {})
     by = p.get("birth_year")
     tag = p.get("tag")
     base = p.get("name", pid)
@@ -248,8 +253,7 @@ def build_dot() -> str:
         shape = "circle" if p.get("gender") == "女" else "box"
         fill = "#f2f2f2" if p.get("deceased") else "white"
         font = "#666666" if p.get("deceased") else "#222222"
-        label = person_label(pid).replace("
-", "\n")
+        label = _escape_label(person_label(pid))
         lines.append(f'  "{pid}" [label="{label}", shape={shape}, fillcolor="{fill}", fontcolor="{font}"];')
 
     # 2) Marriage junctions + spouse edges
@@ -285,7 +289,7 @@ def build_dot() -> str:
         for k in kids:
             lines.append(f'  "{jid}" -> "{k}";')
 
-    # 4) Attempt to bias ex/current placement (soft hint via subgraphs)
+    # 4) Soft bias ex/current placement (subgraphs)
     for pid in persons.keys():
         mids = marriages_of(pid)
         if len(mids) <= 1:
@@ -306,8 +310,7 @@ def build_dot() -> str:
             lines.append("  subgraph cluster_right_" + pid + " { rank=same; color=\"white\"; " + "; ".join(cur_side) + " }")
 
     lines.append("}")
-    return "
-".join(lines)
+    return "\n".join(lines)
 
 
 # ------------------------------
@@ -323,7 +326,10 @@ def toolbar():
         if st.button("↪️ 重做 (Redo)"):
             redo()
     with c3:
-        st.session_state.readonly = st.toggle("唯讀模式", value=st.session_state.readonly, help="關閉表單輸入，適合客戶瀏覽/展示")
+        st.session_state.readonly = st.toggle(
+            "唯讀模式", value=st.session_state.readonly,
+            help="關閉表單輸入，適合客戶瀏覽/展示"
+        )
     with c4:
         buf = io.BytesIO(json.dumps(st.session_state.data, ensure_ascii=False, indent=2).encode("utf-8"))
         st.download_button("📥 匯出 JSON", data=buf, file_name="family.json", mime="application/json")
@@ -340,7 +346,7 @@ def toolbar():
                 ensure_schema_types()
                 st.success("匯入成功！")
             except Exception as e:
-                st.error(f"匯入失敗：{e}")
+                st.error(f"匯入失敗：\n{e}")
     with c6:
         dot_src = build_dot()
         st.download_button("🧾 下載 DOT", data=dot_src.encode("utf-8"), file_name="family.dot", mime="text/vnd.graphviz")
@@ -354,23 +360,24 @@ def person_manager():
         with st.form("form_add_person"):
             name = st.text_input("姓名*", disabled=readonly).strip()
             gender = st.selectbox("性別*", ["男", "女"], disabled=readonly)
-            by = st.number_input("出生年（選填）", min_value=1850, max_value=2100, step=1, value=2000, format="%d", disabled=readonly)
+            by_val = st.number_input("出生年（預設 2000，可取消）", min_value=1850, max_value=2100, step=1, value=2000, format="%d", disabled=readonly)
             use_by = st.checkbox("使用上述出生年", value=False, disabled=readonly)
             deceased = st.checkbox("是否已過世", value=False, disabled=readonly)
             tag = st.text_input("標籤（關鍵角色/身份）", value="", disabled=readonly)
             submitted = st.form_submit_button("新增")
             if submitted and not readonly and name:
                 push_history()
-                add_person(name=name, gender=gender, deceased=deceased, birth_year=(by if use_by else None), tag=tag)
+                add_person(name=name, gender=gender, deceased=deceased, birth_year=(by_val if use_by else None), tag=tag)
                 st.success(f"已新增：{name}")
 
     # 編輯/刪除
-    people = st.session_state.data["persons"]
+    people = st.session_state.data.get("persons", {})
     if not people:
         st.info("目前尚無人物。可用上方『新增人物』或載入 demo。")
         return
 
     q = st.text_input("快速搜尋（姓名/標籤）").strip()
+
     def match(pid):
         p = people[pid]
         target = (p.get("name", "") + " " + p.get("tag", "")).lower()
@@ -388,9 +395,9 @@ def person_manager():
     with col1:
         name = st.text_input("姓名", value=p.get("name", ""), disabled=readonly)
     with col2:
-        gender = st.selectbox("性別", ["男", "女"], index=0 if p.get("gender")=="男" else 1, disabled=readonly)
+        gender = st.selectbox("性別", ["男", "女"], index=0 if p.get("gender") == "男" else 1, disabled=readonly)
     with col3:
-        by = st.number_input("出生年（可空白）", min_value=1850, max_value=2100, step=1, value=p.get("birth_year") or 2000, format="%d", disabled=readonly)
+        by_val = st.number_input("出生年（可空白）", min_value=1850, max_value=2100, step=1, value=p.get("birth_year") or 2000, format="%d", disabled=readonly)
         use_by = st.checkbox("啟用出生年", value=(p.get("birth_year") is not None), disabled=readonly)
     with col4:
         deceased = st.checkbox("已過世", value=p.get("deceased", False), disabled=readonly)
@@ -401,7 +408,7 @@ def person_manager():
     with cA:
         if st.button("💾 儲存變更", disabled=readonly):
             push_history()
-            update_person(pid, name=name.strip(), gender=gender, deceased=deceased, birth_year=(by if use_by else None), tag=tag.strip())
+            update_person(pid, name=name.strip(), gender=gender, deceased=deceased, birth_year=(by_val if use_by else None), tag=tag.strip())
             st.success("已更新。")
     with cB:
         if st.button("🗑️ 刪除此人物", disabled=readonly, type="secondary"):
@@ -418,7 +425,7 @@ def person_manager():
 def marriage_manager():
     st.subheader("💞 婚姻關係")
     readonly = st.session_state.readonly
-    people = st.session_state.data["persons"]
+    people = st.session_state.data.get("persons", {})
     if len(people) < 2:
         st.info("請先建立至少兩位人物。")
         return
@@ -443,7 +450,7 @@ def marriage_manager():
                 st.success(f"已建立婚姻：{people[a]['name']} × {people[b]['name']} ({mid})")
 
     # 列表 & 編輯
-    marriages = st.session_state.data["marriages"]
+    marriages = st.session_state.data.get("marriages", {})
     if not marriages:
         st.info("尚無婚姻關係。")
         return
@@ -476,18 +483,22 @@ def marriage_manager():
 def children_manager():
     st.subheader("👶 子女連結（一定從對應婚姻點往下）")
     readonly = st.session_state.readonly
-    marriages = st.session_state.data["marriages"]
-    people = st.session_state.data["persons"]
+    marriages = st.session_state.data.get("marriages", {})
+    people = st.session_state.data.get("persons", {})
     if not marriages:
         st.info("請先建立婚姻/伴侶關係。")
         return
 
-    mid = st.selectbox("選擇婚姻", list(marriages.keys()), format_func=lambda x: f"{people[marriages[x]['a']]['name']} × {people[marriages[x]['b']]['name']} ({x})")
+    mid = st.selectbox("選擇婚姻", list(marriages.keys()), format_func=lambda x: f"{people.get(marriages[x]['a'],{}).get('name','?')} × {people.get(marriages[x]['b'],{}).get('name','?')} ({x})")
     current_kids = children_of_marriage(mid)
 
     col1, col2 = st.columns([1,1])
     with col1:
-        candidate = st.selectbox("選擇子女以新增", [pid for pid in people.keys() if pid not in current_kids and pid not in [marriages[mid]['a'], marriages[mid]['b']]], format_func=lambda x: people[x]['name'], disabled=readonly)
+        candidate = st.selectbox(
+            "選擇子女以新增",
+            [pid for pid in people.keys() if pid not in current_kids and pid not in [marriages[mid]['a'], marriages[mid]['b']]],
+            format_func=lambda x: people[x]['name'], disabled=readonly
+        )
         if st.button("➕ 新增子女", disabled=readonly):
             push_history()
             attach_children(mid, [candidate])
@@ -515,7 +526,7 @@ def children_manager():
 init_data()
 
 st.title("🧬 家庭樹 Family Tree")
-st.caption("這是一個用於家族關係梳理與初步傳承對話的小工具。圖例：女生圓形、男生方形、灰底為已過世；已離婚為虛線。")
+st.caption("女生圓形、男生方形、灰底為已過世；已離婚為虛線。子女只會從對應婚姻點往下連線。")
 
 # Top toolbar
 toolbar()
@@ -539,7 +550,7 @@ with center:
     st.subheader("🗺️ 家庭樹視覺化")
     dot_src = build_dot()
     st.graphviz_chart(dot_src, use_container_width=True)
-    st.caption("※ 兄弟姊妹按出生年自動排序（無出生年者保持輸入順序）。子女只會從『對應婚姻點』往下連線。")
+    st.caption("※ 兄弟姊妹按出生年自動排序（無出生年者保持輸入順序）。")
 
 with right:
     marriage_manager()
