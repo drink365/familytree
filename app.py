@@ -10,9 +10,9 @@ from collections import defaultdict, deque
 def _empty_data():
     return {
         "persons": {},          # pid -> {name, sex('男'/'女'), alive(True/False), note}
-        "marriages": {},        # mid -> {a, b, divorced(bool)}
+        "marriages": {},        # mid -> {a, b, divorced(bool), anchor('mid'|'a'|'b')}
         "children": [],         # list of {mid, child}
-        "sibling_links": [],    # list of (pid1, pid2)  (無序對；用排序後的tuple去重)
+        "sibling_links": [],    # list of (pid1, pid2)
         "_seq": 0,              # for id generation
         "_demo_loaded": False,
     }
@@ -32,7 +32,12 @@ def _new_id(d: dict, prefix: str) -> str:
 def add_person(name, sex, alive=True, note=""):
     d = st.session_state.data
     pid = _new_id(d, "P")
-    d["persons"][pid] = {"name": name.strip() or "（未命名）", "sex": sex, "alive": bool(alive), "note": note.strip()}
+    d["persons"][pid] = {
+        "name": name.strip() or "（未命名）",
+        "sex": sex,
+        "alive": bool(alive),
+        "note": note.strip(),
+    }
     return pid
 
 def update_person(pid, name=None, sex=None, alive=None, note=None):
@@ -52,20 +57,12 @@ def remove_person(pid):
     d = st.session_state.data
     if pid in d["persons"]:
         del d["persons"][pid]
-    # also clean marriages & children & sibling links
-    mids_to_del = [mid for mid, m in d["marriages"].items() if m["a"] == pid or m["b"] == pid]
-    for mid in mids_to_del:
-        if mid in d["marriages"]:
-            del d["marriages"][mid]
-        d["children"] = [row for row in d["children"] if row["mid"] != mid]
-    d["children"] = [row for row in d["children"] if row["child"] != pid]
-    # sibling links
-    cleaned = []
-    for x, y in d["sibling_links"]:
-        if x == pid or y == pid:
-            continue
-        cleaned.append((x, y))
-    d["sibling_links"] = cleaned
+    # 清除相關婚姻/子女/兄弟連結
+    mids = [mid for mid, m in d["marriages"].items() if m["a"] == pid or m["b"] == pid]
+    for mid in mids:
+        d["marriages"].pop(mid, None)
+    d["children"]      = [row for row in d["children"] if row["mid"] not in mids and row["child"] != pid]
+    d["sibling_links"] = [p for p in d["sibling_links"] if pid not in p]
 
 def list_persons():
     return st.session_state.data["persons"]
@@ -75,11 +72,11 @@ def add_marriage(a, b, divorced=False, anchor='mid'):
     anchor: 'mid' 夫妻中點；'a' 配偶A下方；'b' 配偶B下方
     """
     d = st.session_state.data
-    # 如果已存在同一對，直接更新
+    # 若已存在同一對，更新屬性
     for mid, m in d["marriages"].items():
         if {m["a"], m["b"]} == {a, b}:
             m["divorced"] = bool(divorced)
-            m["anchor"] = m.get("anchor", anchor)
+            m["anchor"]   = m.get("anchor", anchor)
             return mid
     mid = _new_id(d, "M")
     d["marriages"][mid] = {"a": a, "b": b, "divorced": bool(divorced), "anchor": anchor}
@@ -91,16 +88,10 @@ def add_child(mid, child):
 
 def remove_marriage(mid):
     d = st.session_state.data
-    if mid in d["marriages"]:
-        del d["marriages"][mid]
+    d["marriages"].pop(mid, None)
     d["children"] = [row for row in d["children"] if row["mid"] != mid]
 
 def build_child_map():
-    """
-    返回:
-        children_map: mid -> [child_ids]
-        parent_map  : child -> set([parent_ids]) (如果能推得)
-    """
     d = st.session_state.data
     children_map = defaultdict(list)
     for row in d["children"]:
@@ -109,15 +100,12 @@ def build_child_map():
     for mid, m in d["marriages"].items():
         a, b = m["a"], m["b"]
         for c in children_map.get(mid, []):
-            if a in d["persons"]:
-                parent_map[c].add(a)
-            if b in d["persons"]:
-                parent_map[c].add(b)
+            if a in d["persons"]: parent_map[c].add(a)
+            if b in d["persons"]: parent_map[c].add(b)
     return children_map, parent_map
 
 def add_sibling_link(x, y):
-    if x == y:
-        return
+    if x == y: return
     d = st.session_state.data
     pair = tuple(sorted([x, y]))
     if pair not in d["sibling_links"]:
@@ -149,36 +137,37 @@ def person_node(dot: Digraph, pid, p):
              fontcolor=fontcolor)
 
 # -------------------------------
-# Demo
+# Demo（首次自動載入）
 # -------------------------------
 
 def load_demo():
     d = st.session_state.data = _empty_data()
-    # 建幾個人
-    a = add_person("當事人", "男", True)
-    x1 = add_person("前任A", "女", True)
-    x2 = add_person("前任B", "女", True)
-    c1 = add_person("現任", "女", True)
-    s1 = add_person("子1", "男", True)
-    s2 = add_person("子2", "女", True)
-    s3 = add_person("子3", "男", True)
-    # 婚姻：與前任A(離婚)、與現任(未離)
-    m1 = add_marriage(a, x1, divorced=True, anchor="b")   # 孩子從前任A的一側往下
-    m2 = add_marriage(a, c1, divorced=False, anchor="a")  # 孩子從當事人這一側往下
-    add_child(m2, s1)
-    add_child(m2, s2)
-    add_child(m1, s3)
+
+    # 人物
+    chen   = add_person("陳一郎", "男", True)
+    ex_w   = add_person("陳前妻", "女", True)
+    cur_w  = add_person("陳妻", "女", True)
+
+    wangzi = add_person("王子", "男", True)
+    wz_w   = add_person("王子妻", "女", True)
+    w_zsun = add_person("王孫", "男", True)
+
+    c1 = add_person("陳大", "男", True)
+    c2 = add_person("陳二", "男", True)
+    c3 = add_person("陳三", "男", True)
+
+    # 婚姻 + 子女
+    m_ex  = add_marriage(chen, ex_w,  divorced=True,  anchor="mid")
+    m_cur = add_marriage(chen, cur_w, divorced=False, anchor="mid")
+    m_wz  = add_marriage(wangzi, wz_w, divorced=False, anchor="mid")
+
+    add_child(m_ex, wangzi)
+    add_child(m_cur, c1)
+    add_child(m_cur, c2)
+    add_child(m_cur, c3)
+    add_child(m_wz, w_zsun)
+
     st.session_state.data["_demo_loaded"] = True
-
-# -------------------------------
-# Inheritance (簡易試算占位)
-# -------------------------------
-
-def page_inheritance():
-    st.subheader("⚖️ 法定繼承試算（簡易）")
-    st.caption("此頁為範例占位，僅示意。")
-    d = st.session_state.data
-    st.json({"persons": d["persons"], "marriages": d["marriages"], "children": d["children"]})
 
 # -------------------------------
 # Drawing
@@ -187,7 +176,7 @@ def page_inheritance():
 def draw_tree():
     d = st.session_state.data
     if not d["persons"]:
-        st.info("請先新增人物與關係，或載入示範。")
+        st.info("請先新增人物與關係。")
         return
 
     dot = Digraph("Family", format="svg", engine="dot")
@@ -196,7 +185,7 @@ def draw_tree():
         splines="ortho",
         nodesep="0.5",
         ranksep="0.7",
-        concentrate="false",   # 重要：避免把多條邊合併成一條
+        concentrate="false",   # 避免把多條邊合併成一條
     )
 
     # 節點
@@ -250,7 +239,7 @@ def draw_tree():
             s.node(a); s.node(b)
 
         if anchor == "mid":
-            # A — jn — B：兩段可見橫線；jn 與 A/B 同 rank，看起來像一條直線
+            # A — jn — B：兩段可見橫線；jn 與 A/B 同 rank
             with dot.subgraph() as s:
                 s.attr(rank="same")
                 s.node(a); s.node(jn); s.node(b)
@@ -264,12 +253,12 @@ def draw_tree():
             dot.edge(a, jn, color=BORDER_COLOR,
                      weight="100", minlen="1", tailport="s", headport="n")
         else:
-            # anchor == "b"
+            # anchor == "b"：夫妻橫線 + 從 B 垂直下接點
             dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
             dot.edge(b, jn, color=BORDER_COLOR,
                      weight="100", minlen="1", tailport="s", headport="n")
 
-        # 子女：一律從接點「純垂直」往下，不再形成水平幹線
+        # 子女：一律從接點純垂直往下
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
             with dot.subgraph() as s:
@@ -312,38 +301,15 @@ def draw_tree():
 
     st.graphviz_chart(dot)
 
-
 # -------------------------------
 # Pages
 # -------------------------------
 
 def page_people():
     d = st.session_state.data
-
     st.subheader("👤 人物")
-    st.caption("先新增人物，再到「關係」分頁建立婚姻與子女。")
-
-    # 新增人物
-    with st.form("add_person"):
-        st.markdown("**新增人物**")
-        name = st.text_input("姓名", "")
-        sex  = st.radio("性別", ["男", "女"], horizontal=True, index=0)
-        alive = st.checkbox("尚在人世", value=True)
-        note = st.text_input("備註", "")
-        ok = st.form_submit_button("新增")
-        if ok:
-            add_person(name, sex, alive, note)
-            st.success("已新增。")
 
     # 人物清單與編輯
-    if not d["persons"]:
-        with st.expander("快速載入示範資料"):
-            if st.button("載入示範"):
-                load_demo()
-                st.success("已載入示範。")
-        return
-
-    st.markdown("**人物清單**")
     for pid, p in list(d["persons"].items()):
         with st.expander(f"{p['name']} ({p['sex']})"):
             col1, col2, col3 = st.columns([2,2,1])
@@ -361,18 +327,26 @@ def page_people():
                     remove_person(pid)
                     st.warning("已刪除。")
 
+    # 新增人物
+    with st.form("add_person"):
+        st.markdown("**新增人物**")
+        name = st.text_input("姓名", "")
+        sex  = st.radio("性別", ["男", "女"], horizontal=True, index=0)
+        alive = st.checkbox("尚在人世", value=True)
+        note = st.text_input("備註", "")
+        ok = st.form_submit_button("新增")
+        if ok:
+            add_person(name, sex, alive, note)
+            st.success("已新增。")
+
 def page_relations():
     d = st.session_state.data
-
     st.subheader("🔗 關係")
-    st.caption("建立婚姻、子女與（無共同父母的）兄弟姊妹連結。")
 
     # 建立婚姻
     st.markdown("**建立婚姻**")
-    if len(d["persons"]) < 2:
-        st.info("至少需要兩個人物。")
-    else:
-        persons = d["persons"]
+    persons = d["persons"]
+    if len(persons) >= 2:
         options = {f"{p['name']} ({pid})": pid for pid, p in persons.items()}
         with st.form("add_marriage"):
             colA, colB, colC, colD = st.columns([2,2,1,2])
@@ -393,13 +367,17 @@ def page_relations():
                     anchor_key = {'夫妻中點':'mid','配偶A下方':'a','配偶B下方':'b'}[anchor]
                     add_marriage(a_id, b_id, divorced, anchor_key)
                     st.success("已建立婚姻。")
+    else:
+        st.info("至少需要兩個人物。")
 
     # 建立子女
     st.markdown("**建立子女**")
-    if not d["marriages"]:
-        st.info("請先建立至少一段婚姻。")
-    else:
-        marriages_opt = {f"{d['persons'][m['a']]['name']} ❤️ {d['persons'][m['b']]['name']} ({mid})": mid for mid, m in d["marriages"].items() if m["a"] in d["persons"] and m["b"] in d["persons"]}
+    if d["marriages"]:
+        marriages_opt = {
+            f"{d['persons'][m['a']]['name']} ❤️ {d['persons'][m['b']]['name']} ({mid})": mid
+            for mid, m in d["marriages"].items()
+            if m["a"] in d["persons"] and m["b"] in d["persons"]
+        }
         persons_opt   = {f"{p['name']} ({pid})": pid for pid, p in d["persons"].items()}
         with st.form("add_child"):
             col1, col2 = st.columns([2,2])
@@ -411,12 +389,12 @@ def page_relations():
             if ok:
                 add_child(marriages_opt[mid_label], persons_opt[child_label])
                 st.success("已建立子女關係。")
+    else:
+        st.info("請先建立至少一段婚姻。")
 
     # 無共同父母之兄弟姊妹（手動）
     st.markdown("**無共同父母之兄弟姊妹（手動連結）**")
-    if len(d["persons"]) < 2:
-        st.info("至少需要兩個人物。")
-    else:
+    if len(d["persons"]) >= 2:
         persons_opt = {f"{p['name']} ({pid})": pid for pid, p in d["persons"].items()}
         col1, col2, col3 = st.columns([2,2,1])
         with col1:
@@ -424,9 +402,11 @@ def page_relations():
         with col2:
             s2 = st.selectbox("兄弟/姊妹 2", list(persons_opt.keys()), key="sib2")
         with col3:
-            if st.button("建立無共同父母之兄弟姊妹連結"):
+            if st.button("建立連結"):
                 add_sibling_link(persons_opt[s1], persons_opt[s2])
                 st.success("已建立。")
+    else:
+        st.info("至少需要兩個人物。")
 
 def page_tree():
     st.subheader("🧬 家族樹")
@@ -440,30 +420,19 @@ def page_tree():
 def main():
     _ensure_session()
 
+    # 首次自動載入示範資料（若尚未載入）
+    if not st.session_state.data["_demo_loaded"]:
+        load_demo()
+
     st.set_page_config(page_title="家庭樹", page_icon="🌳", layout="wide")
     st.title("📚 家庭樹平台")
-    st.caption("建立人物、婚姻與子女關係，並產生清晰的家族關係圖。")
 
-    # 操作說明
-    with st.expander("使用提示", expanded=False):
-        st.markdown(
-            """
-            - 夫妻之間一律**橫線**：現任＝實線、前任＝虛線  
-            - 建立婚姻時可選擇**孩子連接點**（夫妻中點 / 配偶A下方 / 配偶B下方）  
-            - 若同一人有多段婚姻，系統自動讓**配偶分列在當事人的兩側**，且**相鄰**，減少長距離繞線  
-            - 可在「關係」頁新增「無共同父母」的兄弟姊妹連結（會以虛線水平相連）
-            """
-        )
-
-    tab1, tab2, tab3, tab4 = st.tabs(["人物", "關係", "法定繼承試算", "家族樹"])
-
+    tab1, tab2, tab3 = st.tabs(["人物", "關係", "家族樹"])
     with tab1:
         page_people()
     with tab2:
         page_relations()
     with tab3:
-        page_inheritance()
-    with tab4:
         page_tree()
 
 if __name__ == "__main__":
