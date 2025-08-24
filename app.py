@@ -102,7 +102,7 @@ HTML = r"""
 
   // 縮放狀態（用 viewBox 實作 pan/zoom）
   let vb = {x:0,y:0,w:1000,h:600};  // 目前 viewBox
-  let content = {w:1000,h:600};     // 內容大小（佈局結果）
+  let content = {w:1000,h:600};     // 內容大小（依最終座標計算）
   let isPanning = false, panStart = {x:0,y:0}, vbStart = {x:0,y:0};
 
   // 資料
@@ -238,21 +238,34 @@ HTML = r"""
         }
       });
 
-      // 尺寸
-      const w = Math.ceil((layout.width||0) + MARGIN*2);
-      const h = Math.ceil((layout.height||0) + MARGIN*2);
+      // === 重新計算「最終實際邊界」(考慮 overrides) ===
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      (layout.children||[]).forEach(n=>{
+        if(doc.unions[n.id]) return; // 只看人物節點就夠
+        const nn = pickNode(layout, n.id, overrides);
+        if(!nn) return;
+        minX = Math.min(minX, nn.x);
+        minY = Math.min(minY, nn.y);
+        maxX = Math.max(maxX, nn.x + NODE_W);
+        maxY = Math.max(maxY, nn.y + NODE_H);
+      });
+      if(!isFinite(minX)){ minX = 0; minY = 0; maxX = (layout.width||1000); maxY=(layout.height||600); }
+
+      const w = Math.ceil((maxX - minX) + MARGIN*2);
+      const h = Math.ceil((maxY - minY) + MARGIN*2);
       content = {w, h};
       if(autoFit) vb = computeFitViewBox(w, h);
 
       // --- 建立 SVG（用 viewBox 控制 pan/zoom）---
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-      svg.setAttribute("width", "100%");     // 佔滿容器
-      svg.setAttribute("height", "100%");    // 佔滿容器
+      svg.setAttribute("width", "100%");
+      svg.setAttribute("height", "100%");
       svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
       svg.style.background = "#fff";
 
       const root = document.createElementNS("http://www.w3.org/2000/svg","g");
-      root.setAttribute("transform", `translate(${MARGIN},${MARGIN})`);
+      // 把整張圖向左上平移，抵銷 minX/minY，確保全部在正座標內
+      root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
       // 婚姻水平線 + 中點（離婚虛線；有子女才往下）
@@ -362,9 +375,8 @@ HTML = r"""
       document.getElementById("zoomFit").onclick= ()=>{ vb = computeFitViewBox(content.w, content.h); applyViewBox(); };
       document.getElementById("zoom100").onclick= ()=>{ vb = {x:0,y:0,w:content.w,h:content.h}; applyViewBox(); };
 
-      // 下載 SVG
+      // 下載 SVG（以內容原尺寸輸出）
       document.getElementById("btnSVG").onclick = ()=>{
-        // 以「內容原尺寸」輸出
         const svgOut = svg.cloneNode(true);
         svgOut.setAttribute("viewBox", `0 0 ${content.w} ${content.h}`);
         svgOut.setAttribute("width", content.w);
@@ -394,7 +406,7 @@ HTML = r"""
   }
 
   // 事件：資料操作
-  document.getElementById("btnDemo").addEventListener("click", ()=>render(true) || demo());
+  document.getElementById("btnDemo").addEventListener("click", ()=>demo());
   document.getElementById("btnClear").addEventListener("click", clearAll);
 
   document.getElementById("btnAddPerson").addEventListener("click", ()=>{
@@ -418,22 +430,7 @@ HTML = r"""
     document.getElementById("nameChild").value=""; render();
   });
 
-  document.getElementById("btnDelete").addEventListener("click", ()=>{
-    if(!selected.type) return;
-    if(selected.type==="person"){
-      const pid = selected.id; delete doc.persons[pid];
-      const keptUnions = {}; Object.values(doc.unions).forEach(u=>{ if(u.partners.indexOf(pid)===-1) keptUnions[u.id]=u; });
-      doc.unions = keptUnions;
-      doc.children = doc.children.filter(cl => cl.childId!==pid && !!doc.unions[cl.unionId]);
-    }else{
-      const uid_ = selected.id; delete doc.unions[uid_];
-      doc.children = doc.children.filter(cl => cl.unionId!==uid_);
-    }
-    selected={type:null,id:null}; render();
-  });
-
-  // 初始
-  render(true);
+  render(true); // 初始渲染：置中顯示
 })();
 </script>
 </body>
