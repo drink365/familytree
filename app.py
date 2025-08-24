@@ -264,7 +264,7 @@ def heirs_1138(decedent):
     return out
 
 # -------------------------------
-# Graphviz Family Tree
+# Graphviz Family Tree (修正版)
 # -------------------------------
 
 COLOR_MALE   = "#d8eaff"
@@ -292,48 +292,50 @@ def draw_tree():
     dot = Digraph("Family", format="svg", engine="dot")
     dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.5", ranksep="0.7")
 
-    # 節點
+    # 1. 繪製所有人物節點
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 夫妻 + 子女（回到原本布局，只新增水平夫妻線與隱形子女接點）
+    # 2. 處理婚姻與子女關係 (*** 這是主要修改的部分 ***)
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
-        style = "dashed" if divorced else "solid"
 
-        # 1) 夫妻水平線（直接連 a-b），保持 rank 與相對位置穩定
-        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR)
+        # 建立一個代表「婚姻」的隱形中心節點，直接使用 marriage id (mid) 即可
+        dot.node(mid, "", shape="point", width="0", height="0")
 
-        # 2) 讓夫妻併排（與你原本相同）
+        # 使用 subgraph 強制「配偶A」、「婚姻中心點」、「配偶B」在同一水平階層 (rank)
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
+            s.node(mid)
             s.node(b)
+        
+        # 將夫妻分別連到婚姻中心點，這樣就形成了一條水平線
+        # 這種結構比 `a -> b` 加上 `constraint=false` 更穩定
+        style = "dashed" if divorced else "solid"
+        dot.edge(a, mid, dir="none", style=style, color=BORDER_COLOR)
+        dot.edge(mid, b, dir="none", style=style, color=BORDER_COLOR)
 
-        # 3) 子女接點：放在夫妻中間；用隱形高權重邊把接點「拉」到中線
-        jn = f"J_{mid}"
-        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR, style="invis")
-        dot.edge(a, jn, dir="none", style="invis", weight="8")
-        dot.edge(b, jn, dir="none", style="invis", weight="8")
-
-        # 4) 子女：與原本一樣，保持同一排，再由接點垂直連下去
+        # 找出這段婚姻的所有子女
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
-            with dot.subgraph() as s:
-                s.attr(rank="same")
-                for c in kids:
-                    s.node(c)
+            # 從「婚姻中心點」直接連線到每個子女
+            # 由於婚姻中心點位置穩定，這條線會是乾淨的垂直向下連線
             for c in kids:
-                dot.edge(jn, c, color=BORDER_COLOR)
+                dot.edge(mid, c, color=BORDER_COLOR)
 
-    # 兄弟姊妹(無共同父母時)用虛線相連，並強制 rank=same（保持原本做法）
+    # 3. 處理手動指定的兄弟姊妹關係 (這部分邏輯不變，但需要放在婚姻關係之後)
+    # 收集已有共同父母的兄弟姊妹，避免重複畫線
     _, parent_map = build_child_map()
     def has_same_parents(x, y):
-        return parent_map.get(x, set()) and parent_map.get(x, set()) == parent_map.get(y, set())
+        px = parent_map.get(x, set())
+        py = parent_map.get(y, set())
+        return px and px == py
 
     for a, b in d["sibling_links"]:
         if has_same_parents(a, b):
             continue
+        # 僅在沒有共同父母時才手動繪製連結
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
