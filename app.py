@@ -1,3 +1,4 @@
+# app.py
 import streamlit as st
 from graphviz import Digraph
 from collections import defaultdict, deque
@@ -319,21 +320,16 @@ def draw_tree():
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
 
         style = "dashed" if divorced else "solid"
+        dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR)
+        dot.edge(b, jn, dir="none", style=style, color=BORDER_COLOR)
 
-        # ✅ 改成夫妻「水平橫線」（不影響排版）：
-        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
-
-        # 用隱形邊把 jn 固定在夫妻連線之間，讓孩子仍從中點往下（不改變位置）
-        dot.edge(a, jn, dir="none", style="invis", weight="50")
-        dot.edge(b, jn, dir="none", style="invis", weight="50")
-
-        # 讓夫妻併排（保留原本的相對位置）
+        # 讓夫妻併排
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
             s.node(b)
 
-        # 小孩垂直往下（維持既有作法）
+        # 小孩垂直往下
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
             with dot.subgraph() as s:
@@ -571,4 +567,8 @@ tab1, tab2, tab3, tab4 = st.tabs(["人物", "關係", "法定繼承試算", "家
 with tab1:
     page_people()
 with tab2:
-    pag
+    page_relations()
+with tab3:
+    page_inheritance()
+with tab4:
+    page_tree()
