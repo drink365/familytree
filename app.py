@@ -28,6 +28,38 @@ def init_data():
         st.session_state.future = []
     if "readonly" not in st.session_state:
         st.session_state.readonly = False
+    ensure_schema_types()
+
+
+def ensure_schema_types():
+    """Guard against malformed JSON/imports; coerce to expected types."""
+    d = st.session_state.data
+    # persons
+    if not isinstance(d.get("persons"), dict):
+        d["persons"] = {}
+    # marriages: allow list -> dict conversion
+    if not isinstance(d.get("marriages"), dict):
+        if isinstance(d.get("marriages"), list):
+            conv = {}
+            for i, m in enumerate(d["marriages"]):
+                if isinstance(m, dict):
+                    mid = m.get("id") or f"M_conv_{i+1}"
+                    conv[mid] = {
+                        "a": m.get("a"),
+                        "b": m.get("b"),
+                        "current": bool(m.get("current", True)),
+                        "divorced": bool(m.get("divorced", False)),
+                        "note": m.get("note", ""),
+                    }
+            d["marriages"] = conv
+        else:
+            d["marriages"] = {}
+    # children
+    if not isinstance(d.get("children"), list):
+        d["children"] = []
+    # seq
+    if not isinstance(d.get("_seq"), dict):
+        d["_seq"] = {"P": 0, "M": 0}
 
 
 def next_id(prefix: str) -> str:
@@ -198,9 +230,10 @@ def person_label(pid: str) -> str:
 # ------------------------------
 
 def build_dot() -> str:
+    ensure_schema_types()
     d = st.session_state.data
-    persons = d["persons"]
-    marriages = d["marriages"]
+    persons = d.get("persons", {})
+    marriages = d.get("marriages", {})
     lines = []
 
     lines.append("digraph G {")
@@ -210,24 +243,40 @@ def build_dot() -> str:
 
     # 1) Person nodes
     for pid, p in persons.items():
+        if not isinstance(p, dict):
+            continue
         shape = "circle" if p.get("gender") == "女" else "box"
         fill = "#f2f2f2" if p.get("deceased") else "white"
         font = "#666666" if p.get("deceased") else "#222222"
-        label = person_label(pid).replace("\n", "\\n")
+        label = person_label(pid).replace("
+", "\n")
         lines.append(f'  "{pid}" [label="{label}", shape={shape}, fillcolor="{fill}", fontcolor="{font}"];')
 
     # 2) Marriage junctions + spouse edges
-    for mid, m in marriages.items():
-        jid = f"J_{mid}"
-        style = "dashed" if m.get("divorced") else "solid"
-        lines.append(f'  "{jid}" [shape=point, width=0.02, label="", color="#888888"];')
-        lines.append(f'  "{m["a"]}" -> "{jid}" [style={style}];')
-        lines.append(f'  "{jid}" -> "{m["b"]}" [style={style}];')
+    if isinstance(marriages, dict):
+        for mid, m in marriages.items():
+            if not isinstance(m, dict):
+                continue
+            a = m.get("a")
+            b = m.get("b")
+            if not a or not b or a not in persons or b not in persons:
+                continue
+            jid = f"J_{mid}"
+            style = "dashed" if m.get("divorced") else "solid"
+            lines.append(f'  "{jid}" [shape=point, width=0.02, label="", color="#888888"];')
+            lines.append(f'  "{a}" -> "{jid}" [style={style}];')
+            lines.append(f'  "{jid}" -> "{b}" [style={style}];')
 
     # 3) Children groups (from correct marriage junction)
-    for row in d["children"]:
+    for row in d.get("children", []):
+        if not isinstance(row, dict):
+            continue
         mid = row.get("marriage_id")
-        kids = sort_siblings_by_age(row.get("children", []))
+        kids = row.get("children", [])
+        if not mid or not isinstance(kids, list):
+            continue
+        kids = [k for k in kids if k in persons]
+        kids = sort_siblings_by_age(kids)
         if not kids:
             continue
         jid = f"J_{mid}"
@@ -237,20 +286,28 @@ def build_dot() -> str:
             lines.append(f'  "{jid}" -> "{k}";')
 
     # 4) Attempt to bias ex/current placement (soft hint via subgraphs)
-    # For each person with multiple marriages, group ex (left) and current (right)
     for pid in persons.keys():
         mids = marriages_of(pid)
         if len(mids) <= 1:
             continue
-        ex_side = [f'"J_{mid}"' for mid in mids if not marriages[mid].get("current") or marriages[mid].get("divorced")]
-        cur_side = [f'"J_{mid}"' for mid in mids if marriages[mid].get("current") and not marriages[mid].get("divorced")]
+        ex_side = []
+        cur_side = []
+        for mid in mids:
+            m = marriages.get(mid)
+            if not isinstance(m, dict):
+                continue
+            if not m.get("current") or m.get("divorced"):
+                ex_side.append(f'"J_{mid}"')
+            else:
+                cur_side.append(f'"J_{mid}"')
         if ex_side:
             lines.append("  subgraph cluster_left_" + pid + " { rank=same; color=\"white\"; " + "; ".join(ex_side) + " }")
         if cur_side:
             lines.append("  subgraph cluster_right_" + pid + " { rank=same; color=\"white\"; " + "; ".join(cur_side) + " }")
 
     lines.append("}")
-    return "\n".join(lines)
+    return "
+".join(lines)
 
 
 # ------------------------------
@@ -268,9 +325,8 @@ def toolbar():
     with c3:
         st.session_state.readonly = st.toggle("唯讀模式", value=st.session_state.readonly, help="關閉表單輸入，適合客戶瀏覽/展示")
     with c4:
-        if st.button("📥 匯出 JSON"):
-            buf = io.BytesIO(json.dumps(st.session_state.data, ensure_ascii=False, indent=2).encode("utf-8"))
-            st.download_button("下載 family.json", data=buf, file_name="family.json", mime="application/json")
+        buf = io.BytesIO(json.dumps(st.session_state.data, ensure_ascii=False, indent=2).encode("utf-8"))
+        st.download_button("📥 匯出 JSON", data=buf, file_name="family.json", mime="application/json")
     with c5:
         up = st.file_uploader("📤 匯入 JSON（將覆蓋目前資料）", type=["json"], label_visibility="collapsed")
         if up is not None:
@@ -281,6 +337,7 @@ def toolbar():
                         raise ValueError(f"缺少必要欄位：{k}")
                 push_history()
                 st.session_state.data = incoming
+                ensure_schema_types()
                 st.success("匯入成功！")
             except Exception as e:
                 st.error(f"匯入失敗：{e}")
