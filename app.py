@@ -111,12 +111,12 @@ HTML = r"""
 
   /* 尺寸與間距 */
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 18;     // 夫妻最小距離
-  const LAYER_GAP_MIN  = NODE_W + 60;     // 非子女同層距離
+  const COUPLE_GAP_MIN = NODE_W + 18;
+  const LAYER_GAP_MIN  = NODE_W + 60;
   const LAYER_TOLERANCE = 20;
-  const SIBLING_GAP_BASE = 36;            // 兄弟姊妹基礎間距
-  const CLUSTER_GAP = 56;                 // 不同婚姻子女群組距離
-  const BUS_STEPS = [-14,-6,6,14,22,30];  // 同層不同婚姻 bus 高度輪替（更多步階）
+  const SIBLING_GAP_BASE = 36;
+  const CLUSTER_GAP = 56;
+  const BUS_STEPS = [-14,-6,6,14,22,30];
   const CHILD_TOP_GAP = 18;
 
   /* 視圖狀態 */
@@ -238,7 +238,8 @@ HTML = r"""
     const layers = {};
     items.forEach(it=>{
       const key = Math.round(it.y / LAYER_TOLERANCE);
-      (layers[key] ||= []).push(it);
+      if(!layers[key]) layers[key]=[];
+      layers[key].push(it);
     });
 
     Object.values(layers).forEach(arr=>{
@@ -307,7 +308,6 @@ HTML = r"""
 
         const midX=(na.x+nb.x+NODE_W)/2;
 
-        // blocks 依紀錄順序
         const blocks=kids.map(cid=>{
           const k=pickNode(layout,cid,overrides); if(!k) return null;
           const mateUnion=Object.values(doc.unions).find(xx=>(xx.partners||[]).includes(cid) && xx.partners.length===2);
@@ -338,7 +338,8 @@ HTML = r"""
         const layerKey=Math.round((pickNode(layout,kids[0],overrides)||{}).y/LAYER_TOLERANCE);
         const kidCenters = kids.map(cid=> (pickNode(layout,cid,overrides).x + NODE_W/2) );
         const span = {min: Math.min(...kidCenters), max: Math.max(...kidCenters)};
-        (clustersByLayer[layerKey] ||= []).push({unionId:uid, anchorX:midX, span});
+        if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
+        clustersByLayer[layerKey].push({unionId:uid, anchorX:midX, span});
       });
 
       /* 群組互推（保序） */
@@ -381,7 +382,7 @@ HTML = r"""
       const w=Math.ceil((maxX-minX)+MARGIN*2), h=Math.ceil((maxY-minY)+MARGIN*2);
       content={w,h}; if(autoFit) vb=computeFitViewBox(w,h);
 
-      /* 為同層婚姻分配不重複 bus 高度（避免看成同一條） */
+      /* 為同層婚姻分配不重複 bus 高度 */
       const laneOffsetByUnion={};
       Object.entries(clustersByLayer).forEach(([layerKey,list])=>{
         list.sort((a,b)=>a.anchorX-b.anchorX);
@@ -398,7 +399,7 @@ HTML = r"""
       root.setAttribute("transform",`translate(${MARGIN-minX},${MARGIN-minY})`);
       svg.appendChild(root);
 
-      /* 婚姻線 + 中點 +（關鍵）每婚姻獨立的 bus 段 */
+      /* 婚姻線 + 中點 + 每婚姻獨立 bus */
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na=pickNode(layout,aid,overrides);
@@ -428,31 +429,25 @@ HTML = r"""
         const kids = (unionKids[u.id]||[]);
         if(kids.length){
           const offBase = laneOffsetByUnion[u.id] ?? 0;
-
-          // 以該婚姻孩子的「中心 x」計算獨立 span
           const centers = kids.map(cid => (pickNode(layout,cid,overrides).x + NODE_W/2));
           const spanMin = Math.min(...centers) - 8;
           const spanMax = Math.max(...centers) + 8;
 
-          // bus 高度（不會與 childTop 重合）
           const anyChildTop = pickNode(layout,kids[0],overrides).y;
           let busY = Math.min(anyChildTop - CHILD_TOP_GAP, anyChildTop + offBase);
 
-          // 垂直：父母中點 → bus
           const vLine=document.createElementNS("http://www.w3.org/2000/svg","line");
           vLine.setAttribute("x1",midX); vLine.setAttribute("y1",y);
           vLine.setAttribute("x2",midX); vLine.setAttribute("y2",busY);
           vLine.setAttribute("stroke","var(--line)"); vLine.setAttribute("stroke-width","2");
           root.appendChild(vLine);
 
-          // （關鍵）只畫「本婚姻的」水平 bus 段
           const hBus=document.createElementNS("http://www.w3.org/2000/svg","line");
           hBus.setAttribute("x1",spanMin); hBus.setAttribute("y1",busY);
           hBus.setAttribute("x2",spanMax); hBus.setAttribute("y2",busY);
           hBus.setAttribute("stroke","var(--line)"); hBus.setAttribute("stroke-width","2");
           root.appendChild(hBus);
 
-          // 垂直：bus → 各子女頂端
           kids.forEach(cid=>{
             const nc=pickNode(layout,cid,overrides);
             const cx = nc.x + NODE_W/2;
@@ -571,7 +566,7 @@ HTML = r"""
   document.getElementById("btnAddPerson").addEventListener("click", ()=>{
     const name=document.getElementById("namePerson").value.trim();
     const id=uid("P");
-    doc.persons[id]={id,name:name or "新成員",deceased:false};
+    doc.persons[id]={id,name:(name || "新成員"),deceased:false};   // <- 修正 || 
     document.getElementById("namePerson").value=""; render();
   });
 
@@ -585,7 +580,8 @@ HTML = r"""
   document.getElementById("btnAddChild").addEventListener("click", ()=>{
     const mid=document.getElementById("selUnion").value; if(!mid) return;
     const name=document.getElementById("nameChild").value.trim();
-    const id=uid("P"); doc.persons[id]={id,name:name or "新子女",deceased:false};
+    const id=uid("P"); 
+    doc.persons[id]={id,name:(name || "新子女"),deceased:false};   // <- 修正 ||
     doc.children.push({unionId:mid, childId:id});  // 以資料順序記錄
     document.getElementById("nameChild").value=""; render();
   });
