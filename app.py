@@ -1,295 +1,524 @@
-# app.py
-# -*- coding: utf-8 -*-
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import ELK from "elkjs/lib/elk.bundled.js";
 
-import streamlit as st
-from collections import defaultdict, deque
+/**
+ * Quick Family Tree — React + ELK (MVP)
+ * - Persons + Unions (marriages/partnerships)
+ * - Children connect ONLY from union → child (stable layout for multi-marriage)
+ * - Layered layout with ELK; clean orthogonal edges
+ * - Demo data preloaded via "Load Demo" button
+ * - Basic CRUD: add person / union / child; select & delete
+ * - Export/Import JSON; Download SVG
+ *
+ * Notes:
+ * - This is a single-file demo. In production, split into modules & add persistence (IndexedDB).
+ */
 
-st.set_page_config(page_title="家族樹（穩定 SVG 版・修正配偶列）", page_icon="🌳", layout="wide")
+// ---------- Types ----------
+type PersonID = string;
+type UnionID = string;
 
-# ---------------- 視覺參數 ----------------
-NODE_W = 120       # 節點寬
-NODE_H = 56        # 節點高
-H_GAP  = 46        # 橫向間距
-V_GAP  = 120       # 縱向間距
+type Person = {
+  id: PersonID;
+  name: string;
+  gender?: "M" | "F" | "O";
+  birth?: string;
+  death?: string;
+  note?: string;
+};
 
-BG     = "#0b3d4f"
-FG     = "#ffffff"
-BORDER = "#114b5f"
-LINE   = "#0f3c4d"
+type Union = {
+  id: UnionID;
+  partners: [PersonID, PersonID];
+  status?: "married" | "cohabiting" | "divorced" | "separated" | "widowed";
+};
 
-# ---------------- 狀態 ----------------
-def empty_state():
-    return {"persons": {}, "marriages": {}, "children": []}
+type ChildLink = {
+  unionId: UnionID;
+  childId: PersonID;
+  relation?: "biological" | "adopted" | "step" | "foster";
+  order?: number;
+};
 
-if "data" not in st.session_state:
-    st.session_state.data = empty_state()
+type TreeDoc = {
+  persons: Record<PersonID, Person>;
+  unions: Record<UnionID, Union>;
+  children: ChildLink[];
+};
 
-def clear_all():
-    st.session_state.data = empty_state()
+// ---------- Utils ----------
+const elk = new ELK();
+const NODE_W = 140;
+const NODE_H = 56;
+const MARGIN = 48;
 
-def load_demo():
-    """與題圖一致；先清空避免殘留造成錯位"""
-    clear_all()
-    P = st.session_state.data["persons"]
-    M = st.session_state.data["marriages"]
-    C = st.session_state.data["children"]
+const theme = {
+  bg: "#0b3d4f",
+  fg: "#ffffff",
+  border: "#114b5f",
+  line: "#0f3c4d",
+};
 
-    def np(name):
-        pid = f"P{len(P)+1}"
-        P[pid] = {"name": name}
-        return pid
+function uid(prefix: string) {
+  return `${prefix}_${Math.random().toString(36).slice(2, 9)}`;
+}
 
-    def nm(a, b, divorced=False):
-        mid = f"M{len(M)+1}"
-        M[mid] = {"a": a, "b": b, "divorced": divorced}
-        return mid
+function demoDoc(): TreeDoc {
+  const p: Record<string, Person> = {};
+  const u: Record<string, Union> = {};
+  const persons = (
+    ["陳一郎", "陳前妻", "陳妻", "陳大", "陳二", "陳三", "王子", "王子妻", "王孫"] as const
+  ).map((name) => ({ id: uid("P"), name }));
+  persons.forEach((pp) => (p[pp.id] = pp));
+  const id = (name: string) => persons.find((x) => x.name === name)!.id;
 
-    # 人物
-    chen = np("陳一郎")
-    ex   = np("陳前妻")
-    wife = np("陳妻")
-    c1   = np("陳大")
-    c2   = np("陳二")
-    c3   = np("陳三")
-    wz   = np("王子")
-    wzw  = np("王子妻")
-    ws   = np("王孫")
+  const m1: Union = { id: uid("U"), partners: [id("陳一郎"), id("陳前妻")], status: "divorced" };
+  const m2: Union = { id: uid("U"), partners: [id("陳一郎"), id("陳妻")], status: "married" };
+  const m3: Union = { id: uid("U"), partners: [id("王子"), id("王子妻")], status: "married" };
+  u[m1.id] = m1; u[m2.id] = m2; u[m3.id] = m3;
 
-    # 婚姻
-    mex  = nm(chen, ex, True)
-    mnow = nm(chen, wife, False)
-    mw   = nm(wz,   wzw,  False)
+  const children: ChildLink[] = [
+    { unionId: m1.id, childId: id("王子"), relation: "biological" },
+    { unionId: m2.id, childId: id("陳大"), relation: "biological" },
+    { unionId: m2.id, childId: id("陳二"), relation: "biological" },
+    { unionId: m2.id, childId: id("陳三"), relation: "biological" },
+    { unionId: m3.id, childId: id("王孫"), relation: "biological" },
+  ];
 
-    # 子女
-    C += [
-        {"mid": mex,  "child": wz},
-        {"mid": mnow, "child": c1},
-        {"mid": mnow, "child": c2},
-        {"mid": mnow, "child": c3},
-        {"mid": mw,   "child": ws},
-    ]
+  return { persons: p, unions: u, children };
+}
 
-# ---------------- 資料映射 ----------------
-def build_maps(data):
-    kids_of = defaultdict(list)        # mid -> [child...]
-    parents_of = {}                    # child -> {a,b}
-    marriages_of = defaultdict(list)   # person -> [mid...]
+// Build ELK graph from our model
+function buildElkGraph(doc: TreeDoc) {
+  const nodes: any[] = [];
+  const edges: any[] = [];
 
-    for mid, m in data["marriages"].items():
-        a, b = m["a"], m["b"]
-        marriages_of[a].append(mid)
-        marriages_of[b].append(mid)
+  // Person nodes
+  Object.values(doc.persons).forEach((p) => {
+    nodes.push({ id: p.id, width: NODE_W, height: NODE_H, labels: [{ text: p.name }] });
+  });
 
-    for row in data["children"]:
-        mid, child = row["mid"], row["child"]
-        kids_of[mid].append(child)
-        a = data["marriages"][mid]["a"]
-        b = data["marriages"][mid]["b"]
-        parents_of[child] = {a, b}
+  // Union nodes (tiny diamond)
+  Object.values(doc.unions).forEach((u) => {
+    const id = u.id;
+    nodes.push({ id, width: 10, height: 10, labels: [{ text: "" }] });
+    const [a, b] = u.partners;
+    edges.push({ id: uid("E"), sources: [a], targets: [id] });
+    edges.push({ id: uid("E"), sources: [b], targets: [id] });
+  });
 
-    # 便於找配偶
-    spouses_of = defaultdict(set)
-    for mid, m in data["marriages"].items():
-        a, b = m["a"], m["b"]
-        spouses_of[a].add(b)
-        spouses_of[b].add(a)
+  // Children edges
+  doc.children.forEach((cl) => {
+    edges.push({ id: uid("E"), sources: [cl.unionId], targets: [cl.childId] });
+  });
 
-    return kids_of, parents_of, marriages_of, spouses_of
+  const graph = {
+    id: "root",
+    layoutOptions: {
+      "elk.algorithm": "layered",
+      "elk.direction": "DOWN",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "64",
+      "elk.spacing.nodeNode": "46",
+      "elk.edgeRouting": "ORTHOGONAL",
+      "elk.layered.nodePlacement.bk.fixedAlignment": "BALANCED",
+      "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+    },
+    children: nodes,
+    edges,
+  } as const;
 
-# ---------------- 分層：配偶跟著有血緣的人走 ----------------
-def compute_levels(data):
-    kids_of, parents_of, marriages_of, spouses_of = build_maps(data)
-    persons = list(data["persons"].keys())
+  return graph as any;
+}
 
-    # 真正的根：沒有父母，且沒有配偶是「有父母的人」
-    has_parents = set(parents_of.keys())
-    roots = []
-    for p in persons:
-        if p in has_parents:
-            continue
-        # 若配偶中有人有父母，p 不能當根（要跟著那位下移）
-        if any(sp in has_parents for sp in spouses_of.get(p, [])):
-            continue
-        roots.append(p)
+function pathFromSections(sections: any[]): string {
+  const d: string[] = [];
+  sections.forEach((s) => {
+    if (!s.startPoint || !s.endPoint) return;
+    const p = s.startPoint; d.push(`M ${p.x} ${p.y}`);
+    (s.bendPoints || []).forEach((b: any) => d.push(`L ${b.x} ${b.y}`));
+    const q = s.endPoint; d.push(`L ${q.x} ${q.y}`);
+  });
+  return d.join(" ");
+}
 
-    level = {}
-    q = deque(roots)
-    for r in roots:
-        level[r] = 0
+// ---------- React App ----------
+export default function FamilyTreeApp() {
+  const [doc, setDoc] = useState<TreeDoc>(() => demoDoc());
+  const [layout, setLayout] = useState<any | null>(null);
+  const [selected, setSelected] = useState<{ type: "person" | "union" | null; id: string | null }>({ type: null, id: null });
+  const svgRef = useRef<SVGSVGElement | null>(null);
 
-    seen = set(roots)
+  // Layout recompute
+  useEffect(() => {
+    (async () => {
+      const g = buildElkGraph(doc);
+      const res = await elk.layout(g);
+      setLayout(res);
+    })();
+  }, [doc]);
 
-    while q:
-        p = q.popleft()
-        lv = level[p]
+  // Handlers
+  function addPerson(name?: string) {
+    const id = uid("P");
+    const p: Person = { id, name: name || `新成員 ${Object.keys(doc.persons).length + 1}` };
+    setDoc((d) => ({ ...d, persons: { ...d.persons, [id]: p } }));
+  }
 
-        # 讓配偶跟著同層（這一步把像「王子妻」這類無父母者往下拉到配偶那層）
-        for sp in spouses_of.get(p, []):
-            if sp not in level:
-                level[sp] = lv
-            if sp not in seen:
-                seen.add(sp); q.append(sp)
+  function addUnion(a?: PersonID, b?: PersonID) {
+    const ids = Object.keys(doc.persons);
+    if (!a) a = ids[0];
+    if (!b) b = ids.find((x) => x !== a) || ids[0];
+    const id = uid("U");
+    setDoc((d) => ({ ...d, unions: { ...d.unions, [id]: { id, partners: [a!, b!], status: "married" } } }));
+  }
 
-        # 由 p 的婚姻取得孩子 → 下一層
-        for mid in marriages_of.get(p, []):
-            for c in kids_of.get(mid, []):
-                if c not in level:
-                    level[c] = lv + 1
-                if c not in seen:
-                    seen.add(c); q.append(c)
+  function addChild(unionId?: UnionID, existingChildId?: PersonID, newChildName?: string) {
+    const mids = Object.keys(doc.unions);
+    if (!mids.length) return;
+    const u = unionId || mids[0];
+    let childId = existingChildId;
+    if (!childId) {
+      const id = uid("P");
+      childId = id;
+      const p: Person = { id, name: newChildName || `新子女 ${doc.children.length + 1}` };
+      setDoc((d) => ({ ...d, persons: { ...d.persons, [id]: p } }));
+    }
+    setDoc((d) => ({ ...d, children: [...d.children, { unionId: u!, childId: childId! }] }));
+  }
 
-    # 可能還有孤立節點，補到第 0 層
-    for p in persons:
-        if p not in level:
-            level[p] = 0
+  function removeSelected() {
+    const sel = selected;
+    if (!sel.type || !sel.id) return;
+    if (sel.type === "person") {
+      // Remove person, detach from unions & children
+      setDoc((d) => {
+        const persons = { ...d.persons }; delete persons[sel.id!];
+        const unions = Object.fromEntries(Object.entries(d.unions).filter(([_, u]) => !u.partners.includes(sel.id!)));
+        const children = d.children.filter((cl) => cl.childId !== sel.id! && (unions as any)[cl.unionId]);
+        return { persons, unions, children } as TreeDoc;
+      });
+    } else if (sel.type === "union") {
+      setDoc((d) => {
+        const unions = { ...d.unions }; delete unions[sel.id!];
+        const children = d.children.filter((cl) => cl.unionId !== sel.id!);
+        return { ...d, unions, children } as TreeDoc;
+      });
+    }
+    setSelected({ type: null, id: null });
+  }
 
-    return level
+  function loadDemo() {
+    setDoc(demoDoc());
+    setSelected({ type: null, id: null });
+  }
 
-# ---------------- 版面配置：同層配偶緊鄰、孩子群組連續 ----------------
-def layout_positions(data):
-    level = compute_levels(data)
-    kids_of, parents_of, marriages_of, spouses_of = build_maps(data)
+  function clearAll() {
+    setDoc({ persons: {}, unions: {}, children: [] });
+    setSelected({ type: null, id: null });
+  }
 
-    # 每層的節點清單（暫不含排序）
-    levels = defaultdict(list)
-    for p, lv in level.items():
-        levels[lv].append(p)
+  function downloadSVG() {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const serializer = new XMLSerializer();
+    const src = serializer.serializeToString(svg);
+    const blob = new Blob([src], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "family-tree.svg"; a.click();
+    URL.revokeObjectURL(url);
+  }
 
-    # 第 0 層：把「多段婚姻的中心人物」放在他所在群組的中間（近似）
-    # 這裡簡化為按名稱排序，已足以固定示範案例順序
-    for lv in levels:
-        levels[lv].sort(key=lambda pid: data["persons"][pid]["name"])
+  function exportJSON() {
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "family-tree.json"; a.click();
+    URL.revokeObjectURL(url);
+  }
 
-    # 生成水平位置：逐層從左到右
-    pos = {}
-    max_lv = max(level.values()) if level else 0
+  function importJSON(file: File) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const t = JSON.parse(String(e.target?.result || "{}")) as TreeDoc;
+        if (t && t.persons && t.unions && t.children) setDoc(t);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    reader.readAsText(file);
+  }
 
-    # 先排第 0 層
-    x = 40
-    y0 = 40
-    for p in levels[0]:
-        pos[p] = (x, y0)
-        x += NODE_W + H_GAP
+  // -- Derived lists for forms --
+  const persons = Object.values(doc.persons);
+  const unions = Object.values(doc.unions);
 
-    # 從第 1 層開始：依「上一層的婚姻 → 其孩子(+孩子配偶)」為群組排列
-    for lv in range(1, max_lv + 1):
-        y = 40 + lv * V_GAP
-        x = 40
+  // UI helpers
+  const isSelected = (id: string, type: "person" | "union") => selected.type === type && selected.id === id;
 
-        # 找出上一層的節點與其左右順序
-        prev_nodes = [p for p, (px, py) in pos.items() if abs(py - (40 + (lv - 1) * V_GAP)) < 1e-6]
-        prev_nodes.sort(key=lambda pid: pos[pid][0])
-        index_in_prev = {pid: i for i, pid in enumerate(prev_nodes)}
+  return (
+    <div className="w-full h-full flex flex-col gap-3 p-4">
+      <header className="flex flex-wrap items-center gap-2 justify-between">
+        <h1 className="text-2xl font-semibold">Quick Family Tree — MVP</h1>
+        <div className="flex flex-wrap gap-2">
+          <button className="px-3 py-2 rounded-xl bg-slate-800 text-white" onClick={loadDemo}>載入示範</button>
+          <button className="px-3 py-2 rounded-xl bg-slate-700 text-white" onClick={clearAll}>清空</button>
+          <button className="px-3 py-2 rounded-xl bg-teal-700 text-white" onClick={() => addPerson()}>新增人物</button>
+          <button className="px-3 py-2 rounded-xl bg-teal-700 text-white" onClick={() => addUnion()}>新增配偶/婚姻</button>
+          <button className="px-3 py-2 rounded-xl bg-teal-700 text-white" onClick={() => addChild()}>新增子女</button>
+          <button className="px-3 py-2 rounded-xl bg-rose-700 text-white" onClick={removeSelected}>刪除選取</button>
+          <button className="px-3 py-2 rounded-xl bg-indigo-700 text-white" onClick={downloadSVG}>下載 SVG</button>
+          <button className="px-3 py-2 rounded-xl bg-indigo-700 text-white" onClick={exportJSON}>匯出 JSON</button>
+          <label className="px-3 py-2 rounded-xl bg-indigo-700 text-white cursor-pointer">
+            匯入 JSON
+            <input type="file" accept="application/json" className="hidden" onChange={(e) => {
+              const f = e.target.files?.[0]; if (f) importJSON(f);
+            }}/>
+          </label>
+        </div>
+      </header>
 
-        # 取出父母皆在上一層的婚姻，依父母在上一層的靠左者排序
-        mids = []
-        for mid, m in data["marriages"].items():
-            a, b = m["a"], m["b"]
-            if a in index_in_prev and b in index_in_prev:
-                mids.append((min(index_in_prev[a], index_in_prev[b]), mid))
-        mids.sort()
+      <div className="grid grid-cols-12 gap-4">
+        <div className="col-span-9 rounded-2xl border border-slate-200 overflow-hidden bg-white">
+          {/* Canvas */}
+          <div className="w-full h-[720px] overflow-auto">
+            {layout ? (
+              <svg
+                ref={svgRef}
+                width={layout.width + MARGIN * 2}
+                height={layout.height + MARGIN * 2}
+                viewBox={`0 0 ${layout.width + MARGIN * 2} ${layout.height + MARGIN * 2}`}
+              >
+                <g transform={`translate(${MARGIN},${MARGIN})`}>
+                  {/* Edges */}
+                  {(layout.edges || []).map((e: any) => (
+                    <path
+                      key={e.id}
+                      d={pathFromSections(e.sections || [])}
+                      fill="none"
+                      stroke={theme.line}
+                      strokeWidth={2}
+                    />
+                  ))}
 
-        placed = set()
+                  {/* Nodes */}
+                  {(layout.children || []).map((n: any) => {
+                    const selPerson = isSelected(n.id, "person");
+                    const selUnion = isSelected(n.id, "union");
 
-        for _, mid in mids:
-            kids = kids_of.get(mid, [])
-            # 以孩子的插入順序作為左→右順序；每位孩子的配偶，緊鄰其右
-            for c in kids:
-                if c not in placed:
-                    pos[c] = (x, y); x += NODE_W + H_GAP; placed.add(c)
-                # c 的配偶（同層）緊鄰右側
-                for mid2 in marriages_of.get(c, []):
-                    a, b = data["marriages"][mid2]["a"], data["marriages"][mid2]["b"]
-                    sp = a if b == c else b
-                    if sp in level and level[sp] == lv and sp not in placed:
-                        pos[sp] = (x, y); x += NODE_W + H_GAP; placed.add(sp)
+                    // Is union node?
+                    const isUnion = !!doc.unions[n.id as UnionID];
 
-        # 若同層還有未放入的（例如孤立節點），補位
-        for p in levels.get(lv, []):
-            if p not in placed:
-                pos[p] = (x, y); x += NODE_W + H_GAP; placed.add(p)
+                    if (isUnion) {
+                      const r = 5;
+                      return (
+                        <g key={n.id} transform={`translate(${n.x},${n.y})`}>
+                          <rect
+                            x={-r}
+                            y={-r}
+                            width={10}
+                            height={10}
+                            fill={theme.bg}
+                            stroke={selUnion ? "#f97316" : theme.border}
+                            strokeWidth={selUnion ? 3 : 2}
+                            className="cursor-pointer"
+                            onClick={() => setSelected({ type: "union", id: n.id })}
+                          />
+                        </g>
+                      );
+                    }
 
-    return pos
+                    // Person node
+                    const label = doc.persons[n.id]?.name ?? "?";
+                    return (
+                      <g key={n.id} transform={`translate(${n.x},${n.y})`}>
+                        <rect
+                          rx={16}
+                          width={NODE_W}
+                          height={NODE_H}
+                          fill={theme.bg}
+                          stroke={selPerson ? "#f97316" : theme.border}
+                          strokeWidth={selPerson ? 3 : 2}
+                          className="cursor-pointer shadow"
+                          onClick={() => setSelected({ type: "person", id: n.id })}
+                        />
+                        <text
+                          x={NODE_W / 2}
+                          y={NODE_H / 2 + 5}
+                          textAnchor="middle"
+                          fontFamily="ui-sans-serif, system-ui, -apple-system"
+                          fontSize={14}
+                          fill={theme.fg}
+                          className="select-none"
+                        >
+                          {label}
+                        </text>
+                      </g>
+                    );
+                  })}
+                </g>
+              </svg>
+            ) : (
+              <div className="p-8 text-slate-500">佈局計算中…</div>
+            )}
+          </div>
+        </div>
 
-# ---------------- SVG 基元 ----------------
-def svg_rect(x, y, w, h, rx=16, text=""):
-    return f'''
-      <g>
-        <rect x="{x}" y="{y}" width="{w}" height="{h}" rx="{rx}"
-              fill="{BG}" stroke="{BORDER}" stroke-width="2"/>
-        <text x="{x+w/2}" y="{y+h/2+5}" text-anchor="middle"
-              font-size="14" font-family="sans-serif" fill="{FG}">{text}</text>
-      </g>
-    '''
+        {/* Inspector / Forms */}
+        <div className="col-span-3 space-y-4">
+          <div className="rounded-2xl border p-4">
+            <h2 className="font-semibold mb-2">快速新增</h2>
+            <QuickForms doc={doc} onAddPerson={addPerson} onAddUnion={addUnion} onAddChild={addChild} />
+          </div>
 
-def svg_line(x1, y1, x2, y2, dashed=False):
-    dash = ' stroke-dasharray="6,6"' if dashed else ""
-    return f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{LINE}" stroke-width="2"{dash}/>\n'
+          <div className="rounded-2xl border p-4">
+            <h2 className="font-semibold mb-2">選取資訊</h2>
+            {!selected.type ? (
+              <div className="text-slate-500">未選取任何節點</div>
+            ) : selected.type === "person" ? (
+              <PersonInspector doc={doc} setDoc={setDoc} pid={selected.id!} />
+            ) : (
+              <UnionInspector doc={doc} setDoc={setDoc} uid={selected.id!} />
+            )}
+            <div className="mt-3">
+              <button className="px-3 py-2 rounded-xl bg-rose-600 text-white" onClick={removeSelected}>
+                刪除此節點
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-# ---------------- 繪製 ----------------
-def render_svg(data):
-    pos = layout_positions(data)
-    if not pos:
-        return "<svg/>"
+function QuickForms({
+  doc,
+  onAddPerson,
+  onAddUnion,
+  onAddChild,
+}: {
+  doc: TreeDoc;
+  onAddPerson: (name?: string) => void;
+  onAddUnion: (a?: PersonID, b?: PersonID) => void;
+  onAddChild: (unionId?: UnionID, existingChildId?: PersonID, newChildName?: string) => void;
+}) {
+  const [name, setName] = useState("");
+  const [a, setA] = useState<string>("");
+  const [b, setB] = useState<string>("");
+  const [mid, setMid] = useState<string>("");
+  const [childName, setChildName] = useState("");
 
-    kids_of, parents_of, marriages_of, _ = build_maps(data)
+  const persons = Object.values(doc.persons);
+  const unions = Object.values(doc.unions);
 
-    # 畫布大小
-    max_x = max(x for x, _ in pos.values()) + NODE_W + 60
-    max_y = max(y for _, y in pos.values()) + NODE_H + 80
+  useEffect(() => {
+    if (!a && persons[0]) setA(persons[0].id);
+    if (!b && persons[1]) setB(persons[1].id);
+    if (!mid && unions[0]) setMid(unions[0].id);
+  }, [doc]);
 
-    edges = []
+  return (
+    <div className="space-y-3">
+      <div className="flex gap-2">
+        <input className="border rounded-xl px-3 py-2 w-full" placeholder="新人物姓名"
+               value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="px-3 py-2 rounded-xl bg-teal-700 text-white" onClick={() => { onAddPerson(name || undefined); setName(""); }}>新增</button>
+      </div>
 
-    # 夫妻水平線 + 婚姻點 + 子女垂直線
-    for mid, m in data["marriages"].items():
-        a, b, divorced = m["a"], m["b"], m.get("divorced", False)
-        if a not in pos or b not in pos:
-            continue
-        ax, ay = pos[a]; bx, by = pos[b]
-        yline = (ay + by) / 2
+      <div className="flex gap-2 items-center">
+        <select className="border rounded-xl px-3 py-2 w-full" value={a} onChange={(e) => setA(e.target.value)}>
+          {persons.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+        </select>
+        <span>×</span>
+        <select className="border rounded-xl px-3 py-2 w-full" value={b} onChange={(e) => setB(e.target.value)}>
+          {persons.filter((p) => p.id !== a).map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+        </select>
+        <button className="px-3 py-2 rounded-xl bg-teal-700 text-white" onClick={() => onAddUnion(a as PersonID, b as PersonID)}>成婚</button>
+      </div>
 
-        # 夫妻水平線（同層時等高；若不同層，仍以各自中心連）
-        edges.append(svg_line(ax + NODE_W, ay + NODE_H / 2, bx, by + NODE_H / 2, dashed=divorced))
+      <div className="flex gap-2 items-center">
+        <select className="border rounded-xl px-3 py-2 w-full" value={mid} onChange={(e) => setMid(e.target.value)}>
+          {unions.map((u) => {
+            const [pa, pb] = u.partners; return (
+              <option key={u.id} value={u.id}>{doc.persons[pa]?.name} ↔ {doc.persons[pb]?.name}</option>
+            );
+          })}
+        </select>
+        <input className="border rounded-xl px-3 py-2 w-full" placeholder="新子女姓名"
+               value={childName} onChange={(e) => setChildName(e.target.value)} />
+        <button className="px-3 py-2 rounded-xl bg-teal-700 text-white" onClick={() => { onAddChild(mid as UnionID, undefined, childName || undefined); setChildName(""); }}>加子女</button>
+      </div>
+    </div>
+  );
+}
 
-        # 婚姻點（放在兩人下方）
-        jx = (ax + bx + NODE_W) / 2
-        jy = max(ay, by) + NODE_H / 2 + 8
+function PersonInspector({ doc, setDoc, pid }: { doc: TreeDoc; setDoc: any; pid: string }) {
+  const p = doc.persons[pid];
+  if (!p) return <div className="text-slate-500">人物不存在</div>;
+  return (
+    <div className="space-y-2">
+      <div className="text-sm text-slate-500">人物 ID：{pid}</div>
+      <label className="block text-sm">姓名</label>
+      <input className="border rounded-xl px-3 py-2 w-full" value={p.name}
+             onChange={(e) => setDoc((d: TreeDoc) => ({ ...d, persons: { ...d.persons, [pid]: { ...p, name: e.target.value } } }))} />
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="block text-sm">出生</label>
+          <input className="border rounded-xl px-3 py-2 w-full" value={p.birth || ""}
+                 onChange={(e) => setDoc((d: TreeDoc) => ({ ...d, persons: { ...d.persons, [pid]: { ...p, birth: e.target.value } } }))} />
+        </div>
+        <div>
+          <label className="block text-sm">逝世</label>
+          <input className="border rounded-xl px-3 py-2 w-full" value={p.death || ""}
+                 onChange={(e) => setDoc((d: TreeDoc) => ({ ...d, persons: { ...d.persons, [pid]: { ...p, death: e.target.value } } }))} />
+        </div>
+      </div>
+      <label className="block text-sm">備註</label>
+      <textarea className="border rounded-xl px-3 py-2 w-full" rows={3} value={p.note || ""}
+                onChange={(e) => setDoc((d: TreeDoc) => ({ ...d, persons: { ...d.persons, [pid]: { ...p, note: e.target.value } } }))} />
+    </div>
+  );
+}
 
-        # 該婚姻的孩子：婚姻點垂直→水平→下探到孩子
-        for c in kids_of.get(mid, []):
-            if c not in pos:
-                continue
-            cx, cy = pos[c]
-            edges.append(svg_line(jx, jy, jx, cy - 12))                 # 垂直到孩子上方
-            edges.append(svg_line(jx, cy - 12, cx + NODE_W/2, cy - 12)) # 水平到孩子上方
-            edges.append(svg_line(cx + NODE_W/2, cy - 12, cx + NODE_W/2, cy))  # 直落
+function UnionInspector({ doc, setDoc, uid }: { doc: TreeDoc; setDoc: any; uid: string }) {
+  const u = doc.unions[uid];
+  if (!u) return <div className="text-slate-500">婚姻不存在</div>;
+  const [a, b] = u.partners;
+  const nameA = doc.persons[a]?.name || "?";
+  const nameB = doc.persons[b]?.name || "?";
+  return (
+    <div className="space-y-2">
+      <div className="text-sm text-slate-500">婚姻 ID：{uid}</div>
+      <div className="text-slate-700">{nameA} ↔ {nameB}</div>
+      <label className="block text-sm">狀態</label>
+      <select className="border rounded-xl px-3 py-2" value={u.status || "married"}
+              onChange={(e) => setDoc((d: TreeDoc) => ({ ...d, unions: { ...d.unions, [uid]: { ...u, status: e.target.value as any } } }))}>
+        <option value="married">已婚</option>
+        <option value="cohabiting">同居</option>
+        <option value="divorced">離婚</option>
+        <option value="separated">分居</option>
+        <option value="widowed">喪偶</option>
+      </select>
 
-    # 節點
-    nodes = [svg_rect(x, y, NODE_W, NODE_H, text=data["persons"][pid]["name"])
-             for pid, (x, y) in pos.items()]
-
-    svg = f'''
-    <svg width="{max_x}" height="{max_y}" xmlns="http://www.w3.org/2000/svg" style="background:#fff">
-      {"".join(edges)}
-      {"".join(nodes)}
-    </svg>
-    '''
-    return svg
-
-# ---------------- UI ----------------
-with st.sidebar:
-    st.markdown("## 操作")
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("載入示範", use_container_width=True):
-            load_demo()
-    with c2:
-        if st.button("清空", use_container_width=True):
-            clear_all()
-
-st.markdown("## 家族樹（穩定 SVG 版）")
-svg = render_svg(st.session_state.data)
-st.components.v1.html(svg, height=720, scrolling=True)
-
-with st.expander("（除錯）目前資料"):
-    st.json(st.session_state.data, expanded=False)
+      <div>
+        <label className="block text-sm mb-1">在此婚姻下新增子女</label>
+        <button className="px-3 py-2 rounded-xl bg-teal-700 text-white"
+                onClick={() => {
+                  const id = uid("P");
+                  setDoc((d: TreeDoc) => {
+                    const child: Person = { id, name: `新子女 ${d.children.length + 1}` };
+                    return {
+                      ...d,
+                      persons: { ...d.persons, [id]: child },
+                      children: [...d.children, { unionId: uid, childId: id }],
+                    };
+                  });
+                }}>
+          新增子女
+        </button>
+      </div>
+    </div>
+  );
+}
