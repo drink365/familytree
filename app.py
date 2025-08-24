@@ -28,7 +28,6 @@ def next_id():
 # -------------------------------
 
 def ensure_person(name, sex="男", alive=True, note=""):
-    """Find or create person by name; return pid."""
     d = st.session_state.data
     for pid, p in d["persons"].items():
         if p["name"] == name:
@@ -38,7 +37,6 @@ def ensure_person(name, sex="男", alive=True, note=""):
     return pid
 
 def add_marriage(a, b, divorced=False):
-    """Return mid if created; if same pair exists, return that mid."""
     d = st.session_state.data
     for mid, m in d["marriages"].items():
         if {m["a"], m["b"]} == {a, b}:
@@ -286,40 +284,46 @@ def draw_tree():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 夫妻（婚姻節點）+ 子女
-    # 可見夫妻水平線 constraint=false，不影響佈局；
-    # jn 為中點，與 a、b 同排（a, jn, b），有子女時：jn -> bus 垂直，再由 bus 分到每個子女。
+    # 夫妻 + 子女：夫妻線用兩段可見半線（constraint=false），
+    # 另以隱形邊固定中點 jn（constraint=true，與 a、b 同排），
+    # 有子女時 jn->bus 為唯一垂直主線；bus->child 為分線（constraint=false，不拖動佈局）
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
+        style = "dashed" if divorced else "solid"
 
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", style="invis")
-        style = "dashed" if divorced else "solid"
 
-        # 1) 可見的夫妻水平線（純視覺，不介入佈局）
-        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
-
-        # 2) 讓 jn 與 a、b 同一排，且位於中間；以隱形邊固定但不拉動整體
+        # a, jn, b 排在同一列，固定中間位置
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a); s.node(jn); s.node(b)
+
+        # 兩段可見半線（純畫線，不影響佈局）
+        dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+        dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+
+        # 隱形約束：把 jn 綁在 a 與 b 之間，避免被子女線拉偏
         dot.edge(a, jn, dir="none", style="invis", weight="100")
         dot.edge(jn, b, dir="none", style="invis", weight="100")
 
-        # 3) 子女：一條垂直主線 + 匯流點分到所有孩子
+        # 子女
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
+            # 讓孩子同一排
             with dot.subgraph() as s:
                 s.attr(rank="same")
                 for c in kids:
                     s.node(c)
 
+            # 中點到匯流點（唯一垂直主線）
             bus = f"B_{mid}"
-            dot.node(bus, "", shape="point", width="0.02", color=BORDER_COLOR)
-            dot.edge(jn, bus, color=BORDER_COLOR)  # 從夫妻線中點垂直往下
+            dot.node(bus, "", shape="point", width="0.02", style="invis")
+            dot.edge(jn, bus, color=BORDER_COLOR)  # 垂直線
 
+            # 分線到每個孩子（不介入佈局，避免拉動）
             for c in kids:
-                dot.edge(bus, c, color=BORDER_COLOR)
+                dot.edge(bus, c, color=BORDER_COLOR, dir="none", constraint="false")
 
     # 兄弟姊妹（無共同父母時）用虛線連
     _, parent_map = build_child_map()
@@ -369,9 +373,9 @@ def page_people():
         p = d["persons"][p_pick]
         with st.form("edit_person"):
             name = st.text_input("姓名", p["name"])
-            sex  = st.radio("性別", ["男", "女"], index=(0 if p["sex"] == "男" else 1), horizontal=True)
+            sex  = st.radio("性別", ["男", "女"], index=(0 if p["sex"]=="男" else 1), horizontal=True)
             alive = st.checkbox("尚在人世", value=p["alive"])
-            note = st.text_input("備註", p.get("note", ""))
+            note = st.text_input("備註", p.get("note",""))
             c1, c2 = st.columns(2)
             ok = c1.form_submit_button("儲存")
             del_ = c2.form_submit_button("刪除此人")
@@ -380,7 +384,6 @@ def page_people():
                 st.success("已更新")
                 st.rerun()
             if del_:
-                # 刪除關聯
                 mids_to_del = [mid for mid, m in d["marriages"].items() if p_pick in (m["a"], m["b"])]
                 for mid in mids_to_del:
                     d["children"] = [row for row in d["children"] if row["mid"] != mid]
@@ -399,10 +402,9 @@ def page_relations():
     d = st.session_state.data
     st.subheader("🔗 關係")
 
-    # 建立婚姻
     st.markdown("### 建立婚姻（現任 / 離婚）")
     with st.form("form_marriage"):
-        colA, colB, colC = st.columns([2, 2, 1])
+        colA, colB, colC = st.columns([2,2,1])
         with colA:
             a = pick_from("配偶 A", list_person_options(include_empty=True), key="marry_a")
         with colB:
@@ -422,7 +424,6 @@ def page_relations():
 
     st.divider()
 
-    # 掛子女
     st.markdown("### 把子女掛到父母（某段婚姻）")
     m = pick_from("選擇父母（某段婚姻）", list_marriage_options(include_empty=True), key="kid_mid")
     with st.form("form_child"):
@@ -440,14 +441,13 @@ def page_relations():
 
     st.divider()
 
-    # 兄弟姊妹
     st.markdown("### 掛上兄弟姊妹（沒有血緣連線也可）")
     with st.form("form_sibling"):
         base = pick_from("基準成員", list_person_options(include_empty=True), key="sib_base")
         sib  = pick_from("要掛為其兄弟姊妹者", list_person_options(include_empty=True), key="sib_other")
         ok = st.form_submit_button("建立兄弟姊妹關係")
         if ok:
-            if not base or not sib:
+            if not base或not sib:
                 st.warning("請選擇兩個人。")
             elif base == sib:
                 st.warning("同一個人無法建立兄弟姊妹關係。")
@@ -484,11 +484,7 @@ def page_inheritance():
     st.markdown("---")
     st.markdown(f"**被繼承人**：{d['persons'][target]['name']}")
     st.markdown(f"**配偶**（當然繼承人）：{show_names(result['spouse'])}")
-    rank_txt = {1: "第一順位（直系卑親屬，含代位）",
-                2: "第二順位（父母）",
-                3: "第三順位（兄弟姊妹）",
-                4: "第四順位（祖父母）",
-                0: "（無）"}
+    rank_txt = {1:"第一順位（直系卑親屬，含代位）", 2:"第二順位（父母）", 3:"第三順位（兄弟姊妹）", 4:"第四順位（祖父母）", 0:"（無）"}
     st.markdown(f"**適用順位**：{rank_txt[result['rank']]}")
     st.markdown(f"**本順位繼承人**：{show_names(result['heirs'])}")
     st.caption("說明：依民法第1138條，配偶為當然繼承人；先檢視第一順位（直系卑親屬），無者再依序檢視第二至第四順位。代位繼承僅適用於直系卑親屬。")
@@ -510,7 +506,7 @@ ensure_session()
 
 st.title("🌳 家族平台（人物｜關係｜法定繼承｜家族樹）")
 
-c1, c2 = st.columns([1, 1])
+c1, c2 = st.columns([1,1])
 with c1:
     if st.button("📘 載入示範（陳一郎家族）", use_container_width=True):
         load_demo(clear=True)
