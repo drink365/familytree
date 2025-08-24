@@ -134,7 +134,7 @@ def pick_from(label, options, key):
 # -------------------------------
 
 def build_child_map():
-    """mid -> (father, mother), parent_map[child] = set(parents)"""
+    """mid -> (father, mother), parent_map[child]={parents}"""
     d = st.session_state.data
     mid_parents = {}
     children_by_parent = defaultdict(list)
@@ -283,39 +283,38 @@ def draw_tree():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 夫妻 + 子女（穩定布局版）
+    # 夫妻 + 子女（穩定布局）
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         style = "dashed" if divorced else "solid"
 
-        # 中點（放在夫妻之間，同一排）
+        # 夫妻中點（放在夫妻之間；與 a,b 同 rank）
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", style="invis")
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a); s.node(jn); s.node(b)
 
-        # 夫妻水平線（兩段，可見但不影響布局）
+        # 可見夫妻水平線（不影響布局）
         dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR, constraint="false")
         dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
 
-        # 隱形邊固定 jn 在中間
+        # 隱形固定（影響布局，避免 jn 漂移）
         dot.edge(a, jn, dir="none", style="invis", weight="100")
         dot.edge(jn, b, dir="none", style="invis", weight="100")
 
-        # 子女
+        # 子女群
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
-            # 匯流點與子女層錨點
             bus = f"B_{mid}"
             lvl = f"L_{mid}"  # 子女層的隱形錨點
             dot.node(bus, "", shape="point", width="0.02", color=BORDER_COLOR)
             dot.node(lvl, "", shape="point", width="0.02", style="invis")
 
-            # 夫妻中點 -> 匯流點（唯一會影響縱向布局的邊）
+            # 從夫妻中點往下的唯一主線（決定縱向層級）
             dot.edge(jn, bus, color=BORDER_COLOR, minlen="2")
 
-            # 把 bus、lvl、所有孩子放在同一排（穩定在下一層）
+            # 子女層：bus、lvl、kids 同一排
             with dot.subgraph() as s:
                 s.attr(rank="same")
                 s.node(bus)
@@ -323,10 +322,18 @@ def draw_tree():
                 for c in kids:
                     s.node(c)
 
-            # 隱形邊防止 bus 漂動
+            # 1) 子女之間的隱形水平鍊，讓孩子群不散開
+            for i in range(len(kids)-1):
+                dot.edge(kids[i], kids[i+1], style="invis", weight="40")
+
+            # 2) 把 bus 錨在「中間孩子」上，確保整群在夫妻中點正下
+            mid_idx = len(kids)//2
+            dot.edge(bus, kids[mid_idx], style="invis", weight="80")
+
+            # 3) 防止 bus 水平漂移
             dot.edge(bus, lvl, style="invis", weight="50")
 
-            # 從匯流點分到孩子（不參與布局）
+            # 從匯流點分到孩子（純顯示）
             for c in kids:
                 dot.edge(bus, c, color=BORDER_COLOR, dir="none", constraint="false")
 
@@ -355,7 +362,6 @@ def page_people():
     st.subheader("👤 人物")
     st.caption("先新增人物，再到「關係」分頁建立婚姻與子女。")
 
-    # 新增人物
     with st.form("add_person"):
         st.markdown("**新增人物**")
         name = st.text_input("姓名", "")
@@ -391,7 +397,6 @@ def page_people():
                 st.success("已更新")
                 st.rerun()
             if del_:
-                # 同步刪除關係
                 mids_to_del = [mid for mid, m in d["marriages"].items() if p_pick in (m["a"], m["b"])]
                 for mid in mids_to_del:
                     d["children"] = [row for row in d["children"] if row["mid"] != mid]
@@ -411,7 +416,7 @@ def page_relations():
 
     st.subheader("🔗 關係")
 
-    # -- 建立婚姻
+    # 建立婚姻
     st.markdown("### 建立婚姻（現任 / 離婚）")
     with st.form("form_marriage"):
         colA, colB, colC = st.columns([2,2,1])
@@ -434,7 +439,7 @@ def page_relations():
 
     st.divider()
 
-    # -- 把子女掛到父母（某段婚姻）
+    # 子女掛到父母（某段婚姻）
     st.markdown("### 把子女掛到父母（某段婚姻）")
     m = pick_from("選擇父母（某段婚姻）", list_marriage_options(include_empty=True), key="kid_mid")
     with st.form("form_child"):
@@ -452,14 +457,14 @@ def page_relations():
 
     st.divider()
 
-    # -- 兄弟姊妹
+    # 兄弟姊妹
     st.markdown("### 掛上兄弟姊妹（沒有血緣連線也可）")
     with st.form("form_sibling"):
         base = pick_from("基準成員", list_person_options(include_empty=True), key="sib_base")
         sib  = pick_from("要掛為其兄弟姊妹者", list_person_options(include_empty=True), key="sib_other")
         ok = st.form_submit_button("建立兄弟姊妹關係")
         if ok:
-            if not base or not sib:   # 修正了中文「或」造成的 SyntaxError
+            if not base or not sib:   # 修正掉中文「或」的語法錯誤
                 st.warning("請選擇兩個人。")
             elif base == sib:
                 st.warning("同一個人無法建立兄弟姊妹關係。")
