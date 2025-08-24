@@ -312,25 +312,25 @@ def draw_tree():
         person_node(dot, pid, p)
 
     # 夫妻（婚姻節點）+ 子女
-    # —— 夫妻畫成水平橫線；若有子女，從夫妻線「中點」垂直往下連到子女 ——
+    # 夫妻仍用單一可見水平線；jn 為隱形中點，有子女時自此垂直往下，且不影響佈局
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         jn = f"J_{mid}"
-        # jn 為隱形小點：只作為夫妻線中點與垂直連接用
         dot.node(jn, "", shape="point", width="0.02", style="invis")
 
         style = "dashed" if divorced else "solid"
 
-        # 夫妻橫線：拆成 a→jn、jn→b 兩段可見直線，看起來仍是一條水平線
+        # 可見的夫妻水平線（保持原佈局）
+        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR)
+
+        # 把隱形中點 jn 放在 a 與 b 之間，但不拉動佈局
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a); s.node(jn); s.node(b)
-        dot.edge(a, jn, dir="none", style=style, color=BORDER_COLOR,
-                 tailport="e", headport="w", weight="100")
-        dot.edge(jn, b, dir="none", style=style, color=BORDER_COLOR,
-                 tailport="e", headport="w", weight="100")
+        dot.edge(a, jn, style="invis", weight="100")
+        dot.edge(jn, b, style="invis", weight="100")
 
-        # 小孩垂直往下（由夫妻線中點 jn 連到每個子女）
+        # 小孩：從夫妻線中點 jn 垂直往下
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
             with dot.subgraph() as s:
