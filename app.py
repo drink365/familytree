@@ -11,7 +11,7 @@ def _empty_data():
         "persons": {},          # pid -> {name, sex('男'/'女'), alive(True/False), note}
         "marriages": {},        # mid -> {a, b, divorced(bool)}
         "children": [],         # list of {mid, child}
-        "sibling_links": [],    # list of (pid1, pid2)  (無序對；用排序後的tuple去重)
+        "sibling_links": [],    # list of (pid1, pid2)
         "_seq": 0,              # for id generation
     }
 
@@ -40,10 +40,8 @@ def ensure_person(name, sex="男", alive=True, note=""):
 def add_marriage(a, b, divorced=False):
     """Return mid if created; if same pair exists, return that mid."""
     d = st.session_state.data
-    # check exists
     for mid, m in d["marriages"].items():
         if {m["a"], m["b"]} == {a, b}:
-            # update divorced flag if different
             m["divorced"] = bool(divorced)
             return mid
     mid = f"M{next_id()}"
@@ -58,7 +56,7 @@ def add_child(mid, child):
         d["children"].append({"mid": mid, "child": child})
 
 def add_sibling_link(a, b):
-    if a == b: 
+    if a == b:
         return
     a, b = sorted([a, b])
     d = st.session_state.data
@@ -110,7 +108,6 @@ def list_person_options(include_empty=False, empty_label="— 未選擇 —"):
         if not p["alive"]:
             label += "（殁）"
         opts.append((pid, label))
-    # sort by label Chinese-friendly (keep as-insert order usually ok)
     return opts
 
 def list_marriage_options(include_empty=False, empty_label="— 未選擇 —"):
@@ -130,13 +127,11 @@ def pick_from(label, options, key):
     """ options: list[(value, label)] ; returns value """
     labels = [lab for _, lab in options]
     vals   = [val for val, _ in options]
-    idx = st.selectbox(label, labels, index=0, key=key)
-    # find index
-    sel_index = labels.index(idx)
-    return vals[sel_index]
+    sel_label = st.selectbox(label, labels, index=0, key=key)
+    return vals[labels.index(sel_label)]
 
 # -------------------------------
-# Inheritance (Civil Code 1138)
+# Inheritance helpers
 # -------------------------------
 
 def build_child_map():
@@ -159,12 +154,8 @@ def build_child_map():
     return children_by_parent, parent_set
 
 def descendants_of(pid):
-    """Return all living descendants list (with representation for lineal only)."""
-    d = st.session_state.data
     children_by_parent, _ = build_child_map()
-
-    res = []
-    q = deque(children_by_parent.get(pid, []))
+    res, q = [], deque(children_by_parent.get(pid, []))
     while q:
         c = q.popleft()
         res.append(c)
@@ -172,13 +163,9 @@ def descendants_of(pid):
     return res
 
 def lineal_heirs_with_representation(decedent):
-    """第一順位 直系卑親屬（含代位）"""
     d = st.session_state.data
     children_by_parent, _ = build_child_map()
 
-    heirs = []
-
-    # 直系卑親屬的代位（簡化版）：子女活的直接入列；死亡者由其直系卑親屬代位（遞迴）
     def collect_lineal(children_list):
         line = []
         for c in children_list:
@@ -188,9 +175,7 @@ def lineal_heirs_with_representation(decedent):
             if person["alive"]:
                 line.append(c)
             else:
-                # 代位：找這個子女的子女
-                cc = children_by_parent.get(c, [])
-                line.extend(collect_lineal(cc))
+                line.extend(collect_lineal(children_by_parent.get(c, [])))
         return line
 
     children = children_by_parent.get(decedent, [])
@@ -279,7 +264,7 @@ def heirs_1138(decedent):
     return out
 
 # -------------------------------
-# Graphviz Family Tree (修正版)
+# Graphviz Family Tree
 # -------------------------------
 
 COLOR_MALE   = "#d8eaff"
@@ -307,50 +292,48 @@ def draw_tree():
     dot = Digraph("Family", format="svg", engine="dot")
     dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.5", ranksep="0.7")
 
-    # 1. 繪製所有人物節點
+    # 節點
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 2. 處理婚姻與子女關係 (*** 這是主要修改的部分 ***)
+    # 夫妻 + 子女（回到原本布局，只新增水平夫妻線與隱形子女接點）
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
+        style = "dashed" if divorced else "solid"
 
-        # 建立一個代表「婚姻」的隱形中心節點，直接使用 marriage id (mid) 即可
-        dot.node(mid, "", shape="point", width="0", height="0")
+        # 1) 夫妻水平線（直接連 a-b），保持 rank 與相對位置穩定
+        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR)
 
-        # 使用 subgraph 強制「配偶A」、「婚姻中心點」、「配偶B」在同一水平階層 (rank)
+        # 2) 讓夫妻併排（與你原本相同）
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
-            s.node(mid)
             s.node(b)
-        
-        # 將夫妻分別連到婚姻中心點，這樣就形成了一條水平線
-        # 這種結構比 `a -> b` 加上 `constraint=false` 更穩定
-        style = "dashed" if divorced else "solid"
-        dot.edge(a, mid, dir="none", style=style, color=BORDER_COLOR)
-        dot.edge(mid, b, dir="none", style=style, color=BORDER_COLOR)
 
-        # 找出這段婚姻的所有子女
+        # 3) 子女接點：放在夫妻中間；用隱形高權重邊把接點「拉」到中線
+        jn = f"J_{mid}"
+        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR, style="invis")
+        dot.edge(a, jn, dir="none", style="invis", weight="8")
+        dot.edge(b, jn, dir="none", style="invis", weight="8")
+
+        # 4) 子女：與原本一樣，保持同一排，再由接點垂直連下去
         kids = [row["child"] for row in d["children"] if row["mid"] == mid]
         if kids:
-            # 從「婚姻中心點」直接連線到每個子女
-            # 由於婚姻中心點位置穩定，這條線會是乾淨的垂直向下連線
+            with dot.subgraph() as s:
+                s.attr(rank="same")
+                for c in kids:
+                    s.node(c)
             for c in kids:
-                dot.edge(mid, c, color=BORDER_COLOR)
+                dot.edge(jn, c, color=BORDER_COLOR)
 
-    # 3. 處理手動指定的兄弟姊妹關係 (這部分邏輯不變，但需要放在婚姻關係之後)
-    # 收集已有共同父母的兄弟姊妹，避免重複畫線
+    # 兄弟姊妹(無共同父母時)用虛線相連，並強制 rank=same（保持原本做法）
     _, parent_map = build_child_map()
     def has_same_parents(x, y):
-        px = parent_map.get(x, set())
-        py = parent_map.get(y, set())
-        return px and px == py
+        return parent_map.get(x, set()) and parent_map.get(x, set()) == parent_map.get(y, set())
 
     for a, b in d["sibling_links"]:
         if has_same_parents(a, b):
             continue
-        # 僅在沒有共同父母時才手動繪製連結
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
@@ -406,7 +389,6 @@ def page_people():
                 st.rerun()
             if del_:
                 # 同步刪除關係
-                # 刪婚姻
                 mids_to_del = [mid for mid, m in d["marriages"].items() if p_pick in (m["a"], m["b"])]
                 for mid in mids_to_del:
                     # 刪除底下子女關係
