@@ -157,40 +157,52 @@ def draw_tree():
     dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.5", ranksep="0.7")
     dot.edge_attr.update(color=LINE_COLOR)
 
-    # 畫人
+    # 1) 先把所有人畫出來（男女/過世樣式）
     for pid, p in data["persons"].items():
         style = node_style_by_person(p)
         dot.node(pid, person_label(pid), **style)
 
-    # 現有婚姻 junction
+    # 2) 每段婚姻建立 junction，並用不可見高權重邊把配偶「黏在一起」
     marriage_ids = set()
     for m in data["marriages"]:
         marriage_ids.add(m["id"])
         jid = f"J_{m['id']}"
         dot.node(jid, "", shape="point", width="0.02", color=LINE_COLOR)
-        style = "dashed" if m.get("divorced") else "solid"
-        dot.edge(m["a"], jid, dir="none", style=style)
-        dot.edge(m["b"], jid, dir="none", style=style)
+
+        edge_style = "dashed" if m.get("divorced") else "solid"
+        # 可見邊：人 ↔ junction（實線/虛線）
+        dot.edge(m["a"], jid, dir="none", style=edge_style)
+        dot.edge(m["b"], jid, dir="none", style=edge_style)
+
+        # 關鍵：不可見高權重水平邊，強制配偶相鄰
+        # 這條邊不會顯示，但會強烈影響版面排列，讓兩個人靠在一起
+        dot.edge(m["a"], m["b"], style="invis", weight="100", minlen="1")
+
+        # 仍舊把配偶放同層，避免被拉出不同高度
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(m["a"])
             s.node(m["b"])
 
-    # 子女：有婚姻的就接婚姻點；沒有婚姻(兄弟姊妹群組)則建立「原生家庭」點
+    # 3) 子女：有婚姻就接該婚姻 junction；無婚姻（兄弟姊妹群組）就自建一個原生家庭點
     for row in data["children"]:
         mid = row["marriage_id"]
         jid = f"J_{mid}"
         if mid not in marriage_ids:
-            # 這是兄弟姊妹群組（沒有父母/婚姻），建立一個純 junction
+            # 兄弟姊妹群組（沒有父母/婚姻），建立一個 junction 供垂直掛接
             dot.node(jid, "", shape="point", width="0.02", color=LINE_COLOR)
 
         kids = row.get("children", [])
         if not kids:
             continue
+
+        # 同一代水平排
         with dot.subgraph() as s:
             s.attr(rank="same")
             for cid in kids:
                 s.node(cid)
+
+        # junction ↓ 子女
         for cid in kids:
             dot.edge(jid, cid)
 
