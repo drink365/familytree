@@ -16,8 +16,8 @@ HTML = r"""
 <script src="https://unpkg.com/elkjs@0.8.2/lib/elk.bundled.js"></script>
 <style>
   :root{
-    --bg:#0b3d4f;        /* 正常節點底色 */
-    --bg-dead:#6b7280;   /* 身故節點底色（灰） */
+    --bg:#0b3d4f;
+    --bg-dead:#6b7280;
     --fg:#ffffff;
     --border:#114b5f;
     --line:#0f3c4d;
@@ -114,7 +114,8 @@ HTML = r"""
   const COUPLE_GAP_MIN = NODE_W + 36;   // 配偶最小水平距離
   const LAYER_GAP_MIN  = NODE_W + 60;   // 同層人物最小水平距離
   const LAYER_TOLERANCE = 20;           // 判定同層 y 容差
-  const BUS_OFFSET_STEPS = [-12, -4, 4, 12, 20]; // 子女水平線的偏移候選（不同婚姻用不同車道）
+  const BUS_OFFSET_STEPS = [-12, -4, 4, 12, 20]; // 子女水平線的偏移候選
+  const CHILD_TOP_GAP = 18;             // <<< 新增：子女頂部以上至少預留的垂直高度
 
   /* 視圖狀態（用 viewBox pan/zoom） */
   let vb = {x:0,y:0,w:1000,h:600};
@@ -185,7 +186,7 @@ HTML = r"""
     });
   }
 
-  /* ELK 佈局（層距：32 = 原本一半） */
+  /* ELK 佈局（層距 32） */
   function buildElkGraph(){
     const nodes=[], edges=[];
     Object.values(doc.persons).forEach(p=>{
@@ -261,13 +262,13 @@ HTML = r"""
     });
   }
 
-  /* 為每個婚姻分配穩定的「子女水平線車道」 */
+  /* 婚姻車道偏移（避免不同婚姻的水平線重疊） */
   function hashInt(s){
     let h=0; for(let i=0;i<s.length;i++){ h=(h*31 + s.charCodeAt(i))>>>0; } return h>>>0;
   }
   function busYOffset(unionId){
     const h = hashInt(unionId);
-    return BUS_OFFSET_STEPS[h % BUS_OFFSET_STEPS.length]; // 例如 -12 / -4 / 4 / 12 / 20
+    return BUS_OFFSET_STEPS[h % BUS_OFFSET_STEPS.length];
   }
 
   function render(autoFit=false){
@@ -335,19 +336,19 @@ HTML = r"""
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
-      /* 婚姻水平線 + 中點 + 子女（不同婚姻→不同水平車道） */
+      /* 婚姻水平線 + 中點 + 子女（每段婚姻使用不同水平車道） */
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = pickNode(layout, aid, overrides);
         const nb = pickNode(layout, bid, overrides);
         if(!na||!nb) return;
 
-        const y = na.y + NODE_H/2;               // 已對齊
+        const y = na.y + NODE_H/2;
         const xLeft  = Math.min(na.x+NODE_W, nb.x);
         const xRight = Math.max(na.x+NODE_W, nb.x);
         const midX   = (na.x + nb.x + NODE_W) / 2;
 
-        /* 婚姻水平線 */
+        // 婚姻水平線
         const line = document.createElementNS("http://www.w3.org/2000/svg","line");
         line.setAttribute("x1", xLeft);
         line.setAttribute("y1", y);
@@ -358,7 +359,7 @@ HTML = r"""
         if(u.status==="divorced") line.setAttribute("stroke-dasharray","6,4");
         root.appendChild(line);
 
-        /* 婚姻點（可點選） */
+        // 婚姻點
         const dot = document.createElementNS("http://www.w3.org/2000/svg","rect");
         dot.setAttribute("x", midX-5);
         dot.setAttribute("y", y-5);
@@ -370,18 +371,22 @@ HTML = r"""
         dot.addEventListener("click",()=>{ selected={type:"union", id:u.id}; updateSelectionInfo(); });
         root.appendChild(dot);
 
-        /* 子女連線：每個婚姻使用固定的水平車道，避免不同婚姻的水平線重疊 */
+        // 子女連線：不同婚姻不同車道；且至少在孩子頂部上方 CHILD_TOP_GAP
         const kids = doc.children.filter(cl=>cl.unionId===u.id);
         if(kids.length>0){
-          const offset = busYOffset(u.id);  // 依 unionId 穩定取一個 y 偏移
+          const offBase = busYOffset(u.id);
           kids.forEach(cl=>{
             const nc = pickNode(layout, cl.childId, overrides);
             if(!nc) return;
-            const busY = nc.y + offset;     // 此婚姻的水平“車道”
+            const childTop = nc.y;
+            // 預設車道位置（可能略高或略低）
+            let busY = childTop + offBase;
+            // 確保車道不會比 childTop 低於 CHILD_TOP_GAP：至少在上方保留高度
+            busY = Math.min(busY, childTop - CHILD_TOP_GAP);
+
             const cx   = nc.x + NODE_W/2;
             const path = document.createElementNS("http://www.w3.org/2000/svg","path");
-            // 垂直到 busY → 在 busY 水平走 → 到 child x → 再垂直下到 child
-            const d = `M ${midX} ${y} L ${midX} ${busY} L ${cx} ${busY} L ${cx} ${nc.y}`;
+            const d = `M ${midX} ${y} L ${midX} ${busY} L ${cx} ${busY} L ${cx} ${childTop}`;
             path.setAttribute("d", d);
             path.setAttribute("fill","none");
             path.setAttribute("stroke","var(--line)");
