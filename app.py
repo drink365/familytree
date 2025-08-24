@@ -1,10 +1,11 @@
 # app.py
 # ==========================================================
 # 家族平台（Graphviz 家族樹 + 台灣民法法定繼承試算）
-# - 一般人可直接使用：只用表單新增/修改，不需要上傳/下載任何 JSON
+# - 友善操作：只用表單新增/修改，不需要上傳/下載任何 JSON
 # - 家族樹：前任在左、本人置中、現任在右；三代分層；在婚實線、離婚虛線
 # - 人物：性別＋已過世（男=淡藍、女=淡紅、已故=灰並加「（殁）」）
 # - 法定繼承：配偶為當然繼承人，只與「第一個有人的順位」共同繼承
+# - 首頁加上「本圖以陳一郎家族譜為示範」與「馬上輸入自己的資料」按鈕
 #
 # requirements.txt 建議：
 #   streamlit==1.37.0
@@ -36,6 +37,12 @@ st.markdown("""
   border:1px solid #e8eef0; border-radius:12px; padding:14px 16px; background:#fff;
   margin-bottom:12px;
 }
+.cta {
+  display:flex; gap:12px; align-items:center; padding:12px 16px;
+  background:#fff; border:1px dashed #cfe3ea; border-radius:12px;
+}
+.cta .title {font-weight:700; color:#0e2d3b}
+.cta .desc {color:#55707a; font-size:14px}
 .small {font-size:12px;color:#6b8791}
 hr {border: none; border-top: 1px solid #e8eef0; margin: 8px 0 16px;}
 </style>
@@ -69,9 +76,10 @@ DEMO = {
         {"marriage_id": "m_wang", "children": ["wang_sun"]},
     ]
 }
-
 if "data" not in st.session_state:
     st.session_state["data"] = DEMO
+if "just_cleared" not in st.session_state:
+    st.session_state["just_cleared"] = False
 
 # =============== 共用工具 ===============
 def normalize(s: str) -> str:
@@ -97,34 +105,33 @@ def ensure_person_id(data: dict, name: str, gender: str = "男", deceased: bool 
     persons[pid] = {"name": name, "gender": gender, "deceased": bool(deceased)}
     return pid
 
-def map_children(children_list: List[Dict]) -> Dict[str, List[str]]:
+def map_children(children_list: List[dict]) -> Dict[str, List[str]]:
     return {c["marriage_id"]: list(c.get("children", [])) for c in children_list}
 
-def marriages_of(pid: str, marriages: List[Dict]) -> List[Dict]:
+def marriages_of(pid: str, marriages: List[dict]) -> List[dict]:
     return [m for m in marriages if m["a"] == pid or m["b"] == pid]
 
-def partner_of(m: Dict, pid: str) -> str:
+def partner_of(m: dict, pid: str) -> str:
     return m["b"] if m["a"] == pid else m["a"]
 
-def current_spouses_of(pid: str, marriages: List[Dict]) -> List[str]:
+def current_spouses_of(pid: str, marriages: List[dict]) -> List[str]:
     return [partner_of(m, pid) for m in marriages if (m["a"] == pid or m["b"] == pid) and m.get("status") == "current"]
 
-def ex_spouses_of(pid: str, marriages: List[Dict]) -> List[str]:
+def ex_spouses_of(pid: str, marriages: List[dict]) -> List[str]:
     return [partner_of(m, pid) for m in marriages if (m["a"] == pid or m["b"] == pid) and m.get("status") == "ex"]
 
-def children_of_via_marriage(pid: str, marriages: List[Dict], ch_map: Dict[str, List[str]]) -> List[str]:
+def children_of_via_marriage(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
     kids: List[str] = []
     for m in marriages:
         if m["a"] == pid or m["b"] == pid:
             kids += ch_map.get(m["id"], [])
-    # 去重保序
     seen, ordered = set(), []
     for k in kids:
         if k not in seen:
             seen.add(k); ordered.append(k)
     return ordered
 
-def parents_of_person(pid: str, marriages: List[Dict], ch_map: Dict[str, List[str]]) -> List[str]:
+def parents_of_person(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
     parents: List[str] = []
     for m in marriages:
         if pid in ch_map.get(m["id"], []):
@@ -133,16 +140,14 @@ def parents_of_person(pid: str, marriages: List[Dict], ch_map: Dict[str, List[st
                     parents.append(p)
     return parents
 
-def siblings_of_person(pid: str, marriages: List[Dict], ch_map: Dict[str, List[str]]) -> List[str]:
+def siblings_of_person(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
     sibs = set()
-    # 全血
     for m in marriages:
         kids = ch_map.get(m["id"], [])
         if pid in kids:
             for k in kids:
                 if k != pid:
                     sibs.add(k)
-    # 半血
     for par in parents_of_person(pid, marriages, ch_map):
         for m in marriages_of(par, marriages):
             kids = ch_map.get(m["id"], [])
@@ -151,7 +156,7 @@ def siblings_of_person(pid: str, marriages: List[Dict], ch_map: Dict[str, List[s
                     sibs.add(k)
     return list(sorted(sibs))
 
-def grandparents_of_person(pid: str, marriages: List[Dict], ch_map: Dict[str, List[str]]) -> List[str]:
+def grandparents_of_person(pid: str, marriages: List[dict], ch_map: Dict[str, List[str]]) -> List[str]:
     gps = set()
     for par in parents_of_person(pid, marriages, ch_map):
         for g in parents_of_person(par, marriages, ch_map):
@@ -166,8 +171,8 @@ def node_color(info: dict) -> str:
 def node_label(info: dict) -> str:
     return f"{info.get('name','')}（殁）" if info.get("deceased") else info.get("name","")
 
-# 自動選根（刪掉「選擇家族樹根人物」）
 def pick_root(data: dict) -> str:
+    """選關係『最多』的人當根（婚姻＋子女），若平手取字典序最小 id。"""
     persons = data.get("persons", {})
     marriages = data.get("marriages", [])
     children = data.get("children", [])
@@ -197,7 +202,7 @@ def build_graph(data: dict, root_id: str) -> Digraph:
     children = data.get("children", [])
     ch_map = map_children(children)
 
-    # 節點：套用顏色與「（殁）」標記
+    # 節點：顏色與（殁）標記
     for pid, info in persons.items():
         dot.node(pid, node_label(info), shape="box", style="filled",
                  fillcolor=node_color(info), color=ACCENT, penwidth="1.2",
@@ -329,6 +334,31 @@ def intestate_shares_tw(data: dict, decedent: str) -> Tuple[Dict[str, float], st
         return {spouse: 1.0}, "僅配偶", [persons.get(spouse, {}).get("name", spouse)]
     return {}, "無繼承人（資料不足）", []
 
+# =============== 首頁 CTA（示範說明＋清空資料） ===============
+with st.container():
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.markdown(
+            """
+            <div class="cta">
+              <div>
+                <div class="title">本圖以「陳一郎家族譜」為示範</div>
+                <div class="desc">點擊右側按鈕，清空示範資料，開始建立您自己的家族樹。</div>
+              </div>
+            """, unsafe_allow_html=True
+        )
+    with c2:
+        if st.button("馬上輸入自己的資料", use_container_width=True):
+            st.session_state["data"] = {"persons": {}, "marriages": [], "children": []}
+            st.session_state["just_cleared"] = True
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# 若剛清空，顯示引導卡
+if st.session_state.get("just_cleared"):
+    st.success("已清空示範資料。請到下方「👤 人物／關係管理」分頁，從『新增／修改人物』開始輸入家族成員，接著建立婚姻，再把子女掛到父母。")
+    # 只提示一次
+    st.session_state["just_cleared"] = False
+
 # =============== 分頁 ===============
 tab_tree, tab_inherit, tab_manage = st.tabs(["🧭 家族樹", "⚖️ 法定繼承試算", "👤 人物／關係管理"])
 
@@ -385,7 +415,7 @@ with tab_inherit:
                 i += 1
             st.markdown(f'<div class="subtle">採用：{note}（配偶為當然繼承人；僅與第一個有人的順位共同繼承）。</div>', unsafe_allow_html=True)
 
-# ---------- 人物／關係管理（表單式，無任何上傳/下載） ----------
+# ---------- 人物／關係管理（表單式） ----------
 with tab_manage:
     data = st.session_state["data"]
     persons = data.get("persons", {})
@@ -414,13 +444,13 @@ with tab_manage:
         ok2 = st.form_submit_button("儲存婚姻")
         if ok2:
             try:
-                # 先確保兩人存在（若未存在會自動建立，性別暫以「男/女」預設，可在上方表單再修正）
+                # 若人物不存在會自動新增（性別先給預設，之後可在上方表單修正）
                 a_id = ensure_person_id(data, a_name, "男", False)
                 b_id = ensure_person_id(data, b_name, "女", False)
                 if a_id == b_id:
                     st.error("同一人不能與自己結婚")
                 else:
-                    # 找是否已有這對的婚姻
+                    # 檢查是否已有這對的婚姻
                     mid = None
                     for m in marriages:
                         if {m["a"], m["b"]} == {a_id, b_id}:
@@ -476,7 +506,6 @@ with tab_manage:
             st.info("目前尚無婚姻，請先在上方建立一段婚姻。")
 
     st.markdown("---")
-    # 友善總覽（僅顯示，無任何程式術語）
     st.markdown("#### 目前人物（摘要）")
     if persons:
         cols = st.columns(3)
@@ -488,7 +517,6 @@ with tab_manage:
                     <div class="card">
                       <div style="font-weight:700;color:{ACCENT}">{node_label(info)}</div>
                       <div class="small">性別：{info.get('gender','')}</div>
-                      <div class="small">身分ID（內部）：{pid}</div>
                     </div>
                     """, unsafe_allow_html=True
                 )
@@ -498,8 +526,8 @@ with tab_manage:
     st.markdown("#### 目前關係（摘要）")
     if marriages:
         for m in marriages:
-            a = st.session_state["data"]["persons"].get(m["a"],{}).get("name","?")
-            b = st.session_state["data"]["persons"].get(m["b"],{}).get("name","?")
+            a = data["persons"].get(m["a"],{}).get("name","?")
+            b = data["persons"].get(m["b"],{}).get("name","?")
             st.markdown(f"- **{a} × {b}**（{m.get('status','')}）")
     else:
         st.caption("尚未建立任何婚姻。")
