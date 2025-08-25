@@ -5,7 +5,6 @@ from typing import List, Dict, Optional, Tuple
 class TNode:
     id: str
     children: List["TNode"] = field(default_factory=list)
-    # layout fields
     prelim: float = 0.0
     mod: float = 0.0
     x: float = 0.0
@@ -113,9 +112,7 @@ def _second_walk(v: TNode, m: float, positions: Dict[str, Tuple[float, float]]):
     for w in v.children:
         _second_walk(w, m + v.mod, positions)
 
-def tidy_layout(root: TNode, min_sep: float = 120.0, level_gap: float = 140.0) -> Dict[str, Tuple[float, float]]:
-    """回傳 {node_id: (x, y)}；孩子永遠掛在自己父母(婚姻節點)下方，
-    若與左右子樹距離 < min_sep，則整掛平移。"""
+def tidy_layout(root: TNode, min_sep: float = 140.0, level_gap: float = 140.0) -> Dict[str, Tuple[float, float]]:
     _first_walk(root, min_sep, depth=0, level_gap=level_gap)
     pos: Dict[str, Tuple[float, float]] = {}
     _second_walk(root, 0.0, pos)
@@ -124,7 +121,6 @@ def tidy_layout(root: TNode, min_sep: float = 120.0, level_gap: float = 140.0) -
         pos = {k: (x - min_x, y) for k, (x, y) in pos.items()}
     return pos
 
-# ===== 資料 → 樹：以「婚姻節點」為錨點 =====
 def build_tree_from_marriages(
     marriages: Dict[str, Dict],
     persons: Dict[str, Dict],
@@ -139,11 +135,9 @@ def build_tree_from_marriages(
 
     def build(m_id: str) -> TNode:
         m_node = get_node(m_id)
-        # 孩子一定先掛在「這段婚姻節點」下面
         for child_id in marriages.get(m_id, {}).get("children", []):
             c_node = get_node(child_id)
             m_node.children.append(c_node)
-            # 再把孩子自己的婚姻節點掛在孩子下面
             for sub_m in persons.get(child_id, {}).get("children_marriages", []):
                 sub_m_node = build(sub_m)
                 c_node.children.append(sub_m_node)
