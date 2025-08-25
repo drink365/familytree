@@ -1,4 +1,3 @@
-# demo_data.py
 marriages = {
     "陳一郎|陳妻": {"label": "陳一郎╳陳妻", "children": ["王子", "陳大", "陳二", "陳三"]},
     "王子|王子妻": {"label": "王子╳王子妻", "children": ["王孫"]},
