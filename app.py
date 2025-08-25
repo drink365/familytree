@@ -4,7 +4,7 @@ from typing import Dict, Tuple, List
 
 from tree_layout import build_tree_from_marriages, tidy_layout
 
-# ========= 內建示範資料（避免白畫面） =========
+# ========= 內建示範資料 =========
 DEMO_MARRIAGES = {
     "陳一郎|陳妻": {"label": "陳一郎╳陳妻", "children": ["王子", "陳大", "陳二", "陳三"]},
     "王子|王子妻": {"label": "王子╳王子妻", "children": ["王孫"]},
@@ -23,28 +23,21 @@ DEMO_PERSONS = {
     "三孩A": {"label": "三孩A", "children_marriages": []},
 }
 
-# ========= 視覺預設（一般用戶不用調整） =========
-NODE_W = 120      # 用於邊線端點和留白
+# ========= 視覺預設 =========
+NODE_W = 120       # 只用於軸域預留邊界與線段端點
 NODE_H = 40
 MIN_SEP = 140
 LEVEL_GAP = 140
-BOX_COLOR = "rgba(12,74,110,1.0)"  # 深青
+BOX_COLOR = "rgba(12,74,110,1.0)"
 TEXT_COLOR = "white"
 
 st.set_page_config(page_title="家族樹（簡易版）", page_icon="🌳", layout="wide")
 st.title("🌳 家族樹（簡易版）")
 
-# ========= 狀態 =========
-if "data" not in st.session_state:
-    st.session_state.data = {"root_marriage_id": "", "marriages": {}, "persons": {}}
-if not st.session_state.data.get("marriages"):
-    st.session_state.data["marriages"] = {**DEMO_MARRIAGES}
-    st.session_state.data["persons"] = {**DEMO_PERSONS}
-    st.session_state.data["root_marriage_id"] = "陳一郎|陳妻"
-
-# ========= 資料操作 =========
+# ========= 小工具 =========
 def ensure_person(name: str):
-    if not name: return
+    if not name:
+        return
     persons = st.session_state.data["persons"]
     if name not in persons:
         persons[name] = {"label": name, "children_marriages": []}
@@ -93,41 +86,22 @@ def edges_for_plot(marriages: Dict, persons: Dict) -> List[Tuple[str, str]]:
             e.append((pid, sub_m))
     return e
 
-# ========= 繪圖 =========
-def draw_tree():
-    data = st.session_state.data
-    marriages = data.get("marriages", {})
-    persons = data.get("persons", {})
-    root_id = data.get("root_marriage_id") or (next(iter(marriages), ""))
-
-    # Plotly 環境測試（一定會出現的小圖）
-    with st.expander("Plotly 測試（確認環境能顯示圖）", expanded=False):
-        test = go.Figure(go.Scatter(x=[0,1,2], y=[0,1,0], mode="lines+markers"))
-        test.update_layout(height=180, margin=dict(l=10, r=10, t=10, b=10))
-        st.plotly_chart(test, use_container_width=True)
-
-    # 狀態檢查
-    with st.expander("狀態檢查（看不到圖時展開）", expanded=False):
-        st.write({"root_marriage_id": root_id, "#marriages": len(marriages), "#persons": len(persons)})
-
-    if not root_id:
-        st.info("先建立至少一對父母，畫面就會出現家族樹。")
-        return
-
+def draw_tree_generic(marriages: Dict, persons: Dict, root_id: str, title: str):
+    """用最穩定的 Scatter 畫法產圖（給示範與實際都能共用）。"""
     # 1) 佈局
     root, _ = build_tree_from_marriages(marriages, persons, root_id)
     pos = tidy_layout(root, min_sep=MIN_SEP, level_gap=LEVEL_GAP)
     if not pos:
-        st.warning("沒有可顯示的節點。"); return
+        st.warning("沒有可顯示的節點。")
+        return
 
-    # 2) 節點/標籤
+    # 2) 節點與邊
     def is_marriage(nid: str) -> bool: return nid in marriages
     nodes_x, nodes_y, labels = [], [], []
     for nid, (x, y) in pos.items():
         nodes_x.append(x); nodes_y.append(y)
         labels.append(marriages.get(nid, {}).get("label") if is_marriage(nid) else persons.get(nid, {}).get("label", nid))
 
-    # 3) 邊
     ex, ey = [], []
     for a, b in edges_for_plot(marriages, persons):
         if a in pos and b in pos:
@@ -135,57 +109,63 @@ def draw_tree():
             y0 += NODE_H/2; y1 -= NODE_H/2
             ex.extend([x0, x1, None]); ey.extend([y0, y1, None])
 
-    # 4) 偵錯列表（前 8 筆）
-    with st.expander("節點/邊 偵錯資訊", expanded=False):
-        st.write({"nodes": len(nodes_x), "edges_segments": len(ex)//3})
-        sample = list(pos.items())[:8]
-        st.write({"sample_positions": sample})
-
-    # 5) 座標範圍（向下為正）
+    # 3) 軸域（向下為正）
     pad_x = NODE_W * 0.75
     pad_y = NODE_H * 2.0
     min_x, max_x = min(nodes_x) - pad_x, max(nodes_x) + pad_x
     min_y, max_y = min(nodes_y) - pad_y, max(nodes_y) + pad_y
 
-    # 6) 只用 Scatter（最穩定）
+    # 4) 畫圖（只用 Scatter，避免 shapes 在某些前端版面沒渲染）
     fig = go.Figure()
-
-    # 邊
     if ex:
         fig.add_trace(go.Scatter(
             x=ex, y=ey, mode="lines",
             line=dict(width=2, color="rgba(80,80,80,1)"),
             hoverinfo="none", name=""
         ))
-
-    # 節點（square 模擬方框）＋白字
     fig.add_trace(go.Scatter(
         x=nodes_x, y=nodes_y,
         mode="markers+text",
-        marker=dict(
-            symbol="square", size=34, color=BOX_COLOR,
-            line=dict(width=1, color="rgba(0,0,0,0.25)")
-        ),
+        marker=dict(symbol="square", size=34, color=BOX_COLOR, line=dict(width=1, color="rgba(0,0,0,0.25)")),
         text=labels, textposition="middle center",
         textfont=dict(color=TEXT_COLOR, size=12),
         hoverinfo="text", name=""
     ))
-
     fig.update_layout(
+        title=dict(text=title, x=0.02, y=0.98, xanchor="left", yanchor="top"),
         xaxis=dict(visible=False, range=[min_x, max_x]),
-        yaxis=dict(visible=False, range=[max_y, min_y]),  # 倒序：向下為正
-        margin=dict(l=20, r=20, t=20, b=20),
-        height=740,
-        showlegend=False,
+        yaxis=dict(visible=False, range=[max_y, min_y]),
+        margin=dict(l=20, r=20, t=40, b=20),
+        height=520, showlegend=False,
     )
     st.plotly_chart(fig, use_container_width=True)
 
-# ========= 版面 =========
+# ========= 頁面最上方：兩張「保證可見」的小圖 =========
+# 1) Plotly 環境測試（這張一定會出現）
+test = go.Figure(go.Scatter(x=[0,1,2], y=[0,1,0], mode="lines+markers"))
+test.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), title="✅ Plotly 測試圖（用來確認前端可渲染）")
+st.plotly_chart(test, use_container_width=True)
+
+# 2) 直接用示範資料畫一張（不依賴任何表單或 session 狀態）
+draw_tree_generic(DEMO_MARRIAGES, DEMO_PERSONS, "陳一郎|陳妻", title="🧪 示範家族樹（固定示例）")
+
+st.markdown("---")
+
+# ========= 下方才是你的互動區 =========
+# 狀態初始化（給互動用）
+if "data" not in st.session_state:
+    st.session_state.data = {"root_marriage_id": "", "marriages": {}, "persons": {}}
+if not st.session_state.data.get("marriages"):
+    st.session_state.data["marriages"] = {**DEMO_MARRIAGES}
+    st.session_state.data["persons"] = {**DEMO_PERSONS}
+    st.session_state.data["root_marriage_id"] = "陳一郎|陳妻"
+
 left, right = st.columns([0.9, 1.1])
 
 with left:
     st.subheader("快速建立")
 
+    # ① 新增父母
     with st.form("add_parents", clear_on_submit=True):
         st.markdown("**① 新增一對父母**（或伴侶）")
         p1 = st.text_input("父母一（例：陳一郎）")
@@ -197,6 +177,7 @@ with left:
             (st.success if ok else st.error)(msg)
             st.rerun()
 
+    # ② 在某對父母下新增孩子
     with st.form("add_child", clear_on_submit=True):
         st.markdown("**② 在某對父母下新增孩子**")
         marriages_keys = list(st.session_state.data["marriages"].keys())
@@ -225,4 +206,16 @@ with left:
             st.rerun()
 
 with right:
-    draw_tree()
+    # 狀態面板（方便你確認）
+    data = st.session_state.data
+    marriages = data.get("marriages", {})
+    persons = data.get("persons", {})
+    root_id = data.get("root_marriage_id") or (next(iter(marriages), ""))
+
+    with st.expander("狀態檢查（看不到圖時展開）", expanded=False):
+        st.write({"root_marriage_id": root_id, "#marriages": len(marriages), "#persons": len(persons)})
+
+    if root_id:
+        draw_tree_generic(marriages, persons, root_id, title="📍 你的家族樹（可用左側表單即時擴充）")
+    else:
+        st.info("先建立至少一對父母，畫面就會出現家族樹。")
