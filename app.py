@@ -22,10 +22,9 @@ def next_id():
     st.session_state.data["_seq"] += 1
     return str(st.session_state.data["_seq"])
 
-
 def ensure_person(name, sex="男", alive=True, note=""):
     d = st.session_state.data
-    # unique by name (demo 環境)
+    # unique by name (demo)
     for pid, p in d["persons"].items():
         if p["name"] == name:
             return pid
@@ -118,14 +117,10 @@ def pick_from(label, options, key):
 # ---------------------------------
 
 def build_maps():
-    """回傳：
-       parents_of_child: child -> set(parents)
-       marriage_children: mid -> [child]
-    """
+    """回傳：parents_of_child: child -> set(parents), marriage_children: mid -> [child]"""
     d = st.session_state.data
     parents_of_child = defaultdict(set)
     marriage_children = defaultdict(list)
-
     for row in d["children"]:
         mid, c = row["mid"], row["child"]
         if mid not in d["marriages"]:
@@ -136,12 +131,11 @@ def build_maps():
     return parents_of_child, marriage_children
 
 def compute_generations():
-    """計算每個人的代數：無父母者為 0；子女 = max(父母代數) + 1。"""
+    """無父母者為 0；子女 = max(父母代數) + 1。"""
     d = st.session_state.data
     parents_of_child, _ = build_maps()
     gens = {pid: None for pid in d["persons"]}
 
-    # roots
     roots = [pid for pid in d["persons"] if len(parents_of_child.get(pid, set())) == 0]
     for r in roots:
         gens[r] = 0
@@ -159,7 +153,6 @@ def compute_generations():
                     gens[pid] = new_g
                     changed = True
 
-    # fallback（孤立點）
     for pid, g in gens.items():
         if g is None:
             gens[pid] = 0
@@ -183,7 +176,7 @@ def draw_tree_vertical():
         return
 
     gens = compute_generations()
-    parents_of_child, marriage_children = build_maps()
+    _, marriage_children = build_maps()
 
     dot = Digraph("Family", format="svg", engine="dot")
     dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.6", ranksep="1.0")
@@ -192,17 +185,17 @@ def draw_tree_vertical():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 2) 婚姻中點 + 子女連結
+    # 2) 婚姻中點 + 子女連結（唯一層次控制）
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
 
-        # 父母水平線（僅視覺，不影響層次）
+        # 父母水平線：僅視覺
         dot.edge(a, b, dir="none", style=("dashed" if divorced else "solid"),
                  color=BORDER_COLOR, constraint="false")
 
-        # 父母 -> 婚姻中點：隱形，但 constraint=true（強制中點在父母下方）
+        # 父母 -> 婚姻中點：隱形但 constraint=true（確保中點在父母下方）
         dot.edge(a, jn, dir="none", style="invis", weight="30", constraint="true")
         dot.edge(b, jn, dir="none", style="invis", weight="30", constraint="true")
 
@@ -249,7 +242,6 @@ def page_people():
             if name.strip():
                 ensure_person(name.strip(), sex, alive, note)
                 st.success(f"已新增：{name}")
-                st.rerun()
             else:
                 st.warning("請輸入姓名。")
 
@@ -269,9 +261,7 @@ def page_people():
             if ok:
                 p.update({"name": name.strip() or p["name"], "sex": sex, "alive": alive, "note": note})
                 st.success("已更新")
-                st.rerun()
             if del_:
-                # 同步刪關係
                 mids_to_del = [mid for mid, m in d["marriages"].items() if p_pick in (m["a"], m["b"])]
                 for mid in mids_to_del:
                     d["children"] = [row for row in d["children"] if row["mid"] != mid]
@@ -279,7 +269,6 @@ def page_people():
                 d["children"] = [row for row in d["children"] if row["child"] != p_pick]
                 del d["persons"][p_pick]
                 st.success("已刪除")
-                st.rerun()
 
 def page_relations():
     d = st.session_state.data
@@ -300,7 +289,6 @@ def page_relations():
             else:
                 add_marriage(a, b, divorced)
                 st.success("婚姻已建立/更新")
-                st.rerun()
 
     st.divider()
     st.markdown("### 把子女掛到父母（選擇婚姻）")
@@ -316,7 +304,6 @@ def page_relations():
             else:
                 add_child(m, kid)
                 st.success("子女已掛上")
-                st.rerun()
 
 def page_tree():
     st.subheader("🧬 家族樹（上下排列）")
@@ -331,20 +318,22 @@ ensure_session()
 
 st.title("🌳 家族平台（人物｜關係｜家族樹）")
 
+# 這裡顯示目前資料量，方便確認是否有載入成功
+d = st.session_state.data
+st.caption(f"目前：人物 {len(d['persons'])}、婚姻 {len(d['marriages'])}、子女連結 {len(d['children'])}")
+
 c1, c2 = st.columns([1,1])
 with c1:
     if st.button("📘 載入示範（陳一郎家族）", use_container_width=True):
         load_demo(clear=True)
         st.success("已載入示範資料。")
-        st.rerun()
 with c2:
     with st.popover("🧹 開始輸入我的資料（清空）", use_container_width=True):
         st.warning("此動作會刪除目前所有資料，且無法復原。")
         agree = st.checkbox("我了解並同意清空")
         if st.button("確認清空", type="primary", disabled=not agree):
-            st.session_state.data = _empty_data()
+            start_fresh()
             st.success("資料已清空。")
-            st.rerun()
 
 st.markdown(
     """
