@@ -197,9 +197,9 @@ def draw_tree_vertical():
         # parents horizontal connection (purely visual)
         dot.edge(a, b, dir="none", style=("dashed" if divorced else "solid"),
                  color=BORDER_COLOR, constraint="false")
-        # pin joint between parents visually but DO NOT affect ranking
-        dot.edge(a, jn, dir="none", style="invis", weight="50", constraint="false")
-        dot.edge(b, jn, dir="none", style="invis", weight="50", constraint="false")
+        # parent -> joint: invisible but constraint=true to enforce vertical order
+        dot.edge(a, jn, dir="none", style="invis", weight="30", constraint="true")
+        dot.edge(b, jn, dir="none", style="invis", weight="30", constraint="true")
 
         # children must be below -> constraint=true
         for c in marriage_children.get(mid, []):
