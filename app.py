@@ -1,7 +1,7 @@
 
 import streamlit as st
 from graphviz import Digraph
-from collections import defaultdict, deque
+from collections import defaultdict
 
 # ---------------------------------
 # Data model
@@ -25,6 +25,7 @@ def next_id():
 
 def ensure_person(name, sex="男", alive=True, note=""):
     d = st.session_state.data
+    # unique by name for demo
     for pid, p in d["persons"].items():
         if p["name"] == name:
             return pid
@@ -117,14 +118,8 @@ def pick_from(label, options, key):
 # ---------------------------------
 
 def build_maps():
-    """Return:
-       parents_of_child: child -> set(parents)
-       children_by_parent: parent -> [children]
-       marriage_children: mid -> [child]
-    """
     d = st.session_state.data
     parents_of_child = defaultdict(set)
-    children_by_parent = defaultdict(list)
     marriage_children = defaultdict(list)
 
     for row in d["children"]:
@@ -133,24 +128,20 @@ def build_maps():
             continue
         a, b = d["marriages"][mid]["a"], d["marriages"][mid]["b"]
         parents_of_child[c].update([a, b])
-        children_by_parent[a].append(c)
-        children_by_parent[b].append(c)
         marriage_children[mid].append(c)
-    return parents_of_child, children_by_parent, marriage_children
+    return parents_of_child, marriage_children
 
 def compute_generations():
-    """Assign a generation (int) to each person to enforce top-to-bottom layout.
-       Rule: root (no parents) -> 0; child's gen = max(parent gens) + 1.
-    """
+    """Assign generation index. Roots (no parents) -> 0; child = max(parents)+1."""
     d = st.session_state.data
-    parents_of_child, children_by_parent, _ = build_maps()
+    parents_of_child, _ = build_maps()
     gens = {pid: None for pid in d["persons"]}
+
     # roots
-    roots = [pid for pid in d["persons"] if pid not in parents_of_child or len(parents_of_child[pid]) == 0]
+    roots = [pid for pid in d["persons"] if len(parents_of_child.get(pid, set())) == 0]
     for r in roots:
         gens[r] = 0
 
-    # BFS style relaxation until stable
     changed = True
     while changed:
         changed = False
@@ -158,14 +149,15 @@ def compute_generations():
             ps = list(parents_of_child.get(pid, []))
             if not ps:
                 continue
-            if all(gens[p] is not None for p in ps):
+            if all(gens.get(p) is not None for p in ps):
                 new_g = max(gens[p] for p in ps) + 1
                 if gens[pid] is None or new_g > gens[pid]:
                     gens[pid] = new_g
                     changed = True
-    # fallback any None -> 0
-    for pid in d["persons"]:
-        if gens[pid] is None:
+
+    # fallback
+    for pid, g in gens.items():
+        if g is None:
             gens[pid] = 0
     return gens
 
@@ -186,44 +178,40 @@ def draw_tree_vertical():
         st.info("請先新增人物與關係，或載入示範。")
         return
 
-    # Compute generations
     gens = compute_generations()
-    parents_of_child, _, marriage_children = build_maps()
+    parents_of_child, marriage_children = build_maps()
 
     dot = Digraph("Family", format="svg", engine="dot")
-    dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.6", ranksep="0.9")
+    dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.6", ranksep="1.0")
 
-    # 1) Add all person nodes
+    # 1) Add persons
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 2) For each marriage, create a joint node and connect parents to it (no constraint),
-    #    then connect joint -> children (constraint true) so children must be below.
+    # 2) Marriages and children
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
 
-        style = "dashed" if divorced else "solid"
-        # parents horizontal line
-        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+        # parents horizontal connection (purely visual)
+        dot.edge(a, b, dir="none", style=("dashed" if divorced else "solid"),
+                 color=BORDER_COLOR, constraint="false")
+        # pin joint between parents visually but DO NOT affect ranking
+        dot.edge(a, jn, dir="none", style="invis", weight="50", constraint="false")
+        dot.edge(b, jn, dir="none", style="invis", weight="50", constraint="false")
 
-        # place joint roughly between parents
-        dot.edge(a, jn, dir="none", style="invis", weight="50")
-        dot.edge(b, jn, dir="none", style="invis", weight="50")
-
-        # children edges enforce vertical order
+        # children must be below -> constraint=true
         for c in marriage_children.get(mid, []):
             dot.edge(jn, c, color=BORDER_COLOR, constraint="true")
 
-        # keep parents on same rank (same generation)
+        # keep the two parents on the same horizontal layer
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
             s.node(b)
 
-    # 3) Enforce generation ranks (THIS is the key for top-bottom layout)
-    #    Everyone with same generation is forced to be in the same horizontal layer.
+    # 3) Force generation layers
     max_gen = max(gens.values()) if gens else 0
     for g in range(max_gen + 1):
         with dot.subgraph() as s:
@@ -235,7 +223,7 @@ def draw_tree_vertical():
     st.graphviz_chart(dot, use_container_width=True)
 
 # ---------------------------------
-# UI pages
+# UI
 # ---------------------------------
 
 def start_fresh():
@@ -244,7 +232,6 @@ def start_fresh():
 def page_people():
     d = st.session_state.data
     st.subheader("👤 人物")
-
     with st.form("add_person"):
         c1, c2 = st.columns([2,1])
         name = c1.text_input("姓名*")
@@ -279,7 +266,6 @@ def page_people():
                 st.success("已更新")
                 st.rerun()
             if del_:
-                # 刪關係
                 mids_to_del = [mid for mid, m in d["marriages"].items() if p_pick in (m["a"], m["b"])]
                 for mid in mids_to_del:
                     d["children"] = [row for row in d["children"] if row["mid"] != mid]
@@ -292,7 +278,6 @@ def page_people():
 def page_relations():
     d = st.session_state.data
     st.subheader("🔗 關係")
-
     st.markdown("### 建立或更新婚姻")
     with st.form("form_marriage"):
         c1, c2 = st.columns(2)
