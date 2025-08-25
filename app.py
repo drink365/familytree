@@ -61,7 +61,7 @@ def add_child(mid: str, child_pid: str) -> None:
 def load_demo():
     st.session_state.data = _empty_data()
     P = {}
-    def P_(name, sex="男", alive=True): 
+    def P_(name, sex="男", alive=True):
         pid = add_person(name, sex, alive); P[name] = pid; return pid
 
     # 人物
@@ -89,7 +89,7 @@ def load_demo():
     add_child(m6, P["三孩A"]); add_child(m6, P["三孩B"])
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Graphviz 繪圖（強化：婚姻點 + 子女分組 + 同層對齊）
+# Graphviz 繪圖（重點：婚姻點 + 子女群組 + 多婚姻左右排開）
 # ──────────────────────────────────────────────────────────────────────────────
 COLOR_MALE   = "#d8eaff"
 COLOR_FEMALE = "#ffdbe1"
@@ -110,54 +110,63 @@ def build_dot(data: Dict) -> str:
     children  = data["children"]
 
     dot = Digraph("Family", format="svg", engine="dot")
-    # orthogonal 直角線 + 間距設定
-    dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.45", ranksep="0.70", bgcolor="white")
+    dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.45", ranksep="0.72", bgcolor="white")
     dot.edge_attr.update(arrowhead="none", color=BORDER, penwidth="1.3")
 
-    # 1) 畫出所有人物節點
+    # 1) 人物節點
     for pid, p in persons.items():
         _node_person(dot, pid, p)
 
-    # 預先把每段婚姻的子女收集起來
+    # 2) 先統計「某人參與的所有婚姻」→ 之後讓他的所有 hub 與他同層，並用隱形邊串起來
+    hubs_by_person: Dict[str, List[str]] = defaultdict(list)
+    for mid, m in marriages.items():
+        a, b = m["a"], m["b"]
+        hubs_by_person[a].append(f"hub_{mid}")
+        hubs_by_person[b].append(f"hub_{mid}")
+
+    # 3) 每段婚姻：A→hub←B（離婚就虛線），hub→down→子女；子女同排
     kids_by_mid: Dict[str, List[str]] = defaultdict(list)
     for r in children:
         kids_by_mid[r["mid"]].append(r["child"])
 
-    # 2) 每段婚姻：配偶同層 + 中間婚姻點 + 子女群組
     for mid, m in marriages.items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
 
-        # 2-1 配偶同層（rank=same），並畫配偶之間的水平線（離婚用虛線）
-        dot.body.append("{ rank=same; " + f'"{a}" "{b}"' + " }")
-        dot.edge(a, b, style="dashed" if divorced else "solid", weight="5")  # weight 拉近距離
-
-        # 2-2 中線「婚姻點」與「下方錨點」
-        hub   = f"hub_{mid}"     # 配偶之間的中繼點
-        down  = f"down_{mid}"    # 婚姻點正下方的錨點（用來垂直對齊子女）
+        hub  = f"hub_{mid}"    # 配偶之間的中繼點（同層）
+        down = f"down_{mid}"   # 婚姻點正下方的錨點（子女從這裡往下）
         dot.node(hub,  label="", shape="point", width="0.01", height="0.01", color=BORDER)
         dot.node(down, label="", shape="point", width="0.01", height="0.01", color=BORDER)
 
-        # 讓 hub 與配偶在同一層，確保婚線水平且 hub 位於兩者之間
-        dot.body.append("{ rank=same; " + f'"{a}" "{hub}" "{b}"' + " }")
+        # 讓 A、hub、B 在同一層，婚線絕對水平
+        dot.body.append('{ rank=same; "' + a + '" "' + hub + '" "' + b + '" }')
 
-        # 配偶 → 婚姻點（不改層級，只是水平相連）
-        dot.edge(a, hub,  weight="3", constraint="true")
-        dot.edge(b, hub,  weight="3", constraint="true")
+        # A→hub、B→hub（離婚為虛線）
+        style = "dashed" if divorced else "solid"
+        dot.edge(a, hub,  style=style, weight="6", constraint="true")
+        dot.edge(b, hub,  style=style, weight="6", constraint="true")
 
-        # 婚姻點 → 下方錨點（強制下一層，形成垂直中線）
-        dot.edge(hub, down, weight="10", constraint="true")
+        # hub→down 垂直中線
+        dot.edge(hub, down, weight="10", constraint="true", minlen="1")
 
-        # 2-3 子女群組（這段婚姻的所有子女排成一排）
+        # 同段婚姻的孩子們：同層 + 由 down 垂直連下去
         kids = kids_by_mid.get(mid, [])
         if kids:
-            # 把這組孩子放同一層
             dot.body.append("{ rank=same; " + " ".join(f'"{c}"' for c in kids) + " }")
-            # 用「下方錨點」接到每個孩子，形成乾淨的「T 型」垂直線
             for c in kids:
                 dot.edge(down, c, weight="8", constraint="true", minlen="1")
-            # 用隱形邊把兄弟姊妹串起來，讓他們水平排列更緊湊
-            for i in range(len(kids)-1):
+            # 用隱形邊讓兄弟姊妹更水平緊湊
+            for i in range(len(kids) - 1):
                 dot.edge(kids[i], kids[i+1], style="invis", weight="2", constraint="true")
+
+    # 4) 多段婚姻的人：把他的 hub 全放同層，並用隱形水平邊串起 → 左右排開、不交錯
+    for pid, hubs in hubs_by_person.items():
+        if len(hubs) <= 1:
+            continue
+        # 與本人同層
+        dot.body.append("{ rank=same; " + " ".join(f'"{x}"' for x in ([pid] + hubs)) + " }")
+        # 隱形水平鏈（hub1 — hub2 — hub3 …）
+        for i in range(len(hubs) - 1):
+            dot.edge(hubs[i], hubs[i+1], style="invis", weight="5", constraint="true")
 
     return dot.source
 
@@ -176,8 +185,8 @@ def main():
     # 頂部工具
     left, right = st.columns([1,1])
     with left:
-        st.markdown("### 🌳 家族樹（Graphviz 強化版）")
-        st.caption("配偶同層＋婚姻點＋子女群組：線條垂直、兄弟姊妹同排、不同婚姻分組清楚。")
+        st.markdown("### 🌳 家族樹（穩定版）")
+        st.caption("A→婚姻點←B、子女自婚姻點往下；多段婚姻左右排開，線條不再交錯。")
     with right:
         c1, c2 = st.columns(2)
         if c1.button("載入示範", use_container_width=True):
@@ -211,16 +220,12 @@ def main():
                 cols = st.columns([3,1,1,1])
                 tag = "" if p["alive"] else "（殁）"
                 cols[0].markdown(f'**{p["name"]}{tag}**　/ {p["sex"]}')
-                # 切換生死
                 if cols[1].button("切換在世/殁", key=f"alive_{pid}"):
                     p["alive"] = not p["alive"]
-                # 改名
                 new = cols[2].text_input("改名", value=p["name"], key=f"rename_{pid}")
                 if new != p["name"]:
                     p["name"] = new or p["name"]
-                # 刪除
                 if cols[3].button("刪除此人", key=f"del_{pid}"):
-                    # 刪掉相關婚姻與子女關係
                     mids = [mid for mid,m in d["marriages"].items() if pid in (m["a"], m["b"])]
                     for mid in mids:
                         d["marriages"].pop(mid, None)
