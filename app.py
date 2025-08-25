@@ -1,4 +1,3 @@
-
 import streamlit as st
 from graphviz import Digraph
 from collections import defaultdict
@@ -23,9 +22,10 @@ def next_id():
     st.session_state.data["_seq"] += 1
     return str(st.session_state.data["_seq"])
 
+
 def ensure_person(name, sex="男", alive=True, note=""):
     d = st.session_state.data
-    # unique by name for demo
+    # unique by name (demo 環境)
     for pid, p in d["persons"].items():
         if p["name"] == name:
             return pid
@@ -118,6 +118,10 @@ def pick_from(label, options, key):
 # ---------------------------------
 
 def build_maps():
+    """回傳：
+       parents_of_child: child -> set(parents)
+       marriage_children: mid -> [child]
+    """
     d = st.session_state.data
     parents_of_child = defaultdict(set)
     marriage_children = defaultdict(list)
@@ -132,7 +136,7 @@ def build_maps():
     return parents_of_child, marriage_children
 
 def compute_generations():
-    """Assign generation index. Roots (no parents) -> 0; child = max(parents)+1."""
+    """計算每個人的代數：無父母者為 0；子女 = max(父母代數) + 1。"""
     d = st.session_state.data
     parents_of_child, _ = build_maps()
     gens = {pid: None for pid in d["persons"]}
@@ -155,7 +159,7 @@ def compute_generations():
                     gens[pid] = new_g
                     changed = True
 
-    # fallback
+    # fallback（孤立點）
     for pid, g in gens.items():
         if g is None:
             gens[pid] = 0
@@ -184,34 +188,35 @@ def draw_tree_vertical():
     dot = Digraph("Family", format="svg", engine="dot")
     dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.6", ranksep="1.0")
 
-    # 1) Add persons
+    # 1) 人物節點
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 2) Marriages and children
+    # 2) 婚姻中點 + 子女連結
     for mid, m in d["marriages"].items():
         a, b, divorced = m["a"], m["b"], m["divorced"]
         jn = f"J_{mid}"
         dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
 
-        # parents horizontal connection (purely visual)
+        # 父母水平線（僅視覺，不影響層次）
         dot.edge(a, b, dir="none", style=("dashed" if divorced else "solid"),
                  color=BORDER_COLOR, constraint="false")
-        # parent -> joint: invisible but constraint=true to enforce vertical order
+
+        # 父母 -> 婚姻中點：隱形，但 constraint=true（強制中點在父母下方）
         dot.edge(a, jn, dir="none", style="invis", weight="30", constraint="true")
         dot.edge(b, jn, dir="none", style="invis", weight="30", constraint="true")
 
-        # children must be below -> constraint=true
+        # 婚姻中點 -> 子女：constraint=true（子女在中點下方）
         for c in marriage_children.get(mid, []):
             dot.edge(jn, c, color=BORDER_COLOR, constraint="true")
 
-        # keep the two parents on the same horizontal layer
+        # 讓父母同列
         with dot.subgraph() as s:
             s.attr(rank="same")
             s.node(a)
             s.node(b)
 
-    # 3) Force generation layers
+    # 3) 強制代數層（同代橫排）
     max_gen = max(gens.values()) if gens else 0
     for g in range(max_gen + 1):
         with dot.subgraph() as s:
@@ -266,6 +271,7 @@ def page_people():
                 st.success("已更新")
                 st.rerun()
             if del_:
+                # 同步刪關係
                 mids_to_del = [mid for mid, m in d["marriages"].items() if p_pick in (m["a"], m["b"])]
                 for mid in mids_to_del:
                     d["children"] = [row for row in d["children"] if row["mid"] != mid]
@@ -278,6 +284,7 @@ def page_people():
 def page_relations():
     d = st.session_state.data
     st.subheader("🔗 關係")
+
     st.markdown("### 建立或更新婚姻")
     with st.form("form_marriage"):
         c1, c2 = st.columns(2)
