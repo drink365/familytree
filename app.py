@@ -24,11 +24,12 @@ DEMO_PERSONS = {
 }
 
 # ========= 視覺預設 =========
-NODE_W = 120
+NODE_W = 120       # 只用來計算座標 padding
 NODE_H = 40
-MIN_SEP = 140     # 子樹最小水平距離（專業預設）
-LEVEL_GAP = 140   # 代際垂直距離（專業預設）
-BOX_COLOR = "rgba(12,74,110,1.0)"  # 深青
+MIN_SEP = 140
+LEVEL_GAP = 140
+BOX_COLOR = "rgba(12,74,110,1.0)"  # 深青色
+TEXT_COLOR = "white"
 
 st.set_page_config(page_title="家族樹（簡易版）", page_icon="🌳", layout="wide")
 st.title("🌳 家族樹（簡易版）")
@@ -42,10 +43,9 @@ if not st.session_state.data.get("marriages"):
     st.session_state.data["persons"] = {**DEMO_PERSONS}
     st.session_state.data["root_marriage_id"] = "陳一郎|陳妻"
 
-# ========= 資料操作工具 =========
+# ========= 基本資料操作 =========
 def ensure_person(name: str):
-    if not name:
-        return
+    if not name: return
     persons = st.session_state.data["persons"]
     if name not in persons:
         persons[name] = {"label": name, "children_marriages": []}
@@ -94,13 +94,13 @@ def edges_for_plot(marriages: Dict, persons: Dict) -> List[Tuple[str, str]]:
             e.append((pid, sub_m))
     return e
 
+# ========= 繪圖 =========
 def draw_tree():
     data = st.session_state.data
     marriages = data.get("marriages", {})
     persons = data.get("persons", {})
     root_id = data.get("root_marriage_id") or (next(iter(marriages), ""))
 
-    # 狀態檢查（看不到圖時展開）
     with st.expander("狀態檢查（看不到圖時展開）", expanded=False):
         st.write({"root_marriage_id": root_id, "#marriages": len(marriages), "#persons": len(persons)})
 
@@ -108,73 +108,67 @@ def draw_tree():
         st.info("先建立至少一對父母，畫面就會出現家族樹。")
         return
 
-    # 1) 建樹＋佈局
+    # 1) 佈局：孩子一定在自己的父母下方，並自動間距
     root, _ = build_tree_from_marriages(marriages, persons, root_id)
     pos = tidy_layout(root, min_sep=MIN_SEP, level_gap=LEVEL_GAP)
     if not pos:
-        st.warning("沒有可顯示的節點。"); return
+        st.warning("沒有可顯示的節點。")
+        return
 
-    # 2) 節點框＋文字
-    shapes, annotations = [], []
+    # 2) 準備節點與標籤
     def is_marriage(nid: str) -> bool: return nid in marriages
-
-    nodes_x, nodes_y, nodes_text = [], [], []  # 保險可見的節點 trace
+    nodes_x, nodes_y, labels = [], [], []
     for nid, (x, y) in pos.items():
-        shapes.append(dict(
-            type="rect",
-            x0=x - NODE_W/2, y0=y - NODE_H/2,
-            x1=x + NODE_W/2, y1=y + NODE_H/2,
-            line=dict(width=1),
-            fillcolor=BOX_COLOR, opacity=1.0, layer="above", visible=True,
-        ))
-        label = marriages.get(nid, {}).get("label") if is_marriage(nid) else persons.get(nid, {}).get("label", nid)
-        annotations.append(dict(
-            x=x, y=y, text=label or nid, showarrow=False,
-            font=dict(color="white"), xanchor="center", yanchor="middle"
-        ))
-        nodes_x.append(x); nodes_y.append(y); nodes_text.append("")  # 文字留空
+        nodes_x.append(x); nodes_y.append(y)
+        lbl = marriages.get(nid, {}).get("label") if is_marriage(nid) else persons.get(nid, {}).get("label", nid)
+        labels.append(lbl or nid)
 
-    # 3) 連線
+    # 3) 準備邊
     ex, ey = [], []
     for a, b in edges_for_plot(marriages, persons):
         if a in pos and b in pos:
             x0, y0 = pos[a]; x1, y1 = pos[b]
+            # 視覺上拉開一點點，模擬從方框邊緣連線
             y0 += NODE_H/2; y1 -= NODE_H/2
             ex.extend([x0, x1, None]); ey.extend([y0, y1, None])
 
-    # 4) 軸域：用所有節點座標固定範圍（避免 shapes 飄出視窗）
+    # 4) 軸域（固定範圍，向下為正）
     pad_x = NODE_W * 0.75
     pad_y = NODE_H * 2.0
     min_x, max_x = min(nodes_x) - pad_x, max(nodes_x) + pad_x
     min_y, max_y = min(nodes_y) - pad_y, max(nodes_y) + pad_y
 
+    # 5) 簡化且相容性最好的畫法（只用 Scatter）
     fig = go.Figure()
 
-    # 可見節點 trace（小點即可），保證就算沒有邊線也一定會出圖
+    # 邊
+    if ex:
+        fig.add_trace(go.Scatter(
+            x=ex, y=ey, mode="lines",
+            line=dict(width=2, color="rgba(80,80,80,1)"),
+            hoverinfo="none", name=""
+        ))
+
+    # 節點（用 square 標記模擬方框）＋白色文字
     fig.add_trace(go.Scatter(
-        x=nodes_x, y=nodes_y, mode="markers",
-        marker=dict(size=6, opacity=0.75),
-        hoverinfo="none", name=""
+        x=nodes_x, y=nodes_y,
+        mode="markers+text",
+        marker=dict(symbol="square", size=34, color=BOX_COLOR, line=dict(width=1, color="rgba(0,0,0,0.25)")),
+        text=labels, textposition="middle center",
+        textfont=dict(color=TEXT_COLOR, size=12),
+        hoverinfo="text", name=""
     ))
 
-    # 邊線（若存在）
-    if ex:
-        fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", hoverinfo="none", line=dict(width=2), name=""))
-
     fig.update_layout(
-        shapes=shapes,
-        annotations=annotations,
         xaxis=dict(visible=False, range=[min_x, max_x]),
-        # 直接用 range 倒序達到向下為正的視覺
-        yaxis=dict(visible=False, range=[max_y, min_y]),
+        yaxis=dict(visible=False, range=[max_y, min_y]),  # 倒序：向下為正
         margin=dict(l=20, r=20, t=20, b=20),
         height=720,
         showlegend=False,
     )
-
     st.plotly_chart(fig, use_container_width=True)
 
-# ========= 左右版面 =========
+# ========= 版面 =========
 left, right = st.columns([0.9, 1.1])
 
 with left:
