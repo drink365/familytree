@@ -58,7 +58,7 @@ def add_child(mid, child):
         d["children"].append({"mid": mid, "child": child})
 
 def add_sibling_link(a, b):
-    if a == b: 
+    if not a or not b:
         return
     a, b = sorted([a, b])
     d = st.session_state.data
@@ -89,22 +89,25 @@ def load_demo(clear=True):
     add_child(mid_now, chensan)
     add_child(mid_ex,  wangzi)
 
-    # 王子家庭
-    mid_wz = add_marriage(wangzi, wz_wife, divorced=False)
-    add_child(mid_wz, w_sun)
+    # 王子成家
+    mid_wang = add_marriage(wangzi, wz_wife, divorced=False)
+    add_child(mid_wang, w_sun)
 
 # -------------------------------
-# Helpers (UI & common)
+# UI Helpers
 # -------------------------------
 
-def start_fresh():
-    st.session_state.data = _empty_data()
+COLOR_MALE   = "#dff2ff"
+COLOR_FEMALE = "#ffe9f2"
+COLOR_DEAD   = "#eeeeee"
+BORDER_COLOR = "#6b7a8d"
 
 def list_person_options(include_empty=False, empty_label="— 未選擇 —"):
     d = st.session_state.data
     opts = []
     if include_empty:
         opts.append((None, empty_label))
+    # 保持插入順序（較直覺）
     for pid, p in d["persons"].items():
         label = f'{p["name"]}（{p["sex"]}）'
         if not p["alive"]:
@@ -163,61 +166,34 @@ def descendants_of(pid):
     d = st.session_state.data
     children_by_parent, _ = build_child_map()
 
-    res = []
-    q = deque(children_by_parent.get(pid, []))
-    while q:
-        c = q.popleft()
-        res.append(c)
-        q.extend(children_by_parent.get(c, []))
-    return res
-
-def lineal_heirs_with_representation(decedent):
-    """第一順位 直系卑親屬（含代位）"""
-    d = st.session_state.data
-    children_by_parent, _ = build_child_map()
-
-    heirs = []
-
-    # 直系卑親屬的代位（簡化版）：子女活的直接入列；死亡者由其直系卑親屬代位（遞迴）
-    def collect_lineal(children_list):
-        line = []
-        for c in children_list:
-            person = d["persons"].get(c)
-            if not person:
-                continue
-            if person["alive"]:
-                line.append(c)
-            else:
-                # 代位：找這個子女的子女
-                cc = children_by_parent.get(c, [])
-                line.extend(collect_lineal(cc))
-        return line
-
-    children = children_by_parent.get(decedent, [])
-    heirs = collect_lineal(children)
-    return list(dict.fromkeys(heirs))  # unique & keep order
+    out = []
+    dq = deque(children_by_parent.get(pid, []))
+    while dq:
+        x = dq.popleft()
+        out.append(x)
+        for y in children_by_parent.get(x, []):
+            dq.append(y)
+    return out
 
 def parents_of(pid):
-    d = st.session_state.data
-    _, parent_set = build_child_map()
-    return list(parent_set.get(pid, []))
+    _, parent_map = build_child_map()
+    return list(parent_map.get(pid, set()))
 
 def siblings_of(pid):
-    d = st.session_state.data
-    # 同父母的
+    # 同父母
     _, parent_map = build_child_map()
+    pset = parent_map.get(pid, set())
     sibs = set()
-    my_parents = set(parent_map.get(pid, []))
-    for cid, parents in parent_map.items():
-        if cid == pid:
-            continue
-        if set(parents) == my_parents and parents:
-            sibs.add(cid)
-    # 另外：透過 sibling_links 手動接的，也算
+    if pset:
+        for x, p in parent_map.items():
+            if x != pid and p == pset:
+                sibs.add(x)
+    # 額外手動連的兄弟姊妹（不一定同父母）
+    d = st.session_state.data
     for a, b in d["sibling_links"]:
         if a == pid:
             sibs.add(b)
-        if b == pid:
+        elif b == pid:
             sibs.add(a)
     return list(sibs)
 
@@ -254,38 +230,54 @@ def heirs_1138(decedent):
         return out
 
     # 第二順位：父母
-    rank2 = [p for p in parents_of(decedent) if d["persons"][p]["alive"]]
+    rank2 = [x for x in parents_of(decedent) if d["persons"][x]["alive"]]
     if rank2:
         out["rank"] = 2
         out["heirs"] = rank2
         return out
 
-    # 第三順位：兄弟姊妹（無代位）
-    rank3 = [s for s in siblings_of(decedent) if d["persons"][s]["alive"]]
+    # 第三順位：兄弟姊妹
+    rank3 = [x for x in siblings_of(decedent) if d["persons"][x]["alive"]]
     if rank3:
         out["rank"] = 3
         out["heirs"] = rank3
         return out
 
     # 第四順位：祖父母
-    rank4 = [g for g in grandparents_of(decedent) if d["persons"][g]["alive"]]
+    rank4 = [x for x in grandparents_of(decedent) if d["persons"][x]["alive"]]
     if rank4:
         out["rank"] = 4
         out["heirs"] = rank4
         return out
 
-    out["rank"] = 0
-    out["heirs"] = []
+    # 否則：國庫（不在此示範）
     return out
 
-# -------------------------------
-# Graphviz Family Tree
-# -------------------------------
+def lineal_heirs_with_representation(decedent):
+    """一代代往下，若子女死亡，以其直系卑親屬代位"""
+    d = st.session_state.data
+    children_by_parent, _ = build_child_map()
 
-COLOR_MALE   = "#d8eaff"
-COLOR_FEMALE = "#ffdbe1"
-COLOR_DEAD   = "#e6e6e6"
-BORDER_COLOR = "#164b5f"
+    def alive(pid):
+        return d["persons"][pid]["alive"]
+
+    # 先看直系第一層子女中，活著的
+    first_gen = children_by_parent.get(decedent, [])
+    alive_children = [x for x in first_gen if alive(x)]
+    if alive_children:
+        return alive_children
+
+    # 若子女全亡或不存在，找代位
+    heirs = []
+    for c in first_gen:
+        # c 亡 -> 由 c 的子女代位
+        if not alive(c):
+            heirs.extend([x for x in children_by_parent.get(c, []) if alive(x)])
+    return heirs
+
+# -------------------------------
+# Drawing (Graphviz)
+# -------------------------------
 
 def person_node(dot, pid, p):
     label = p["name"]
@@ -361,23 +353,26 @@ def draw_tree():
     st.graphviz_chart(dot, use_container_width=True)
 
 # -------------------------------
-# UI: People
+# UI
 # -------------------------------
+
+def start_fresh():
+    st.session_state.data = _empty_data()
 
 def page_people():
     d = st.session_state.data
-
     st.subheader("👤 人物")
-    st.caption("先新增人物，再到「關係」分頁建立婚姻與子女。")
+    st.caption("先建立人物，再到「關係」掛上婚姻與子女。")
 
     # 新增人物
     with st.form("add_person"):
-        st.markdown("**新增人物**")
-        name = st.text_input("姓名", "")
-        sex  = st.radio("性別", ["男", "女"], horizontal=True, index=0)
-        alive = st.checkbox("尚在人世", value=True)
-        note = st.text_input("備註", "")
-        ok = st.form_submit_button("新增")
+        c1, c2 = st.columns([2,1])
+        name = c1.text_input("姓名*")
+        sex  = c2.radio("性別", ["男", "女"], horizontal=True, index=0)
+        c3, c4 = st.columns(2)
+        alive = c3.checkbox("尚在人世", value=True)
+        note  = c4.text_input("備註")
+        ok = st.form_submit_button("新增人物", type="primary")
         if ok:
             if name.strip():
                 ensure_person(name.strip(), sex, alive, note)
@@ -412,36 +407,29 @@ def page_people():
                 for mid in mids_to_del:
                     # 刪除底下子女關係
                     d["children"] = [row for row in d["children"] if row["mid"] != mid]
-                    d["marriages"].pop(mid, None)
-                # 刪除子女掛載
+                    del d["marriages"][mid]
+                # 刪小孩掛載
                 d["children"] = [row for row in d["children"] if row["child"] != p_pick]
-                # 刪除兄弟姊妹連結
-                d["sibling_links"] = [t for t in d["sibling_links"] if p_pick not in t]
-                # 刪人
-                d["persons"].pop(p_pick, None)
+                # 刪手動兄弟姊妹
+                d["sibling_links"] = [(a,b) for (a,b) in d["sibling_links"] if a != p_pick and b != p_pick]
+                # 刪本人
+                del d["persons"][p_pick]
                 st.success("已刪除")
                 st.rerun()
 
-# -------------------------------
-# UI: Relations
-# -------------------------------
-
 def page_relations():
     d = st.session_state.data
-
     st.subheader("🔗 關係")
+    st.caption("先建立婚姻，再把子女掛到某段婚姻（父母）下。若無血緣但想並列視覺，可用兄弟姊妹虛線連結。")
 
     # -- 建立婚姻
-    st.markdown("### 建立婚姻（現任 / 離婚）")
+    st.markdown("### 建立或更新婚姻")
     with st.form("form_marriage"):
-        colA, colB, colC = st.columns([2,2,1])
-        with colA:
-            a = pick_from("配偶 A", list_person_options(include_empty=True), key="marry_a")
-        with colB:
-            b = pick_from("配偶 B", list_person_options(include_empty=True), key="marry_b")
-        with colC:
-            divorced = st.checkbox("此婚姻為離婚/前配偶", value=False)
-        ok = st.form_submit_button("建立婚姻")
+        c1, c2 = st.columns(2)
+        a = pick_from("配偶 A", list_person_options(include_empty=True), key="m_a")
+        b = pick_from("配偶 B", list_person_options(include_empty=True), key="m_b")
+        divorced = st.checkbox("此段婚姻已離婚（線條改為虛線）", value=False)
+        ok = st.form_submit_button("建立／更新婚姻", type="primary")
         if ok:
             if not a or not b:
                 st.warning("請選擇雙方。")
@@ -474,55 +462,39 @@ def page_relations():
 
     # -- 兄弟姊妹
     st.markdown("### 掛上兄弟姊妹（沒有血緣連線也可）")
-    with st.form("form_sibling"):
-        base = pick_from("基準成員", list_person_options(include_empty=True), key="sib_base")
-        sib  = pick_from("要掛為其兄弟姊妹者", list_person_options(include_empty=True), key="sib_other")
-        ok = st.form_submit_button("建立兄弟姊妹關係")
+    with st.form("form_siblings"):
+        a = pick_from("成員 A", list_person_options(include_empty=True), key="sib_a")
+        b = pick_from("成員 B", list_person_options(include_empty=True), key="sib_b")
+        ok = st.form_submit_button("以虛線連結（同列顯示）")
         if ok:
-            if not base or not sib:
-                st.warning("請選擇兩個人。")
-            elif base == sib:
-                st.warning("同一個人無法建立兄弟姊妹關係。")
+            if not a or not b:
+                st.warning("請選擇兩位。")
+            elif a == b:
+                st.warning("同一人不可相連。")
             else:
-                add_sibling_link(base, sib)
-                st.success("已建立兄弟姊妹關係")
+                add_sibling_link(a, b)
+                st.success("已以虛線相連並同列顯示")
                 st.rerun()
-
-# -------------------------------
-# UI: Inheritance
-# -------------------------------
 
 def page_inheritance():
     d = st.session_state.data
+    st.subheader("⚖️ 法定繼承試算（民法 1138）")
 
-    st.subheader("⚖️ 法定繼承試算")
     if not d["persons"]:
-        st.info("尚無資料，請先新增人物或載入示範。")
+        st.info("請先新增人物。")
         return
 
-    target = pick_from("選擇被繼承人", list_person_options(include_empty=True), key="succ_target")
-    if not target:
-        st.info("請選擇被繼承人。")
-        return
+    target = pick_from("選擇被繼承人", list_person_options(include_empty=False), key="decedent")
+    info = heirs_1138(target)
 
-    result = heirs_1138(target)
-    if result["rank"] == 0 and not result["spouse"]:
-        st.info("查無可繼承人（四順位皆無、且無配偶）。")
-        return
+    person_name = lambda pid: d["persons"][pid]["name"]
+    spouse_names = "、".join([person_name(x) for x in info["spouse"]]) if info["spouse"] else "（無）"
+    heirs_names  = "、".join([person_name(x) for x in info["heirs"]]) if info["heirs"] else "（無）"
 
-    def show_names(ids):
-        return "、".join([d["persons"][i]["name"] for i in ids]) if ids else "（無）"
+    st.write(f"**配偶參與分配**：{spouse_names}")
+    st.write(f"**順位**：{info['rank'] if info['rank'] else '（無）'}")
+    st.write(f"**同順位繼承人**：{heirs_names}")
 
-    st.markdown("---")
-    st.markdown(f"**被繼承人**：{d['persons'][target]['name']}")
-    st.markdown(f"**配偶**（當然繼承人）：{show_names(result['spouse'])}")
-    rank_txt = {1:"第一順位（直系卑親屬，含代位）", 2:"第二順位（父母）", 3:"第三順位（兄弟姊妹）", 4:"第四順位（祖父母）", 0:"（無）"}
-    st.markdown(f"**適用順位**：{rank_txt[result['rank']]}")
-    st.markdown(f"**本順位繼承人**：{show_names(result['heirs'])}")
-
-    st.caption("說明：依民法第1138條，配偶為當然繼承人；先檢視第一順位（直系卑親屬），無者再依序檢視第二至第四順位。代位繼承僅適用於直系卑親屬。")
-
-# -------------------------------
 # UI: Tree
 # -------------------------------
 
@@ -555,13 +527,11 @@ with c2:
             st.success("資料已清空，請到「人物」分頁新增第一位成員。")
             st.rerun()
 
-st.markdown("本圖以 **陳一郎家族譜** 為示範。")
 st.markdown(
     """
-    <div style="margin:.4rem 0 1.2rem 0;">
-      <a href="#人物" style="margin-right:12px;">➡️ 先到「人物」新增家人</a>
-      <a href="#關係">➡️ 再到「關係」建立婚姻、子女與兄弟姊妹</a>
-    </div>
+    <style>
+    .st-emotion-cache-1r6slb0 {max-width: 1400px;}
+    </style>
     """,
     unsafe_allow_html=True
 )
