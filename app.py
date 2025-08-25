@@ -4,20 +4,46 @@ from typing import Dict, Tuple, List
 
 from tree_layout import build_tree_from_marriages, tidy_layout
 
-# ---- 視覺與間距：使用專業預設（一般用戶不需調） ----
+# ========= 內建示範資料（避免空白畫面 / 不依賴額外模組） =========
+DEMO_MARRIAGES = {
+    "陳一郎|陳妻": {"label": "陳一郎╳陳妻", "children": ["王子", "陳大", "陳二", "陳三"]},
+    "王子|王子妻": {"label": "王子╳王子妻", "children": ["王孫"]},
+    "陳大|陳大嫂": {"label": "陳大╳陳大嫂", "children": ["二孩A", "二孩B", "二孩C"]},
+    "陳二|陳二嫂": {"label": "陳二╳陳二嫂", "children": ["三孩A"]},
+}
+DEMO_PERSONS = {
+    "王子": {"label": "王子", "children_marriages": ["王子|王子妻"]},
+    "陳大": {"label": "陳大", "children_marriages": ["陳大|陳大嫂"]},
+    "陳二": {"label": "陳二", "children_marriages": ["陳二|陳二嫂"]},
+    "陳三": {"label": "陳三", "children_marriages": []},
+    "王孫": {"label": "王孫", "children_marriages": []},
+    "二孩A": {"label": "二孩A", "children_marriages": []},
+    "二孩B": {"label": "二孩B", "children_marriages": []},
+    "二孩C": {"label": "二孩C", "children_marriages": []},
+    "三孩A": {"label": "三孩A", "children_marriages": []},
+}
+
+# ========= 視覺預設（一般用戶無需調整） =========
 NODE_W = 120
 NODE_H = 40
-MIN_SEP = 140    # 子樹最小水平距離（專業預設）
-LEVEL_GAP = 140  # 代際垂直距離（專業預設）
+MIN_SEP = 140     # 子樹最小水平距離（自動最佳化）
+LEVEL_GAP = 140   # 代際垂直距離（自動最佳化）
 BOX_COLOR = "rgba(12,74,110,1.0)"  # 深青色
 
 st.set_page_config(page_title="家族樹（簡易版）", page_icon="🌳", layout="wide")
 st.title("🌳 家族樹（簡易版）")
 
-# ---- 初始化資料結構 ----
+# ========= 狀態初始化 =========
 if "data" not in st.session_state:
     st.session_state.data = {"root_marriage_id": "", "marriages": {}, "persons": {}}
 
+# 若沒有任何婚姻資料，直接載入示範，避免空白畫面
+if not st.session_state.data.get("marriages"):
+    st.session_state.data["marriages"] = {**DEMO_MARRIAGES}
+    st.session_state.data["persons"] = {**DEMO_PERSONS}
+    st.session_state.data["root_marriage_id"] = "陳一郎|陳妻"
+
+# ========= 資料操作工具 =========
 def ensure_person(name: str):
     """若人不存在就建立；僅設 label，婚姻列表先空。"""
     if not name:
@@ -37,7 +63,6 @@ def add_marriage(p1: str, p2: str, set_as_root_if_empty=True):
     marriages[mid] = {"label": f"{p1}╳{p2}", "children": []}
     ensure_person(p1)
     ensure_person(p2)
-    # 第一次建立父母時，把它當作根
     if set_as_root_if_empty and not st.session_state.data.get("root_marriage_id"):
         st.session_state.data["root_marriage_id"] = mid
     return True, "已新增父母"
@@ -59,17 +84,20 @@ def add_child_to_marriage(marriage_id: str, child_name: str, child_spouse: str =
     if child_name not in marriages[marriage_id]["children"]:
         marriages[marriage_id]["children"].append(child_name)
 
-    # 如果填了配偶，一併建立孩子的婚姻節點（方便繼續往下）
+    # 若填配偶，一併建立孩子的婚姻節點，方便後續新增孫輩
     if child_spouse:
         ensure_person(child_spouse)
         child_mid = f"{child_name}|{child_spouse}"
         if child_mid not in marriages:
             marriages[child_mid] = {"label": f"{child_name}╳{child_spouse}", "children": []}
-        persons[child_name]["children_marriages"] = list(set(persons[child_name].get("children_marriages", []) + [child_mid]))
+        persons[child_name]["children_marriages"] = list(
+            set(persons[child_name].get("children_marriages", []) + [child_mid])
+        )
 
     return True, "已新增孩子"
 
 def edges_for_plot(marriages: Dict, persons: Dict) -> List[Tuple[str, str]]:
+    """產生畫線用的 (from, to) 邊集合。"""
     e = []
     for m_id, m in marriages.items():
         for child in m.get("children", []):
@@ -80,33 +108,38 @@ def edges_for_plot(marriages: Dict, persons: Dict) -> List[Tuple[str, str]]:
     return e
 
 def draw_tree():
+    """計算佈局並以 Plotly 繪圖。"""
     data = st.session_state.data
-    marriages = data["marriages"]
-    persons = data["persons"]
+    marriages = data.get("marriages", {})
+    persons = data.get("persons", {})
     root_id = data.get("root_marriage_id") or (next(iter(marriages), ""))
+
+    # 小檢查（需要時展開看狀態）
+    with st.expander("狀態檢查（看不到圖時展開）", expanded=False):
+        st.write({"root_marriage_id": root_id, "#marriages": len(marriages), "#persons": len(persons)})
 
     if not root_id:
         st.info("先建立至少一對父母，畫面就會出現家族樹。")
         return
 
-    # 建樹＋佈局（自動間距、整掛平移）
+    # 1) 建樹（孩子一定掛在自己的父母婚姻節點下）
     root, _ = build_tree_from_marriages(marriages, persons, root_id)
+
+    # 2) 自動佈局：確保最小距離，不會重疊，必要時整掛平移
     pos = tidy_layout(root, min_sep=MIN_SEP, level_gap=LEVEL_GAP)
 
-    # 節點框＋文字
+    # 3) 節點（框＋文字）
     shapes, annotations = [], []
     def is_marriage(nid: str) -> bool:
         return nid in marriages
 
     for nid, (x, y) in pos.items():
-        show_box = True
         shapes.append(dict(
             type="rect",
             x0=x - NODE_W/2, y0=y - NODE_H/2,
             x1=x + NODE_W/2, y1=y + NODE_H/2,
             line=dict(width=1),
-            fillcolor=BOX_COLOR, opacity=1.0, layer="above",
-            visible=show_box,
+            fillcolor=BOX_COLOR, opacity=1.0, layer="above", visible=True,
         ))
         label = marriages.get(nid, {}).get("label") if is_marriage(nid) else persons.get(nid, {}).get("label", nid)
         annotations.append(dict(
@@ -114,7 +147,7 @@ def draw_tree():
             font=dict(color="white"), xanchor="center", yanchor="middle"
         ))
 
-    # 連線
+    # 4) 連線
     ex, ey = [], []
     for a, b in edges_for_plot(marriages, persons):
         if a in pos and b in pos:
@@ -125,6 +158,7 @@ def draw_tree():
             ex.extend([x0, x1, None])
             ey.extend([y0, y1, None])
 
+    # 5) Plotly 畫圖
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", hoverinfo="none", line=dict(width=2)))
     fig.update_layout(
@@ -138,11 +172,13 @@ def draw_tree():
     fig.update_yaxes(autorange="reversed")
     st.plotly_chart(fig, use_container_width=True)
 
-# ---- 版面：左側操作、右側家族樹 ----
+# ========= 左右版面 =========
 left, right = st.columns([0.9, 1.1])
 
 with left:
     st.subheader("快速建立")
+
+    # ① 新增父母
     with st.form("add_parents", clear_on_submit=True):
         st.markdown("**① 新增一對父母**（或伴侶）")
         p1 = st.text_input("父母一（例：陳一郎）")
@@ -151,8 +187,10 @@ with left:
         s = st.form_submit_button("新增父母")
         if s:
             ok, msg = add_marriage(p1.strip(), p2.strip(), set_as_root_if_empty=make_root)
-            st.success(msg) if ok else st.error(msg)
+            (st.success if ok else st.error)(msg)
+            st.rerun()
 
+    # ② 在某對父母下新增孩子
     with st.form("add_child", clear_on_submit=True):
         st.markdown("**② 在某對父母下新增孩子**")
         marriages_keys = list(st.session_state.data["marriages"].keys())
@@ -162,35 +200,23 @@ with left:
         s2 = st.form_submit_button("新增孩子")
         if s2:
             ok, msg = add_child_to_marriage(msel, cname.strip(), csp.strip())
-            st.success(msg) if ok else st.error(msg)
+            (st.success if ok else st.error)(msg)
+            st.rerun()
 
     st.markdown("---")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("載入示範資料"):
-            from demo_data import marriages as demo_m, persons as demo_p  # 可移除
-            st.session_state.data["marriages"] = {**demo_m}
-            st.session_state.data["persons"] = {**demo_p}
+            st.session_state.data["marriages"] = {**DEMO_MARRIAGES}
+            st.session_state.data["persons"] = {**DEMO_PERSONS}
             st.session_state.data["root_marriage_id"] = "陳一郎|陳妻"
-            st.success("已載入示範")
+            st.success("已載入示範資料")
+            st.rerun()
     with c2:
         if st.button("清除全部資料"):
             st.session_state.data = {"root_marriage_id": "", "marriages": {}, "persons": {}}
-            st.info("已清空")
-
-    with st.expander("進階（匯入/匯出資料）", expanded=False):
-        import json
-        data_text = st.text_area("匯出/匯入 JSON（非必要）", value=json.dumps(st.session_state.data, ensure_ascii=False, indent=2), height=240)
-        colA, colB = st.columns(2)
-        with colA:
-            st.download_button("下載目前資料", data=data_text.encode("utf-8"), file_name="family_data.json", mime="application/json")
-        with colB:
-            if st.button("套用上方 JSON"):
-                try:
-                    st.session_state.data = json.loads(data_text)
-                    st.success("已套用")
-                except Exception as e:
-                    st.error(f"格式錯誤：{e}")
+            st.info("已清空資料")
+            st.rerun()
 
 with right:
     draw_tree()
