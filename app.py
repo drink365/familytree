@@ -4,7 +4,7 @@ from typing import Dict, Tuple, List
 
 from tree_layout import build_tree_from_marriages, tidy_layout
 
-# ========= 內建示範資料（避免空白畫面 / 不依賴額外模組） =========
+# ========= 內建示範資料 =========
 DEMO_MARRIAGES = {
     "陳一郎|陳妻": {"label": "陳一郎╳陳妻", "children": ["王子", "陳大", "陳二", "陳三"]},
     "王子|王子妻": {"label": "王子╳王子妻", "children": ["王孫"]},
@@ -23,12 +23,12 @@ DEMO_PERSONS = {
     "三孩A": {"label": "三孩A", "children_marriages": []},
 }
 
-# ========= 視覺預設（一般用戶無需調整） =========
+# ========= 視覺預設 =========
 NODE_W = 120
 NODE_H = 40
-MIN_SEP = 140     # 子樹最小水平距離（自動最佳化）
-LEVEL_GAP = 140   # 代際垂直距離（自動最佳化）
-BOX_COLOR = "rgba(12,74,110,1.0)"  # 深青色
+MIN_SEP = 140     # 子樹最小水平距離（專業預設）
+LEVEL_GAP = 140   # 代際垂直距離（專業預設）
+BOX_COLOR = "rgba(12,74,110,1.0)"  # 深青
 
 st.set_page_config(page_title="家族樹（簡易版）", page_icon="🌳", layout="wide")
 st.title("🌳 家族樹（簡易版）")
@@ -37,7 +37,6 @@ st.title("🌳 家族樹（簡易版）")
 if "data" not in st.session_state:
     st.session_state.data = {"root_marriage_id": "", "marriages": {}, "persons": {}}
 
-# 若沒有任何婚姻資料，直接載入示範，避免空白畫面
 if not st.session_state.data.get("marriages"):
     st.session_state.data["marriages"] = {**DEMO_MARRIAGES}
     st.session_state.data["persons"] = {**DEMO_PERSONS}
@@ -59,23 +58,17 @@ def add_marriage(p1: str, p2: str, set_as_root_if_empty=True):
     if mid in marriages:
         return False, "這對父母已存在"
     marriages[mid] = {"label": f"{p1}╳{p2}", "children": []}
-    ensure_person(p1)
-    ensure_person(p2)
+    ensure_person(p1); ensure_person(p2)
     if set_as_root_if_empty and not st.session_state.data.get("root_marriage_id"):
         st.session_state.data["root_marriage_id"] = mid
     return True, "已新增父母"
 
 def add_child_to_marriage(marriage_id: str, child_name: str, child_spouse: str = ""):
-    if not marriage_id:
-        return False, "請先選擇父母"
-    if not child_name:
-        return False, "請輸入孩子姓名"
-
+    if not marriage_id: return False, "請先選擇父母"
+    if not child_name:  return False, "請輸入孩子姓名"
     marriages = st.session_state.data["marriages"]
     persons = st.session_state.data["persons"]
-
-    if marriage_id not in marriages:
-        return False, "父母不存在"
+    if marriage_id not in marriages: return False, "父母不存在"
 
     ensure_person(child_name)
     if child_name not in marriages[marriage_id]["children"]:
@@ -107,7 +100,7 @@ def draw_tree():
     persons = data.get("persons", {})
     root_id = data.get("root_marriage_id") or (next(iter(marriages), ""))
 
-    # 偵錯資訊（需要時展開）
+    # 狀態檢查（看不到圖時展開）
     with st.expander("狀態檢查（看不到圖時展開）", expanded=False):
         st.write({"root_marriage_id": root_id, "#marriages": len(marriages), "#persons": len(persons)})
 
@@ -118,16 +111,14 @@ def draw_tree():
     # 1) 建樹＋佈局
     root, _ = build_tree_from_marriages(marriages, persons, root_id)
     pos = tidy_layout(root, min_sep=MIN_SEP, level_gap=LEVEL_GAP)
-
     if not pos:
-        st.warning("沒有可顯示的節點。")
-        return
+        st.warning("沒有可顯示的節點。"); return
 
     # 2) 節點框＋文字
     shapes, annotations = [], []
-    def is_marriage(nid: str) -> bool:
-        return nid in marriages
+    def is_marriage(nid: str) -> bool: return nid in marriages
 
+    nodes_x, nodes_y, nodes_text = [], [], []  # 保險可見的節點 trace
     for nid, (x, y) in pos.items():
         shapes.append(dict(
             type="rect",
@@ -141,51 +132,45 @@ def draw_tree():
             x=x, y=y, text=label or nid, showarrow=False,
             font=dict(color="white"), xanchor="center", yanchor="middle"
         ))
+        nodes_x.append(x); nodes_y.append(y); nodes_text.append("")  # 文字留空
 
     # 3) 連線
     ex, ey = [], []
     for a, b in edges_for_plot(marriages, persons):
         if a in pos and b in pos:
-            x0, y0 = pos[a]
-            x1, y1 = pos[b]
-            y0 += NODE_H/2
-            y1 -= NODE_H/2
-            ex.extend([x0, x1, None])
-            ey.extend([y0, y1, None])
+            x0, y0 = pos[a]; x1, y1 = pos[b]
+            y0 += NODE_H/2; y1 -= NODE_H/2
+            ex.extend([x0, x1, None]); ey.extend([y0, y1, None])
 
-    # 4) Plotly 圖（關鍵：鎖定軸域，避免 shapes/annotations 跑到視窗外）
-    #    以所有節點座標決定 x/y 軸範圍
-    xs = [x for (x, _) in pos.values()]
-    ys = [y for (_, y) in pos.values()]
+    # 4) 軸域：用所有節點座標固定範圍（避免 shapes 飄出視窗）
     pad_x = NODE_W * 0.75
     pad_y = NODE_H * 2.0
-    min_x, max_x = min(xs) - pad_x, max(xs) + pad_x
-    min_y, max_y = min(ys) - pad_y, max(ys) + pad_y
+    min_x, max_x = min(nodes_x) - pad_x, max(nodes_x) + pad_x
+    min_y, max_y = min(nodes_y) - pad_y, max(nodes_y) + pad_y
 
     fig = go.Figure()
 
-    # 透明錨定點：就算沒有邊線，也能讓軸域正確覆蓋所有節點
+    # 可見節點 trace（小點即可），保證就算沒有邊線也一定會出圖
     fig.add_trace(go.Scatter(
-        x=xs, y=ys, mode="markers",
-        marker=dict(size=1, opacity=0),
-        hoverinfo="none", showlegend=False
+        x=nodes_x, y=nodes_y, mode="markers",
+        marker=dict(size=6, opacity=0.75),
+        hoverinfo="none", name=""
     ))
 
-    # 邊線（若沒有也沒關係）
+    # 邊線（若存在）
     if ex:
-        fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", hoverinfo="none", line=dict(width=2)))
+        fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", hoverinfo="none", line=dict(width=2), name=""))
 
-    # 形狀與文字
     fig.update_layout(
         shapes=shapes,
         annotations=annotations,
         xaxis=dict(visible=False, range=[min_x, max_x]),
-        yaxis=dict(visible=False, range=[min_y, max_y]),
+        # 直接用 range 倒序達到向下為正的視覺
+        yaxis=dict(visible=False, range=[max_y, min_y]),
         margin=dict(l=20, r=20, t=20, b=20),
         height=720,
+        showlegend=False,
     )
-    # y 軸反向（往下是正方向）
-    fig.update_yaxes(autorange="reversed")
 
     st.plotly_chart(fig, use_container_width=True)
 
