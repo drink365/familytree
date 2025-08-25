@@ -1,5 +1,4 @@
 import streamlit as st
-import plotly.graph_objects as go
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Tuple
 
@@ -22,11 +21,13 @@ DEMO_PERSONS = {
     "三孩A": {"label": "三孩A", "children_marriages": []},
 }
 
-# ================== 版面視覺（專業預設） ==================
+# ================== 視覺參數（專業預設） ==================
 NODE_W, NODE_H = 120, 40
-MIN_SEP, LEVEL_GAP = 140, 140
-BOX_COLOR = "rgba(12,74,110,1.0)"
-TEXT_COLOR = "white"
+MIN_SEP, LEVEL_GAP = 140, 140        # 子樹最小水平距離 / 代際垂直距離
+PAD_X, PAD_Y = 120, 120              # 畫布邊界留白
+BOX_FILL = "#0C4A6E"                 # 深青
+BOX_TEXT = "#FFFFFF"
+LINE_COLOR = "#555"
 
 st.set_page_config(page_title="家族樹（示範）", page_icon="🌳", layout="wide")
 st.title("🌳 家族樹（示範）")
@@ -139,7 +140,7 @@ def tidy_layout(root: TNode, min_sep: float = 140.0, level_gap: float = 140.0) -
         pos = {k: (x - min_x, y) for k, (x, y) in pos.items()}
     return pos
 
-# ================== 由婚姻資料建樹：孩子先掛在「自己的父母」下面 ==================
+# ================== 建樹：孩子先掛在「自己的父母」下面 ==================
 def build_tree_from_marriages(
     marriages: Dict[str, Dict],
     persons: Dict[str, Dict],
@@ -160,59 +161,66 @@ def build_tree_from_marriages(
         return m_node
     return build(root_marriage_id), node_map
 
-# ================== 畫「示範家族樹」 ==================
-def draw_demo_tree():
-    marriages, persons, root_id = DEMO_MARRIAGES, DEMO_PERSONS, "陳一郎|陳妻"
+# ================== 以 SVG 輸出 ==================
+def draw_svg_tree(marriages: Dict, persons: Dict, root_id: str):
     root, _ = build_tree_from_marriages(marriages, persons, root_id)
     pos = tidy_layout(root, min_sep=MIN_SEP, level_gap=LEVEL_GAP)
     if not pos:
         st.error("沒有可顯示的節點。"); return
 
-    def is_m(nid: str) -> bool: return nid in marriages
-    xs, ys, labels = [], [], []
-    for nid, (x, y) in pos.items():
-        xs.append(x); ys.append(y)
-        labels.append(marriages.get(nid, {}).get("label") if is_m(nid) else persons.get(nid, {}).get("label", nid))
+    xs = [x for x, _ in pos.values()]
+    ys = [y for _, y in pos.values()]
+    min_x, max_x = min(xs), max(xs)
+    min_y, max_y = min(ys), max(ys)
+    width  = int((max_x - min_x) + PAD_X * 2)
+    height = int((max_y - min_y) + PAD_Y * 2)
 
-    # 邊
-    ex, ey = [], []
+    def sx(x): return int(x - min_x + PAD_X)
+    def sy(y): return int(y - min_y + PAD_Y)
+
+    # 連線
+    lines = []
     for m_id, m in marriages.items():
         for child in m.get("children", []):
             if m_id in pos and child in pos:
                 x0, y0 = pos[m_id]; x1, y1 = pos[child]
-                ex.extend([x0, x1, None]); ey.extend([y0 + NODE_H/2, y1 - NODE_H/2, None])
+                lines.append(f'<line x1="{sx(x0)}" y1="{sy(y0 + NODE_H/2)}" x2="{sx(x1)}" y2="{sy(y1 - NODE_H/2)}" stroke="{LINE_COLOR}" stroke-width="2"/>')
     for pid, p in persons.items():
         for sub_m in p.get("children_marriages", []):
             if pid in pos and sub_m in pos:
                 x0, y0 = pos[pid]; x1, y1 = pos[sub_m]
-                ex.extend([x0, x1, None]); ey.extend([y0 + NODE_H/2, y1 - NODE_H/2, None])
+                lines.append(f'<line x1="{sx(x0)}" y1="{sy(y0 + NODE_H/2)}" x2="{sx(x1)}" y2="{sy(y1 - NODE_H/2)}" stroke="{LINE_COLOR}" stroke-width="2"/>')
 
-    # 軸域（向下為正）
-    pad_x, pad_y = NODE_W * 0.75, NODE_H * 2.0
-    min_x, max_x = min(xs) - pad_x, max(xs) + pad_x
-    min_y, max_y = min(ys) - pad_y, max(ys) + pad_y
+    # 節點（圓角方塊 + 白字）
+    nodes = []
+    for nid, (x, y) in pos.items():
+        label = marriages.get(nid, {}).get("label") if nid in marriages else persons.get(nid, {}).get("label", nid)
+        nodes.append(
+            f'<rect x="{sx(x - NODE_W/2)}" y="{sy(y - NODE_H/2)}" width="{NODE_W}" height="{NODE_H}" rx="10" '
+            f'fill="{BOX_FILL}" stroke="rgba(0,0,0,0.25)" stroke-width="1"/>'
+        )
+        nodes.append(
+            f'<text x="{sx(x)}" y="{sy(y)}" fill="{BOX_TEXT}" font-size="12" text-anchor="middle" '
+            f'dominant-baseline="middle" font-family="system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, sans-serif">{label}</text>'
+        )
 
-    fig = go.Figure()
-    if ex:
-        fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines",
-                                 line=dict(width=2, color="rgba(80,80,80,1)"),
-                                 hoverinfo="none", name=""))
-    fig.add_trace(go.Scatter(
-        x=xs, y=ys,
-        mode="markers+text",
-        marker=dict(symbol="square", size=34, color=BOX_COLOR,
-                    line=dict(width=1, color="rgba(0,0,0,0.25)")),
-        text=labels, textposition="middle center",
-        textfont=dict(color=TEXT_COLOR, size=12),
-        hoverinfo="text", name=""
-    ))
-    fig.update_layout(
-        xaxis=dict(visible=False, range=[min_x, max_x]),
-        yaxis=dict(visible=False, range=[max_y, min_y]),  # 倒序：向下為正
-        margin=dict(l=20, r=20, t=20, b=20),
-        height=600, showlegend=False
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    svg = f"""
+    <svg width="{width}" height="{height}" xmlns="http://www.w3.org/2000/svg">
+        <style>
+            .wrap {{
+                background: white;
+            }}
+        </style>
+        <g class="wrap">
+            {''.join(lines)}
+            {''.join(nodes)}
+        </g>
+    </svg>
+    """
 
-# ===== 直接畫出示範家族樹（不用任何表單或外部檔案） =====
-draw_demo_tree()
+    # 用 st.html 直接嵌入 SVG
+    st.html(svg, height=height + 10)
+
+# ===== 直接畫出示範家族樹（不需任何外部依賴） =====
+draw_svg_tree(DEMO_MARRIAGES, DEMO_PERSONS, "陳一郎|陳妻")
+st.success("上面即為『家族樹示範圖』。若你看得到，代表環境完全 OK；接著就能把互動表單加回來。")
