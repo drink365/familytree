@@ -45,7 +45,6 @@ if not st.session_state.data.get("marriages"):
 
 # ========= 資料操作工具 =========
 def ensure_person(name: str):
-    """若人不存在就建立；僅設 label，婚姻列表先空。"""
     if not name:
         return
     persons = st.session_state.data["persons"]
@@ -53,7 +52,6 @@ def ensure_person(name: str):
         persons[name] = {"label": name, "children_marriages": []}
 
 def add_marriage(p1: str, p2: str, set_as_root_if_empty=True):
-    """建立一對父母（婚姻節點）。"""
     if not p1 or not p2:
         return False, "請輸入父母雙方姓名"
     marriages = st.session_state.data["marriages"]
@@ -68,7 +66,6 @@ def add_marriage(p1: str, p2: str, set_as_root_if_empty=True):
     return True, "已新增父母"
 
 def add_child_to_marriage(marriage_id: str, child_name: str, child_spouse: str = ""):
-    """在指定父母節點下新增孩子；可選擇同時建立孩子的婚姻（配偶）。"""
     if not marriage_id:
         return False, "請先選擇父母"
     if not child_name:
@@ -84,7 +81,6 @@ def add_child_to_marriage(marriage_id: str, child_name: str, child_spouse: str =
     if child_name not in marriages[marriage_id]["children"]:
         marriages[marriage_id]["children"].append(child_name)
 
-    # 若填配偶，一併建立孩子的婚姻節點，方便後續新增孫輩
     if child_spouse:
         ensure_person(child_spouse)
         child_mid = f"{child_name}|{child_spouse}"
@@ -93,11 +89,9 @@ def add_child_to_marriage(marriage_id: str, child_name: str, child_spouse: str =
         persons[child_name]["children_marriages"] = list(
             set(persons[child_name].get("children_marriages", []) + [child_mid])
         )
-
     return True, "已新增孩子"
 
 def edges_for_plot(marriages: Dict, persons: Dict) -> List[Tuple[str, str]]:
-    """產生畫線用的 (from, to) 邊集合。"""
     e = []
     for m_id, m in marriages.items():
         for child in m.get("children", []):
@@ -108,13 +102,12 @@ def edges_for_plot(marriages: Dict, persons: Dict) -> List[Tuple[str, str]]:
     return e
 
 def draw_tree():
-    """計算佈局並以 Plotly 繪圖。"""
     data = st.session_state.data
     marriages = data.get("marriages", {})
     persons = data.get("persons", {})
     root_id = data.get("root_marriage_id") or (next(iter(marriages), ""))
 
-    # 小檢查（需要時展開看狀態）
+    # 偵錯資訊（需要時展開）
     with st.expander("狀態檢查（看不到圖時展開）", expanded=False):
         st.write({"root_marriage_id": root_id, "#marriages": len(marriages), "#persons": len(persons)})
 
@@ -122,13 +115,15 @@ def draw_tree():
         st.info("先建立至少一對父母，畫面就會出現家族樹。")
         return
 
-    # 1) 建樹（孩子一定掛在自己的父母婚姻節點下）
+    # 1) 建樹＋佈局
     root, _ = build_tree_from_marriages(marriages, persons, root_id)
-
-    # 2) 自動佈局：確保最小距離，不會重疊，必要時整掛平移
     pos = tidy_layout(root, min_sep=MIN_SEP, level_gap=LEVEL_GAP)
 
-    # 3) 節點（框＋文字）
+    if not pos:
+        st.warning("沒有可顯示的節點。")
+        return
+
+    # 2) 節點框＋文字
     shapes, annotations = [], []
     def is_marriage(nid: str) -> bool:
         return nid in marriages
@@ -147,7 +142,7 @@ def draw_tree():
             font=dict(color="white"), xanchor="center", yanchor="middle"
         ))
 
-    # 4) 連線
+    # 3) 連線
     ex, ey = [], []
     for a, b in edges_for_plot(marriages, persons):
         if a in pos and b in pos:
@@ -158,18 +153,40 @@ def draw_tree():
             ex.extend([x0, x1, None])
             ey.extend([y0, y1, None])
 
-    # 5) Plotly 畫圖
+    # 4) Plotly 圖（關鍵：鎖定軸域，避免 shapes/annotations 跑到視窗外）
+    #    以所有節點座標決定 x/y 軸範圍
+    xs = [x for (x, _) in pos.values()]
+    ys = [y for (_, y) in pos.values()]
+    pad_x = NODE_W * 0.75
+    pad_y = NODE_H * 2.0
+    min_x, max_x = min(xs) - pad_x, max(xs) + pad_x
+    min_y, max_y = min(ys) - pad_y, max(ys) + pad_y
+
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", hoverinfo="none", line=dict(width=2)))
+
+    # 透明錨定點：就算沒有邊線，也能讓軸域正確覆蓋所有節點
+    fig.add_trace(go.Scatter(
+        x=xs, y=ys, mode="markers",
+        marker=dict(size=1, opacity=0),
+        hoverinfo="none", showlegend=False
+    ))
+
+    # 邊線（若沒有也沒關係）
+    if ex:
+        fig.add_trace(go.Scatter(x=ex, y=ey, mode="lines", hoverinfo="none", line=dict(width=2)))
+
+    # 形狀與文字
     fig.update_layout(
         shapes=shapes,
         annotations=annotations,
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
+        xaxis=dict(visible=False, range=[min_x, max_x]),
+        yaxis=dict(visible=False, range=[min_y, max_y]),
         margin=dict(l=20, r=20, t=20, b=20),
         height=720,
     )
+    # y 軸反向（往下是正方向）
     fig.update_yaxes(autorange="reversed")
+
     st.plotly_chart(fig, use_container_width=True)
 
 # ========= 左右版面 =========
