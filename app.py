@@ -13,13 +13,15 @@ HTML = r"""
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Family Tree</title>
-<!-- jsDelivr 為主，unpkg 備援 -->
+
+<!-- 先嘗試 jsDelivr，再以 unpkg 備援；若兩個都失敗，頁面會顯示友善錯誤 -->
 <script src="https://cdn.jsdelivr.net/npm/elkjs@0.8.2/dist/elk.bundled.js"></script>
 <script>
-if(typeof ELK === 'undefined'){
+if (typeof ELK === 'undefined') {
   document.write('<script src="https://unpkg.com/elkjs@0.8.2/lib/elk.bundled.js"><\\/script>');
 }
 </script>
+
 <style>
   :root{
     --bg:#083b4c;
@@ -51,6 +53,7 @@ if(typeof ELK === 'undefined'){
   .zoombar{display:flex;gap:.5rem;margin-left:auto}
   .stack{display:flex;gap:.5rem;flex-wrap:wrap}
   .file{display:none}
+  .error{padding:1rem;border:1px solid #fecaca;background:#fff1f2;color:#7f1d1d;border-radius:.75rem;margin-top:.75rem;line-height:1.6}
 </style>
 </head>
 <body>
@@ -83,6 +86,7 @@ if(typeof ELK === 'undefined'){
       <div class="hint" style="margin-top:.5rem">
         提示：滑鼠拖曳可平移；滾輪縮放；按鈕可置中或回到 100%。
       </div>
+      <div id="elkError" class="error" style="display:none"></div>
     </div>
 
     <div class="card">
@@ -118,9 +122,31 @@ if(typeof ELK === 'undefined'){
 
 <script>
 (function(){
+  /*** 0) 若 ELK 載不到，顯示友善訊息並停止初始化，避免整頁白畫面 ***/
+  function elkUnavailable(){
+    const host = document.getElementById('viewport');
+    const box  = document.getElementById('elkError');
+    host.innerHTML = "";
+    box.style.display = 'block';
+    box.innerHTML = [
+      "<strong>無法載入 ELK 版面引擎</strong>",
+      "這通常是因為雲端環境阻擋了外部 CDN（jsDelivr / unpkg）。",
+      "請嘗試：",
+      "1) 重新整理一次；",
+      "2) 確認瀏覽器允許載入第三方腳本；",
+      "3) 或改成部署時把 elkjs 檔案放進 repo 以本機路徑載入（我可以提供本機版）。"
+    ].join("<br/>");
+  }
+  if (typeof ELK === 'undefined') {
+    elkUnavailable();
+    // 不中止整個頁面，保留右側表單與工具列（但無法畫圖）
+    return;
+  }
+
+  /*** 1) 參數、狀態 ***/
   const elk = new ELK();
 
-  /* 尺寸與間距 */
+  // 尺寸與間距
   const NODE_W = 140, NODE_H = 56, MARGIN = 48;
   const COUPLE_GAP_MIN = NODE_W + 18;     // 夫妻最小距離
   const LAYER_GAP_MIN  = NODE_W + 60;     // 非子女同層最小距離
@@ -130,80 +156,27 @@ if(typeof ELK === 'undefined'){
   const CHILD_TOP_GAP = 18;               // 子女頂部上方的 bus 距離
   const ELBOW = 24;                       // 婚點附近短水平段長度
 
-  /* 視圖狀態 */
+  // 視圖狀態
   let vb = {x:0,y:0,w:1000,h:600};
   let content = {w:1000,h:600};
   let isPanning=false, panStart={x:0,y:0}, vbStart={x:0,y:0};
 
-  /* ===== 資料持久化 ===== */
+  // 資料持久化
   const STORAGE_KEY = "ftree_doc";
   const SEQ_KEY = "ftree_seq";
   const loadPersist = () => {
-    try{
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if(saved){ return JSON.parse(saved); }
-    }catch(e){}
+    try{ const saved = localStorage.getItem(STORAGE_KEY); if(saved){ return JSON.parse(saved); } }catch(e){}
     return null;
   };
-  const savePersist = () => {
-    try{
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(doc));
-    }catch(e){}
-  };
-  const nextSeq = () => {
-    let n = +localStorage.getItem(SEQ_KEY) || 0;
-    n += 1; localStorage.setItem(SEQ_KEY, String(n));
-    return n;
-  };
+  const savePersist = () => { try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(doc)); }catch(e){} };
+  const nextSeq = () => { let n = +localStorage.getItem(SEQ_KEY) || 0; n += 1; localStorage.setItem(SEQ_KEY, String(n)); return n; };
   const uid = (p) => p + "_" + nextSeq().toString(36);
 
-  /* ===== 初始資料 ===== */
+  // 初始資料
   let doc = loadPersist() || { persons:{}, unions:{}, children:[] };
   let selected = { type:null, id:null };
 
-  /* 範例 */
-  function demo(){
-    if(!confirm("確定要覆蓋目前資料，載入示例？")) return;
-    const p={}, u={}, list=[
-      "陳一郎","陳前妻","陳妻",
-      "陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
-      "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A","三孩B"
-    ].map(n=>({id:uid("P"), name:n, deceased:false}));
-    list.forEach(pp=>p[pp.id]=pp);
-    const id = n=>list.find(x=>x.name===n).id;
-
-    const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
-    const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")],   status:"married"};
-    const m3={id:uid("U"), partners:[id("王子"),id("王子妻")],   status:"married"};
-    const m4={id:uid("U"), partners:[id("陳大"),id("陳大嫂")],   status:"married"};
-    const m5={id:uid("U"), partners:[id("陳二"),id("陳二嫂")],   status:"married"};
-    const m6={id:uid("U"), partners:[id("陳三"),id("陳三嫂")],   status:"married"};
-    [m1,m2,m3,m4,m5,m6].forEach(m=>u[m.id]=m);
-
-    const children=[
-      {unionId:m1.id, childId:id("王子")},
-      {unionId:m2.id, childId:id("陳大")},
-      {unionId:m2.id, childId:id("陳二")},
-      {unionId:m2.id, childId:id("陳三")},
-      {unionId:m3.id, childId:id("王孫")},
-      {unionId:m5.id, childId:id("二孩A")},
-      {unionId:m5.id, childId:id("二孩B")},
-      {unionId:m5.id, childId:id("二孩C")},
-      {unionId:m6.id, childId:id("三孩A")},
-      {unionId:m6.id, childId:id("三孩B")},
-    ];
-    doc = { persons:p, unions:u, children };
-    selected = {type:null,id:null};
-    render(true);
-  }
-
-  function clearAll(){
-    if(!confirm("確定清空目前資料？此動作無法復原")) return;
-    doc = { persons:{}, unions:{}, children:[] };
-    selected = {type:null,id:null};
-    render(true);
-  }
-
+  /*** 2) UI 輔助 ***/
   function syncSelectors(){
     const persons = Object.values(doc.persons);
     const unions  = Object.values(doc.unions);
@@ -225,6 +198,7 @@ if(typeof ELK === 'undefined'){
     });
   }
 
+  /*** 3) 版面資料生成（交給 ELK） ***/
   function buildElkGraph(){
     const nodes=[], edges=[];
     Object.values(doc.persons).forEach(p=>{
@@ -233,10 +207,8 @@ if(typeof ELK === 'undefined'){
     Object.values(doc.unions).forEach(u=>{
       nodes.push({ id:u.id, width:10, height:10, labels:[{text:""}] });
       const [a,b]=u.partners;
-      // 這兩條只用於 layout（把婚點拉到父母之間）
       edges.push({ id:uid("E"), sources:[a], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
       edges.push({ id:uid("E"), sources:[b], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
-      // 父母水平線用 SVG 畫，不交由 ELK
     });
     doc.children.forEach(cl=>{
       edges.push({ id:uid("E"), sources:[cl.unionId], targets:[cl.childId] });
@@ -264,25 +236,22 @@ if(typeof ELK === 'undefined'){
   }
   const fitVB = (w,h,p=60)=>({x:-p,y:-p,w:w+p*2,h:h+p*2});
 
-  /* 非子女、非配偶：同層最小水平間距（避免重疊） */
+  // 非子女、非配偶：同層最小水平間距（避免重疊）
   function enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet){
     const partnersSet = new Set();
     Object.values(doc.unions).forEach(u => (u.partners||[]).forEach(pid => partnersSet.add(pid)));
-
     const items = (layout.children||[])
       .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id) && !partnersSet.has(n.id))
       .map(n=>{
         const nn = pickNode(layout, n.id, overrides) || n;
         return { id:n.id, x:nn.x, y:nn.y };
       });
-
     const layers = {};
     items.forEach(it=>{
       const key = Math.round(it.y / LAYER_TOLERANCE);
       if(!layers[key]) layers[key]=[];
       layers[key].push(it);
     });
-
     Object.values(layers).forEach(arr=>{
       arr.sort((a,b)=>a.x-b.x);
       if(arr.length===0) return;
@@ -291,7 +260,7 @@ if(typeof ELK === 'undefined'){
         const needLeft = cursorRight + (LAYER_GAP_MIN - NODE_W);
         if(arr[i].x < needLeft){
           const shift = needLeft - arr[i].x;
-          const cur = overrides[arr[i].id]?.x ?? arr[i].x;
+          const cur = (overrides[arr[i].id]?.x ?? arr[i].x);
           overrides[arr[i].id] = Object.assign({}, overrides[arr[i].id]||{}, { x: cur + shift });
           arr[i].x = cur + shift;
         }
@@ -301,17 +270,15 @@ if(typeof ELK === 'undefined'){
   }
 
   function dynamicLanes(n){
-    // 產生 [-21,-14,-7,0,7,14,21,...] 長度 >= n
+    // 產生 [-21,-14,-7,0,7,14,21,...] 長度 >= n，避免同層婚姻 bus 重疊
     const lanes = [];
     let k = 0, step = 7;
-    while(lanes.length < n){
-      lanes.push(-3*step + k*step);
-      k++;
-    }
+    while(lanes.length < n){ lanes.push(-3*step + k*step); k++; }
     lanes.sort((a,b)=>Math.abs(a)-Math.abs(b));
     return lanes;
   }
 
+  /*** 4) 主渲染 ***/
   function render(autoFit=false){
     syncSelectors();
     const host = document.getElementById("viewport");
@@ -320,22 +287,19 @@ if(typeof ELK === 'undefined'){
     elk.layout(buildElkGraph()).then(layout=>{
       const overrides = {};
 
-      /* 配偶對齊 & 夫妻最小距離 */
+      // 配偶對齊 & 夫妻最小距離
       Object.values(doc.unions).forEach(u=>{
         const [a,b]=u.partners;
         const na = pickNode(layout, a, overrides);
         const nb = pickNode(layout, b, overrides);
         if(!na||!nb) return;
-
         const yAlign = Math.min(na.y, nb.y);
         overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
         overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
-
         const left  = na.x <= nb.x ? a : b;
         const right = na.x <= nb.x ? b : a;
         const nL = na.x <= nb.x ? na : nb;
         const nR = na.x <= nb.x ? nb : na;
-
         const lRight = (overrides[left]?.x ?? nL.x) + NODE_W;
         const rLeft  = (overrides[right]?.x ?? nR.x);
         const gap = rLeft - lRight;
@@ -345,38 +309,30 @@ if(typeof ELK === 'undefined'){
         }
       });
 
-      /* 子女索引（保持資料順序） */
+      // 子女索引
       const unionKids = {};
       const childrenIdSet = new Set();
       Object.values(doc.unions).forEach(u=>{
-        const kids = doc.children
-          .filter(cl=>cl.unionId===u.id)
-          .map(cl=>cl.childId);
+        const kids = doc.children.filter(cl=>cl.unionId===u.id).map(cl=>cl.childId);
         if(kids.length>0){ unionKids[u.id]=kids; kids.forEach(id=>childrenIdSet.add(id)); }
       });
 
       enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
 
-      /* 子女群組：以婚點中線置中，依資料順序排列。若子女已婚，預留配偶槽位 */
+      // 子女群組（置中到婚點）
       const clustersByLayer = {};
       Object.entries(unionKids).forEach(([uid,kids])=>{
         const u = doc.unions[uid];
         const na = pickNode(layout, u.partners[0], overrides);
         const nb = pickNode(layout, u.partners[1], overrides);
         if(!na || !nb) return;
-
         const midX = (na.x + nb.x + NODE_W) / 2;
 
         const blocks = kids.map(cid=>{
-          const k = pickNode(layout, cid, overrides);
-          if(!k) return null;
+          const k = pickNode(layout, cid, overrides); if(!k) return null;
           const mateUnion = Object.values(doc.unions).find(xx => (xx.partners||[]).includes(cid) && xx.partners.length===2);
           let hasMate=false, mateId=null;
-          if(mateUnion){
-            const [pa,pb]=mateUnion.partners;
-            mateId = (pa===cid)? pb : pa;
-            hasMate = !!mateId && !!doc.persons[mateId];
-          }
+          if(mateUnion){ const [pa,pb]=mateUnion.partners; mateId = (pa===cid)? pb : pa; hasMate = !!mateId && !!doc.persons[mateId]; }
           const width = hasMate ? (NODE_W + COUPLE_GAP_MIN + NODE_W) : NODE_W;
           return { kidId:cid, mateId, hasMate, width, y:k.y };
         }).filter(Boolean);
@@ -390,7 +346,8 @@ if(typeof ELK === 'undefined'){
           overrides[b.kidId] = Object.assign({}, overrides[b.kidId]||{}, { x: childX });
           if(b.hasMate){
             const mateX = childX + COUPLE_GAP_MIN + NODE_W;
-            overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: overrides[b.kidId]?.y ?? b.y });
+            const mateY = overrides[b.kidId]?.y ?? b.y;
+            overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: mateY });
           }
           startX += b.width + localGap;
         });
@@ -401,7 +358,7 @@ if(typeof ELK === 'undefined'){
         clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX });
       });
 
-      /* 子女群組互推（避免重疊） */
+      // 子女群組互推
       Object.entries(clustersByLayer).forEach(([k,list])=>{
         list.sort((a,b)=>a.anchorX - b.anchorX);
         let cursorRight = list[0].rect.x1;
@@ -430,23 +387,19 @@ if(typeof ELK === 'undefined'){
         }
       });
 
-      /* 邊界 */
+      // 邊界計算
       let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
-        const nn = pickNode(layout, n.id, overrides);
-        if(!nn) return;
-        minX = Math.min(minX, nn.x);
-        minY = Math.min(minY, nn.y);
-        maxX = Math.max(maxX, nn.x + NODE_W);
-        maxY = Math.max(maxY, nn.y + NODE_H);
+        const nn = pickNode(layout, n.id, overrides); if(!nn) return;
+        minX = Math.min(minX, nn.x); minY = Math.min(minY, nn.y);
+        maxX = Math.max(maxX, nn.x + NODE_W); maxY = Math.max(maxY, nn.y + NODE_H);
       });
       if(!isFinite(minX)){ minX=0; minY=0; maxX=(layout.width||1000); maxY=(layout.height||600); }
-
       const w=Math.ceil((maxX-minX)+MARGIN*2), h=Math.ceil((maxY-minY)+MARGIN*2);
       content={w,h}; if(autoFit) vb = fitVB(w,h);
 
-      /* 動態產生同層婚姻的 bus 高度 */
+      // 動態分配 bus lane
       const laneOffsetByUnion = {};
       Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
         list.sort((a,b)=>a.anchorX - b.anchorX);
@@ -454,7 +407,7 @@ if(typeof ELK === 'undefined'){
         list.forEach((it,i)=>{ laneOffsetByUnion[it.unionId] = lanes[i]; });
       });
 
-      /* SVG */
+      // === 繪圖（SVG） ===
       const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
       svg.setAttribute("width","100%"); svg.setAttribute("height","100%");
       svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
@@ -463,13 +416,12 @@ if(typeof ELK === 'undefined'){
       root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
       svg.appendChild(root);
 
-      /* 婚姻線 + 中點 + 子女連線（使用「短水平肘形」避免跨婚姻重疊） */
+      // 婚姻線 + 中點 + 子女連線（短水平肘形）
       Object.values(doc.unions).forEach(u=>{
         const [aid,bid]=u.partners;
         const na = pickNode(layout, aid, overrides);
         const nb = pickNode(layout, bid, overrides);
         if(!na||!nb) return;
-
         const y = na.y + NODE_H/2;
         const xLeft  = Math.min(na.x+NODE_W, nb.x);
         const xRight = Math.max(na.x+NODE_W, nb.x);
@@ -494,19 +446,13 @@ if(typeof ELK === 'undefined'){
         if(kids.length>0){
           const offBase = laneOffsetByUnion[u.id] ?? 0;
           kids.forEach(cid=>{
-            const nc = pickNode(layout, cid, overrides);
-            if(!nc) return;
+            const nc = pickNode(layout, cid, overrides); if(!nc) return;
             const childTop = nc.y;
-            const busY = childTop - (CHILD_TOP_GAP + 6) + offBase; // 本地 bus
+            const busY = childTop - (CHILD_TOP_GAP + 6) + offBase;
             const cx = nc.x + NODE_W/2;
             const dir = (cx >= midX) ? 1 : -1;
             const eX = midX + dir * ELBOW;
-
-            const d = `M ${midX} ${y}
-                       L ${midX} ${busY}
-                       L ${eX} ${busY}
-                       L ${eX} ${childTop}
-                       L ${cx} ${childTop}`;
+            const d = `M ${midX} ${y} L ${midX} ${busY} L ${eX} ${busY} L ${eX} ${childTop} L ${cx} ${childTop}`;
             const path = document.createElementNS("http://www.w3.org/2000/svg","path");
             path.setAttribute("d", d.replace(/\s+/g,' '));
             path.setAttribute("fill","none");
@@ -517,7 +463,7 @@ if(typeof ELK === 'undefined'){
         }
       });
 
-      /* 人物節點 */
+      // 人物節點
       (layout.children||[]).forEach(n=>{
         if(doc.unions[n.id]) return;
         const nn = pickNode(layout, n.id, overrides);
@@ -540,10 +486,10 @@ if(typeof ELK === 'undefined'){
 
       host.innerHTML=""; host.appendChild(svg);
 
-      /* 保存到 localStorage */
+      // 保存 localStorage
       savePersist();
 
-      /* Pan / Zoom */
+      // Pan/Zoom
       const applyVB = ()=>svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
       svg.addEventListener("mousedown",(e)=>{ isPanning=true; panStart={x:e.clientX,y:e.clientY}; vbStart={x:vb.x,y:vb.y,w:vb.w,h:vb.h}; });
       window.addEventListener("mousemove",(e)=>{
@@ -567,7 +513,7 @@ if(typeof ELK === 'undefined'){
       document.getElementById("zoomFit").onclick= ()=>{ vb = fitVB(content.w, content.h); applyVB(); };
       document.getElementById("zoom100").onclick= ()=>{ vb = {x:0,y:0,w:content.w,h:content.h}; applyVB(); };
 
-      /* 匯出 SVG */
+      // 匯出 SVG
       document.getElementById("btnSVG").onclick = ()=>{
         const svgOut = svg.cloneNode(true);
         svgOut.setAttribute("viewBox", `0 0 ${content.w} ${content.h}`);
@@ -580,7 +526,7 @@ if(typeof ELK === 'undefined'){
         URL.revokeObjectURL(url);
       };
 
-      /* 匯出 PNG */
+      // 匯出 PNG
       document.getElementById("btnPNG").onclick = ()=>{
         const svgOut = svg.cloneNode(true);
         svgOut.setAttribute("viewBox", `0 0 ${content.w} ${content.h}`);
@@ -610,6 +556,7 @@ if(typeof ELK === 'undefined'){
     updateSelectionInfo();
   }
 
+  /*** 5) 選取 & 刪除/狀態切換 ***/
   function updateSelectionInfo(){
     const el = document.getElementById("selInfo");
     const btnDead = document.getElementById("btnToggleDead");
@@ -628,7 +575,6 @@ if(typeof ELK === 'undefined'){
       btnDel.style.display="inline-block";
       btnDel.onclick = ()=>{
         const pid = selected.id;
-        // 刪人物、移除其為配偶的婚姻、移除以該人為子女的紀錄
         delete doc.persons[pid];
         const keptUnions = {};
         Object.values(doc.unions).forEach(u=>{ if(u.partners.indexOf(pid)===-1) keptUnions[u.id]=u; });
@@ -654,9 +600,65 @@ if(typeof ELK === 'undefined'){
     }
   }
 
-  /* 事件 */
-  document.getElementById("btnDemo").addEventListener("click", ()=>demo());
-  document.getElementById("btnClear").addEventListener("click", clearAll);
+  /*** 6) 事件 ***/
+  document.getElementById("btnDemo").addEventListener("click", ()=>{
+    if (!window.confirm) { // 有些 sandbox 可能關閉 confirm
+      // 無 confirm 就直接載入
+      return (function(){
+        const p={}, u={}, list=[
+          "陳一郎","陳前妻","陳妻","陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
+          "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A","三孩B"
+        ].map(n=>({id:uid("P"), name:n, deceased:false}));
+        list.forEach(pp=>p[pp.id]=pp);
+        const id = n=>list.find(x=>x.name===n).id;
+        const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
+        const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")],   status:"married"};
+        const m3={id:uid("U"), partners:[id("王子"),id("王子妻")],   status:"married"};
+        const m4={id:uid("U"), partners:[id("陳大"),id("陳大嫂")],   status:"married"};
+        const m5={id:uid("U"), partners:[id("陳二"),id("陳二嫂")],   status:"married"};
+        const m6={id:uid("U"), partners:[id("陳三"),id("陳三嫂")],   status:"married"};
+        [m1,m2,m3,m4,m5,m6].forEach(m=>u[m.id]=m);
+        const children=[
+          {unionId:m1.id, childId:id("王子")},
+          {unionId:m2.id, childId:id("陳大")},{unionId:m2.id, childId:id("陳二")},{unionId:m2.id, childId:id("陳三")},
+          {unionId:m3.id, childId:id("王孫")},
+          {unionId:m5.id, childId:id("二孩A")},{unionId:m5.id, childId:id("二孩B")},{unionId:m5.id, childId:id("二孩C")},
+          {unionId:m6.id, childId:id("三孩A")},{unionId:m6.id, childId:id("三孩B")},
+        ];
+        doc = { persons:p, unions:u, children }; selected={type:null,id:null}; render(true);
+      })();
+    }
+    if(confirm("確定要覆蓋目前資料，載入示例？")){
+      const p={}, u={}, list=[
+        "陳一郎","陳前妻","陳妻","陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
+        "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A","三孩B"
+      ].map(n=>({id:uid("P"), name:n, deceased:false}));
+      list.forEach(pp=>p[pp.id]=pp);
+      const id = n=>list.find(x=>x.name===n).id;
+      const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
+      const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")],   status:"married"};
+      const m3={id:uid("U"), partners:[id("王子"),id("王子妻")],   status:"married"};
+      const m4={id:uid("U"), partners:[id("陳大"),id("陳大嫂")],   status:"married"};
+      const m5={id:uid("U"), partners:[id("陳二"),id("陳二嫂")],   status:"married"};
+      const m6={id:uid("U"), partners:[id("陳三"),id("陳三嫂")],   status:"married"};
+      [m1,m2,m3,m4,m5,m6].forEach(m=>u[m.id]=m);
+      const children=[
+        {unionId:m1.id, childId:id("王子")},
+        {unionId:m2.id, childId:id("陳大")},{unionId:m2.id, childId:id("陳二")},{unionId:m2.id, childId:id("陳三")},
+        {unionId:m3.id, childId:id("王孫")},
+        {unionId:m5.id, childId:id("二孩A")},{unionId:m5.id, childId:id("二孩B")},{unionId:m5.id, childId:id("二孩C")},
+        {unionId:m6.id, childId:id("三孩A")},{unionId:m6.id, childId:id("三孩B")},
+      ];
+      doc = { persons:p, unions:u, children }; selected={type:null,id:null}; render(true);
+    }
+  });
+
+  document.getElementById("btnClear").addEventListener("click", ()=>{
+    if (!window.confirm) { doc = { persons:{}, unions:{}, children:[] }; selected={type:null,id:null}; render(true); return; }
+    if(confirm("確定清空目前資料？此動作無法復原")){
+      doc = { persons:{}, unions:{}, children:[] }; selected={type:null,id:null}; render(true);
+    }
+  });
 
   document.getElementById("btnAddPerson").addEventListener("click", ()=>{
     const name = document.getElementById("namePerson").value.trim();
@@ -680,7 +682,7 @@ if(typeof ELK === 'undefined'){
     document.getElementById("nameChild").value=""; render();
   });
 
-  /* 匯出 JSON */
+  // 匯出 JSON
   document.getElementById("btnExport").addEventListener("click", ()=>{
     const blob = new Blob([JSON.stringify(doc, null, 2)], {type:"application/json"});
     const url = URL.createObjectURL(blob);
@@ -688,7 +690,7 @@ if(typeof ELK === 'undefined'){
     URL.revokeObjectURL(url);
   });
 
-  /* 匯入 JSON */
+  // 匯入 JSON
   document.getElementById("fileImport").addEventListener("change", (e)=>{
     const f = e.target.files[0]; if(!f) return;
     const fr = new FileReader();
@@ -696,17 +698,19 @@ if(typeof ELK === 'undefined'){
       try{
         const obj = JSON.parse(fr.result);
         if(obj && obj.persons && obj.unions && obj.children){
-          if(!confirm("匯入將覆蓋目前資料，確定繼續？")) return;
-          doc = obj; selected={type:null,id:null}; render(true);
+          if (!window.confirm || confirm("匯入將覆蓋目前資料，確定繼續？")){
+            doc = obj; selected={type:null,id:null}; render(true);
+          }
         }else{
-          alert("檔案格式不正確。");
+          alert && alert("檔案格式不正確。");
         }
-      }catch(err){ alert("JSON 解析失敗"); }
+      }catch(err){ alert && alert("JSON 解析失敗"); }
       e.target.value="";
     };
     fr.readAsText(f);
   });
 
+  // 首次渲染
   render(true);
 })();
 </script>
