@@ -24,7 +24,7 @@ def next_id():
 
 def ensure_person(name, sex="男", alive=True, note=""):
     d = st.session_state.data
-    # unique by name (demo)
+    # 以姓名去重（示範用）
     for pid, p in d["persons"].items():
         if p["name"] == name:
             return pid
@@ -117,10 +117,14 @@ def pick_from(label, options, key):
 # ---------------------------------
 
 def build_maps():
-    """回傳：parents_of_child: child -> set(parents), marriage_children: mid -> [child]"""
+    """回傳：
+       parents_of_child: child -> set(parents)
+       marriage_children: mid -> [child]
+    """
     d = st.session_state.data
     parents_of_child = defaultdict(set)
     marriage_children = defaultdict(list)
+
     for row in d["children"]:
         mid, c = row["mid"], row["child"]
         if mid not in d["marriages"]:
@@ -131,7 +135,7 @@ def build_maps():
     return parents_of_child, marriage_children
 
 def compute_generations():
-    """無父母者為 0；子女 = max(父母代數) + 1。"""
+    """計算每個人的代數：無父母者為 0；子女 = max(父母代數) + 1。"""
     d = st.session_state.data
     parents_of_child, _ = build_maps()
     gens = {pid: None for pid in d["persons"]}
@@ -159,7 +163,7 @@ def compute_generations():
     return gens
 
 # ---------------------------------
-# Drawing
+# Drawing (Layer Anchors)
 # ---------------------------------
 
 def person_node(dot, pid, p):
@@ -185,38 +189,46 @@ def draw_tree_vertical():
     for pid, p in d["persons"].items():
         person_node(dot, pid, p)
 
-    # 2) 婚姻中點 + 子女連結（唯一層次控制）
-    for mid, m in d["marriages"].items():
-        a, b, divorced = m["a"], m["b"], m["divorced"]
-        jn = f"J_{mid}"
-        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
-
-        # 父母水平線：僅視覺
-        dot.edge(a, b, dir="none", style=("dashed" if divorced else "solid"),
-                 color=BORDER_COLOR, constraint="false")
-
-        # 父母 -> 婚姻中點：隱形但 constraint=true（確保中點在父母下方）
-        dot.edge(a, jn, dir="none", style="invis", weight="30", constraint="true")
-        dot.edge(b, jn, dir="none", style="invis", weight="30", constraint="true")
-
-        # 婚姻中點 -> 子女：constraint=true（子女在中點下方）
-        for c in marriage_children.get(mid, []):
-            dot.edge(jn, c, color=BORDER_COLOR, constraint="true")
-
-        # 讓父母同列
-        with dot.subgraph() as s:
-            s.attr(rank="same")
-            s.node(a)
-            s.node(b)
-
-    # 3) 強制代數層（同代橫排）
+    # 2) 代數錨點（隱形），用來強制每代在自己的水平層
     max_gen = max(gens.values()) if gens else 0
+    anchors = {}
     for g in range(max_gen + 1):
+        aid = f"R_{g}"
+        anchors[g] = aid
+        dot.node(aid, "", shape="point", width="0.01", style="invis")
+        # 讓同代水平排列
         with dot.subgraph() as s:
             s.attr(rank="same")
+            s.node(aid)
             for pid, gg in gens.items():
                 if gg == g:
                     s.node(pid)
+        # 將人綁在該層（不可越層）
+        for pid, gg in gens.items():
+            if gg == g:
+                dot.edge(aid, pid, style="invis", weight="200", constraint="true")
+
+    # 3) 婚姻中點 + 連線（中點也綁在父母那一層的錨點下，再把子女綁到下一層錨點）
+    for mid, m in d["marriages"].items():
+        a, b, divorced = m["a"], m["b"], m["divorced"]
+        g = min(gens.get(a, 0), gens.get(b, 0))  # 父母所在的層（通常相同）
+        jn = f"J_{mid}"
+        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
+
+        # 父母水平線（純視覺）
+        dot.edge(a, b, dir="none", style=("dashed" if divorced else "solid"),
+                 color=BORDER_COLOR, constraint="false")
+        with dot.subgraph() as s:
+            s.attr(rank="same")
+            s.node(a); s.node(b)
+
+        # 將婚姻中點固定在父母層（靠錨點約束），但不畫線
+        dot.edge(anchors[g], jn, style="invis", weight="180", constraint="true")
+
+        # 子女：畫可見線（joint→child）讓視覺正確；同時用下一層錨點把孩子固定在下一層
+        for c in marriage_children.get(mid, []):
+            dot.edge(jn, c, color=BORDER_COLOR, constraint="false")  # 可見、但不影響層次
+            dot.edge(anchors[g+1], c, style="invis", weight="200", constraint="true")
 
     st.graphviz_chart(dot, use_container_width=True)
 
@@ -318,7 +330,7 @@ ensure_session()
 
 st.title("🌳 家族平台（人物｜關係｜家族樹）")
 
-# 這裡顯示目前資料量，方便確認是否有載入成功
+# 顯示目前資料量，確認有無載入
 d = st.session_state.data
 st.caption(f"目前：人物 {len(d['persons'])}、婚姻 {len(d['marriages'])}、子女連結 {len(d['children'])}")
 
