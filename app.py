@@ -1,613 +1,578 @@
-# app.py
-# -*- coding: utf-8 -*-
-
 import streamlit as st
-import streamlit.components.v1 as components
+from graphviz import Digraph
+from collections import defaultdict, deque
 
-st.set_page_config(page_title="Family Tree", page_icon="🌳", layout="wide")
+# -------------------------------
+# Session & Data
+# -------------------------------
 
-HTML = r"""
-<!DOCTYPE html>
-<html lang="zh-Hant">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Family Tree</title>
-<script src="https://unpkg.com/elkjs@0.8.2/lib/elk.bundled.js"></script>
-<style>
-  :root{
-    --bg:#083b4c;
-    --bg-dead:#6b7280;
-    --fg:#ffffff;
-    --border:#0f4c5c;
-    --line:#0f3c4d;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans TC",sans-serif;background:#f8fafc}
-  .toolbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;border-bottom:1px solid #e5e7eb;padding:.75rem 1rem;background:#fff;position:sticky;top:0;z-index:10}
-  .btn{background:#075985;color:#fff;border:none;border-radius:.75rem;padding:.5rem .75rem;cursor:pointer}
-  .btn.sec{background:#334155}
-  .btn.warn{background:#b91c1c}
-  .btn.ok{background:#0f766e}
-  .btn.muted{background:#6b7280}
-  .pane{display:grid;grid-template-columns:2fr 1fr;gap:1rem;padding:1rem}
-  .card{background:#fff;border:1px solid #e5e7eb;border-radius:1rem;padding:1rem}
-  .row{display:flex;gap:.5rem;align-items:center;margin:.25rem 0;flex-wrap:wrap}
-  select,input[type=text]{border:1px solid #cbd5e1;border-radius:.75rem;padding:.45rem .6rem}
-  .canvas{height:720px;overflow:hidden;border:1px solid #e5e7eb;border-radius:1rem;background:#fff;position:relative}
-  .viewport{width:100%;height:100%;overflow:hidden}
-  .hint{color:#64748b;font-size:.9rem}
-  .legend{display:flex;gap:.75rem;align-items:center;color:#475569}
-  .lgBox{width:18px;height:18px;border-radius:.5rem;background:var(--bg);border:2px solid var(--border)}
-  .lgBox.dead{background:var(--bg-dead);border-color:#475569}
-  svg text{user-select:none}
-  .node{filter:drop-shadow(0 1px 0.5px rgba(0,0,0,.15))}
-  .zoombar{display:flex;gap:.5rem;margin-left:auto}
-  .stack{display:flex;gap:.5rem;flex-wrap:wrap}
-</style>
-</head>
-<body>
-  <div class="toolbar">
-    <button class="btn ok" id="btnDemo">載入示例</button>
-    <button class="btn sec" id="btnClear">清空</button>
-    <div class="legend" style="gap:1.25rem">
-      <span class="legend"><div class="lgBox"></div>人物節點</span>
-      <span class="legend"><div class="lgBox dead"></div>身故節點（名稱加「（殁）」）</span>
-      <span>離婚：婚線為虛線／有子女仍保留</span>
-    </div>
-    <div class="zoombar">
-      <button class="btn" id="zoomOut">－</button>
-      <button class="btn" id="zoomIn">＋</button>
-      <button class="btn" id="zoomFit">置中顯示</button>
-      <button class="btn" id="zoom100">100%</button>
-      <button class="btn" id="btnSVG">下載 SVG</button>
-    </div>
-  </div>
-
-  <div class="pane">
-    <div class="card">
-      <div class="canvas">
-        <div class="viewport" id="viewport"></div>
-      </div>
-      <div class="hint" style="margin-top:.5rem">
-        提示：滑鼠拖曳可平移；滾輪縮放（Mac 觸控板兩指縮放）；按鈕可置中或回到 100%。
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 style="margin:0 0 .5rem">快速新增</h3>
-      <div class="row">
-        <input type="text" id="namePerson" placeholder="新人物姓名" />
-        <button class="btn ok" id="btnAddPerson">新增人物</button>
-      </div>
-
-      <div class="row">
-        <select id="selA"></select>
-        <span>×</span>
-        <select id="selB"></select>
-        <button class="btn ok" id="btnAddUnion">建立婚姻</button>
-      </div>
-
-      <div class="row">
-        <select id="selUnion"></select>
-        <input type="text" id="nameChild" placeholder="新子女姓名" />
-        <button class="btn ok" id="btnAddChild">加入子女</button>
-      </div>
-
-      <hr style="margin:1rem 0">
-      <h3 style="margin:0 0 .5rem">選取與編輯</h3>
-      <div id="selInfo" class="hint">尚未選取節點。</div>
-      <div class="stack" id="actionBtns" style="margin-top:.25rem">
-        <button class="btn muted" id="btnToggleDead" style="display:none"></button>
-        <button class="btn sec" id="btnToggleDivorce" style="display:none"></button>
-        <button class="btn warn" id="btnDelete" style="display:none">刪除選取</button>
-      </div>
-    </div>
-  </div>
-
-<script>
-(function(){
-  const elk = new ELK();
-
-  /* 尺寸與間距（可微調） */
-  const NODE_W = 140, NODE_H = 56, MARGIN = 48;
-  const COUPLE_GAP_MIN = NODE_W + 18;     // 夫妻最小距離
-  const LAYER_GAP_MIN  = NODE_W + 60;     // 非子女同層最小距離
-  const LAYER_TOLERANCE = 20;
-  const SIBLING_GAP_BASE = 36;            // 兄弟姊妹基礎間距
-  const CLUSTER_GAP = 56;                 // 不同婚姻子女群組距離
-  const BUS_STEPS = [-14,-6,6,14,22];     // 同層不同婚姻 bus 高度輪替
-  const CHILD_TOP_GAP = 18;
-
-  /* 視圖狀態 */
-  let vb = {x:0,y:0,w:1000,h:600};
-  let content = {w:1000,h:600};
-  let isPanning=false, panStart={x:0,y:0}, vbStart={x:0,y:0};
-
-  /* 資料 */
-  let doc = { persons:{}, unions:{}, children:[] };
-  let selected = { type:null, id:null };
-  const uid = p => p + "_" + Math.random().toString(36).slice(2,9);
-
-  /* 載入示例 */
-  function demo(){
-    const p={}, u={}, list=[
-      "陳一郎","陳前妻","陳妻",
-      "陳大","陳大嫂","陳二","陳二嫂","陳三","陳三嫂",
-      "王子","王子妻","王孫","二孩A","二孩B","二孩C","三孩A","三孩B"
-    ].map(n=>({id:uid("P"), name:n, deceased:false}));
-    list.forEach(pp=>p[pp.id]=pp);
-    const id = n=>list.find(x=>x.name===n).id;
-
-    const m1={id:uid("U"), partners:[id("陳一郎"),id("陳前妻")], status:"divorced"};
-    const m2={id:uid("U"), partners:[id("陳一郎"),id("陳妻")],   status:"married"};
-    const m3={id:uid("U"), partners:[id("王子"),id("王子妻")],   status:"married"};
-    const m4={id:uid("U"), partners:[id("陳大"),id("陳大嫂")],   status:"married"};
-    const m5={id:uid("U"), partners:[id("陳二"),id("陳二嫂")],   status:"married"};
-    const m6={id:uid("U"), partners:[id("陳三"),id("陳三嫂")],   status:"married"};
-    [m1,m2,m3,m4,m5,m6].forEach(m=>u[m.id]=m);
-
-    const children=[
-      {unionId:m1.id, childId:id("王子")},     // 王子屬於：陳一郎 × 陳前妻
-      {unionId:m2.id, childId:id("陳大")},
-      {unionId:m2.id, childId:id("陳二")},
-      {unionId:m2.id, childId:id("陳三")},
-      {unionId:m3.id, childId:id("王孫")},
-      {unionId:m5.id, childId:id("二孩A")},
-      {unionId:m5.id, childId:id("二孩B")},
-      {unionId:m5.id, childId:id("二孩C")},
-      {unionId:m6.id, childId:id("三孩A")},
-      {unionId:m6.id, childId:id("三孩B")},
-    ];
-    doc = { persons:p, unions:u, children };
-    selected = {type:null,id:null};
-    render(true);
-  }
-
-  function clearAll(){
-    doc = { persons:{}, unions:{}, children:[] };
-    selected = {type:null,id:null};
-    render(true);
-  }
-
-  /* 下拉與資訊 */
-  function syncSelectors(){
-    const persons = Object.values(doc.persons);
-    const unions  = Object.values(doc.unions);
-    const selA = document.getElementById("selA");
-    const selB = document.getElementById("selB");
-    const selU = document.getElementById("selUnion");
-    [selA,selB,selU].forEach(s=>s.innerHTML="");
-    persons.forEach(p=>{
-      const tag = p.deceased ? "（殁）" : "";
-      const oa=document.createElement("option"); oa.value=p.id; oa.textContent=p.name+tag; selA.appendChild(oa);
-      const ob=document.createElement("option"); ob.value=p.id; ob.textContent=p.name+tag; selB.appendChild(ob);
-    });
-    unions.forEach(u=>{
-      const [a,b]=u.partners;
-      const o=document.createElement("option");
-      const tag = u.status==="divorced" ? "（離）" : "";
-      o.value=u.id; o.textContent=(doc.persons[a]?.name||"?")+" ↔ "+(doc.persons[b]?.name||"?")+tag;
-      selU.appendChild(o);
-    });
-  }
-
-  /* ELK Graph */
-  function buildElkGraph(){
-    const nodes=[], edges=[];
-    Object.values(doc.persons).forEach(p=>{
-      nodes.push({ id:p.id, width:NODE_W, height:NODE_H, labels:[{text:p.name}] });
-    });
-    Object.values(doc.unions).forEach(u=>{
-      nodes.push({ id:u.id, width:10, height:10, labels:[{text:""}] });
-      const [a,b]=u.partners;
-      edges.push({ id:uid("E"), sources:[a], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
-      edges.push({ id:uid("E"), sources:[b], targets:[u.id], layoutOptions:{ "elk.priority":"100" }});
-      edges.push({ id:uid("E"), sources:[a], targets:[b],
-                   layoutOptions:{ "elk.priority":"1000", "elk.edge.type":"INFLUENCE" }});
-    });
-    doc.children.forEach(cl=>{
-      edges.push({ id:uid("E"), sources:[cl.unionId], targets:[cl.childId] });
-    });
+def _empty_data():
     return {
-      id:"root",
-      layoutOptions:{
-        "elk.algorithm":"layered",
-        "elk.direction":"DOWN",
-        "elk.layered.spacing.nodeNodeBetweenLayers":"32",
-        "elk.spacing.nodeNode":"46",
-        "elk.edgeRouting":"ORTHOGONAL",
-        "elk.layered.nodePlacement.bk.fixedAlignment":"BALANCED",
-        "elk.layered.considerModelOrder.strategy":"NODES_AND_EDGES"
-      },
-      children:nodes, edges
-    };
-  }
-
-  function pickNode(layout, id, overrides){
-    const n = (layout.children||[]).find(x=>x.id===id);
-    if(!n) return null;
-    if(overrides && overrides[id]) return Object.assign({}, n, overrides[id]);
-    return n;
-  }
-  const fitVB = (w,h,p=60)=>({x:-p,y:-p,w:w+p*2,h:h+p*2});
-
-  /* —— 只推「非子女、非婚姻成員」的同層節點 —— */
-  function enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet){
-    // 取得所有在任何婚姻中的人
-    const partnersSet = new Set();
-    Object.values(doc.unions).forEach(u => (u.partners||[]).forEach(pid => partnersSet.add(pid)));
-
-    const items = (layout.children||[])
-      .filter(n=>!doc.unions[n.id] && !childrenIdSet.has(n.id) && !partnersSet.has(n.id))
-      .map(n=>{
-        const nn = pickNode(layout, n.id, overrides) || n;
-        return { id:n.id, x:nn.x, y:nn.y };
-      });
-
-    const layers = {};
-    items.forEach(it=>{
-      const key = Math.round(it.y / LAYER_TOLERANCE);
-      if(!layers[key]) layers[key]=[];
-      layers[key].push(it);
-    });
-
-    Object.values(layers).forEach(arr=>{
-      arr.sort((a,b)=>a.x-b.x);
-      if(arr.length===0) return;
-      let cursorRight = arr[0].x + NODE_W;
-      for(let i=1;i<arr.length;i++){
-        const needLeft = cursorRight + (LAYER_GAP_MIN - NODE_W);
-        if(arr[i].x < needLeft){
-          const shift = needLeft - arr[i].x;
-          const cur = overrides[arr[i].id]?.x ?? arr[i].x;
-          overrides[arr[i].id] = Object.assign({}, overrides[arr[i].id]||{}, { x: cur + shift });
-          arr[i].x = cur + shift;
-        }
-        cursorRight = arr[i].x + NODE_W;
-      }
-    });
-  }
-
-  function render(autoFit=false){
-    syncSelectors();
-    const host = document.getElementById("viewport");
-    host.innerHTML = "<div style='padding:1rem;color:#64748b'>佈局計算中…</div>";
-
-    elk.layout(buildElkGraph()).then(layout=>{
-      const overrides = {};
-
-      /* 配偶對齊 & 夫妻最小距離 */
-      Object.values(doc.unions).forEach(u=>{
-        const [a,b]=u.partners;
-        const na = pickNode(layout, a, overrides);
-        const nb = pickNode(layout, b, overrides);
-        if(!na||!nb) return;
-
-        const yAlign = Math.min(na.y, nb.y);
-        overrides[a] = Object.assign({}, overrides[a]||{}, { y: yAlign });
-        overrides[b] = Object.assign({}, overrides[b]||{}, { y: yAlign });
-
-        const left  = na.x <= nb.x ? a : b;
-        const right = na.x <= nb.x ? b : a;
-        const nL = na.x <= nb.x ? na : nb;
-        const nR = na.x <= nb.x ? nb : na;
-
-        const lRight = (overrides[left]?.x ?? nL.x) + NODE_W;
-        const rLeft  = (overrides[right]?.x ?? nR.x);
-        const gap = rLeft - lRight;
-        const need = COUPLE_GAP_MIN - NODE_W - gap;
-        if(need > 0){
-          overrides[right] = Object.assign({}, overrides[right]||{}, { x:(overrides[right]?.x ?? nR.x)+need, y:yAlign });
-        }
-      });
-
-      /* 收集每段婚姻的子女（保持新增順序） */
-      const unionKids = {};
-      const childrenIdSet = new Set();
-      Object.values(doc.unions).forEach(u=>{
-        const kids = doc.children
-          .filter(cl=>cl.unionId===u.id)
-          .map(cl=>cl.childId);
-        if(kids.length>0){ unionKids[u.id]=kids; kids.forEach(id=>childrenIdSet.add(id)); }
-      });
-
-      // 只推「與婚姻無關」的同層節點，避免把父母拉走
-      enforceLayerMinGapForNonChildren(layout, overrides, childrenIdSet);
-
-      /* 子女群組：以父母婚點中線置中，依資料順序排列 */
-      const clustersByLayer = {};
-      Object.entries(unionKids).forEach(([uid,kids])=>{
-        const u = doc.unions[uid];
-        const na = pickNode(layout, u.partners[0], overrides);
-        const nb = pickNode(layout, u.partners[1], overrides);
-        if(!na || !nb) return;
-
-        const midX = (na.x + nb.x + NODE_W) / 2;
-
-        const blocks = kids.map(cid=>{
-          const k = pickNode(layout, cid, overrides);
-          if(!k) return null;
-          // 檢查孩子是否有配偶（只拿一段）
-          const mateUnion = Object.values(doc.unions).find(xx => (xx.partners||[]).includes(cid) && xx.partners.length===2);
-          let hasMate=false, mateId=null;
-          if(mateUnion){
-            const [pa,pb]=mateUnion.partners;
-            mateId = (pa===cid)? pb : pa;
-            hasMate = !!mateId && !!doc.persons[mateId];
-          }
-          const width = hasMate ? (NODE_W + COUPLE_GAP_MIN + NODE_W) : NODE_W;
-          return { kidId:cid, mateId, hasMate, width, y:k.y };
-        }).filter(Boolean);
-
-        const localGap = SIBLING_GAP_BASE + Math.max(0, blocks.length - 3) * 8;
-        const totalWidth = blocks.reduce((s,b)=>s+b.width,0) + (blocks.length-1)*localGap;
-        let startX = midX - totalWidth/2;
-
-        blocks.forEach(b=>{
-          const childX = startX;
-          overrides[b.kidId] = Object.assign({}, overrides[b.kidId]||{}, { x: childX });
-          if(b.hasMate){
-            const mateX = childX + COUPLE_GAP_MIN + NODE_W;
-            overrides[b.mateId] = Object.assign({}, overrides[b.mateId]||{}, { x: mateX, y: overrides[b.kidId]?.y ?? b.y });
-          }
-          startX += b.width + localGap;
-        });
-
-        const layerKey = Math.round((pickNode(layout, kids[0], overrides) || {}).y / LAYER_TOLERANCE);
-        const x0 = midX - totalWidth/2, x1 = x0 + totalWidth;
-        if(!clustersByLayer[layerKey]) clustersByLayer[layerKey]=[];
-        clustersByLayer[layerKey].push({ unionId: uid, rect:{x0,x1}, anchorX: midX });
-      });
-
-      /* 子女群組之間互推（不動父母） */
-      Object.entries(clustersByLayer).forEach(([k,list])=>{
-        list.sort((a,b)=>a.anchorX - b.anchorX);
-        let cursorRight = list[0].rect.x1;
-        for(let i=1;i<list.length;i++){
-          const wantLeft = cursorRight + CLUSTER_GAP;
-          if(list[i].rect.x0 < wantLeft){
-            const shift = wantLeft - list[i].rect.x0;
-            const kids = unionKids[list[i].unionId] || [];
-            kids.forEach(cid=>{
-              const curX = overrides[cid]?.x ?? pickNode(layout, cid, overrides).x;
-              overrides[cid] = Object.assign({}, overrides[cid]||{}, { x: curX + shift });
-              // 把孩子的配偶也一起平移
-              const mateUnion = Object.values(doc.unions).find(xx => (xx.partners||[]).includes(cid) && xx.partners.length===2);
-              if(mateUnion){
-                const [pa,pb]=mateUnion.partners;
-                const mateId = (pa===cid)? pb : pa;
-                if(mateId && doc.persons[mateId]){
-                  const mx = overrides[mateId]?.x ?? pickNode(layout, mateId, overrides).x;
-                  const my = overrides[mateId]?.y ?? pickNode(layout, mateId, overrides).y;
-                  overrides[mateId] = Object.assign({}, overrides[mateId]||{}, { x: mx + shift, y: my });
-                }
-              }
-            });
-            list[i].rect.x0 += shift; list[i].rect.x1 += shift; list[i].anchorX += shift;
-          }
-          cursorRight = list[i].rect.x1;
-        }
-      });
-
-      /* 邊界 */
-      let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-      (layout.children||[]).forEach(n=>{
-        if(doc.unions[n.id]) return;
-        const nn = pickNode(layout, n.id, overrides);
-        if(!nn) return;
-        minX = Math.min(minX, nn.x);
-        minY = Math.min(minY, nn.y);
-        maxX = Math.max(maxX, nn.x + NODE_W);
-        maxY = Math.max(maxY, nn.y + NODE_H);
-      });
-      if(!isFinite(minX)){ minX=0; minY=0; maxX=(layout.width||1000); maxY=(layout.height||600); }
-
-      const w=Math.ceil((maxX-minX)+MARGIN*2), h=Math.ceil((maxY-minY)+MARGIN*2);
-      content={w,h}; if(autoFit) vb = fitVB(w,h);
-
-      /* 給同層婚姻一個不重複的 bus 高度（避免看成同一條） */
-      const laneOffsetByUnion = {};
-      Object.entries(clustersByLayer).forEach(([layerKey, list])=>{
-        list.sort((a,b)=>a.anchorX - b.anchorX);
-        list.forEach((it,i)=>{ laneOffsetByUnion[it.unionId] = BUS_STEPS[i % BUS_STEPS.length]; });
-      });
-
-      /* SVG 繪製 */
-      const svg = document.createElementNS("http://www.w3.org/2000/svg","svg");
-      svg.setAttribute("width","100%"); svg.setAttribute("height","100%");
-      svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
-      svg.style.background="#fff";
-      const root = document.createElementNS("http://www.w3.org/2000/svg","g");
-      root.setAttribute("transform", `translate(${MARGIN - minX},${MARGIN - minY})`);
-      svg.appendChild(root);
-
-      /* 婚姻線 + 中點 + 子女連線 */
-      Object.values(doc.unions).forEach(u=>{
-        const [aid,bid]=u.partners;
-        const na = pickNode(layout, aid, overrides);
-        const nb = pickNode(layout, bid, overrides);
-        if(!na||!nb) return;
-
-        const y = na.y + NODE_H/2;
-        const xLeft  = Math.min(na.x+NODE_W, nb.x);
-        const xRight = Math.max(na.x+NODE_W, nb.x);
-        const midX   = (na.x + nb.x + NODE_W) / 2;
-
-        const line = document.createElementNS("http://www.w3.org/2000/svg","line");
-        line.setAttribute("x1",xLeft); line.setAttribute("y1",y);
-        line.setAttribute("x2",xRight); line.setAttribute("y2",y);
-        line.setAttribute("stroke","var(--line)"); line.setAttribute("stroke-width","2");
-        if(u.status==="divorced") line.setAttribute("stroke-dasharray","6,4");
-        root.appendChild(line);
-
-        const dot = document.createElementNS("http://www.w3.org/2000/svg","rect");
-        dot.setAttribute("x",midX-5); dot.setAttribute("y",y-5);
-        dot.setAttribute("width",10); dot.setAttribute("height",10);
-        dot.setAttribute("fill","var(--bg)"); dot.setAttribute("stroke","var(--border)");
-        dot.setAttribute("stroke-width","2");
-        dot.addEventListener("click",()=>{ selected={type:"union", id:u.id}; updateSelectionInfo(); });
-        root.appendChild(dot);
-
-        const kids = (unionKids[u.id]||[]);
-        if(kids.length>0){
-          const offBase = laneOffsetByUnion[u.id] ?? 0;
-          kids.forEach(cid=>{
-            const nc = pickNode(layout, cid, overrides);
-            if(!nc) return;
-            const childTop = nc.y;
-            let busY = childTop + offBase;
-            busY = Math.min(busY, childTop - CHILD_TOP_GAP);
-            const cx = nc.x + NODE_W/2;
-            const path = document.createElementNS("http://www.w3.org/2000/svg","path");
-            path.setAttribute("d", `M ${midX} ${y} L ${midX} ${busY} L ${cx} ${busY} L ${cx} ${childTop}`);
-            path.setAttribute("fill","none");
-            path.setAttribute("stroke","var(--line)");
-            path.setAttribute("stroke-width","2");
-            root.appendChild(path);
-          });
-        }
-      });
-
-      /* 人物節點 */
-      (layout.children||[]).forEach(n=>{
-        if(doc.unions[n.id]) return;
-        const nn = pickNode(layout, n.id, overrides);
-        const person = doc.persons[n.id] || {};
-        const g = document.createElementNS("http://www.w3.org/2000/svg","g");
-        g.setAttribute("transform", `translate(${nn.x},${nn.y})`);
-        const r=document.createElementNS("http://www.w3.org/2000/svg","rect");
-        r.setAttribute("rx","16"); r.setAttribute("width",NODE_W); r.setAttribute("height",NODE_H);
-        r.setAttribute("fill", person.deceased ? "var(--bg-dead)" : "var(--bg)");
-        r.setAttribute("stroke", person.deceased ? "#475569" : "var(--border)");
-        r.setAttribute("stroke-width","2");
-        r.classList.add("node");
-        r.addEventListener("click",()=>{ selected={type:"person", id:n.id}; updateSelectionInfo(); });
-        const t=document.createElementNS("http://www.w3.org/2000/svg","text");
-        t.setAttribute("x",NODE_W/2); t.setAttribute("y",NODE_H/2+5);
-        t.setAttribute("text-anchor","middle"); t.setAttribute("fill","var(--fg)"); t.setAttribute("font-size","14");
-        t.textContent = (person.name || "?") + (person.deceased ? "（殁）" : "");
-        g.appendChild(r); g.appendChild(t); root.appendChild(g);
-      });
-
-      host.innerHTML=""; host.appendChild(svg);
-
-      /* Pan / Zoom */
-      const applyVB = ()=>svg.setAttribute("viewBox", `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
-      svg.addEventListener("mousedown",(e)=>{ isPanning=true; panStart={x:e.clientX,y:e.clientY}; vbStart={x:vb.x,y:vb.y,w:vb.w,h:vb.h}; });
-      window.addEventListener("mousemove",(e)=>{
-        if(!isPanning) return;
-        const dx=(e.clientX-panStart.x)*(vb.w/svg.clientWidth);
-        const dy=(e.clientY-panStart.y)*(vb.h/svg.clientHeight);
-        vb.x = vbStart.x - dx; vb.y = vbStart.y - dy; applyVB();
-      });
-      window.addEventListener("mouseup",()=>{ isPanning=false; });
-      svg.addEventListener("wheel",(e)=>{
-        e.preventDefault();
-        const s=(e.deltaY>0)?1.1:0.9;
-        const rect=svg.getBoundingClientRect();
-        const px=(e.clientX-rect.left)/rect.width, py=(e.clientY-rect.top)/rect.height;
-        const nw=vb.w*s, nh=vb.h*s;
-        vb.x = vb.x + vb.w*px - nw*px; vb.y = vb.y + vb.h*py - nh*py;
-        vb.w = nw; vb.h = nh; applyVB();
-      },{passive:false});
-      document.getElementById("zoomIn").onclick = ()=>{ vb.w*=0.9; vb.h*=0.9; applyVB(); };
-      document.getElementById("zoomOut").onclick= ()=>{ vb.w*=1.1; vb.h*=1.1; applyVB(); };
-      document.getElementById("zoomFit").onclick= ()=>{ vb = fitVB(content.w, content.h); applyVB(); };
-      document.getElementById("zoom100").onclick= ()=>{ vb = {x:0,y:0,w:content.w,h:content.h}; applyVB(); };
-
-      document.getElementById("btnSVG").onclick = ()=>{
-        const svgOut = svg.cloneNode(true);
-        svgOut.setAttribute("viewBox", `0 0 ${content.w} ${content.h}`);
-        svgOut.setAttribute("width", content.w);
-        svgOut.setAttribute("height", content.h);
-        const s = new XMLSerializer().serializeToString(svgOut);
-        const blob = new Blob([s], {type:"image/svg+xml;charset=utf-8"});
-        const url = URL.createObjectURL(blob);
-        const a=document.createElement("a"); a.href=url; a.download="family-tree.svg"; a.click();
-        URL.revokeObjectURL(url);
-      };
-    });
-
-    updateSelectionInfo();
-  }
-
-  function updateSelectionInfo(){
-    const el = document.getElementById("selInfo");
-    const btnDead = document.getElementById("btnToggleDead");
-    const btnDiv  = document.getElementById("btnToggleDivorce");
-    const btnDel  = document.getElementById("btnDelete");
-    btnDead.style.display="none"; btnDiv.style.display="none"; btnDel.style.display="none";
-
-    if(!selected.type){ el.textContent="尚未選取節點。"; return; }
-
-    if(selected.type==="person"){
-      const p = doc.persons[selected.id] || {};
-      el.textContent = "選取人物：" + (p.name || "?") + (p.deceased?"（殁）":"") + "（ID: "+selected.id+"）";
-      btnDead.style.display="inline-block";
-      btnDead.textContent = p.deceased ? "取消身故" : "標記身故";
-      btnDead.onclick = ()=>{ p.deceased = !p.deceased; render(); };
-      btnDel.style.display="inline-block";
-      btnDel.onclick = ()=>{
-        const pid = selected.id;
-        delete doc.persons[pid];
-        const keptUnions = {};
-        Object.values(doc.unions).forEach(u=>{ if(u.partners.indexOf(pid)===-1) keptUnions[u.id]=u; });
-        doc.unions = keptUnions;
-        doc.children = doc.children.filter(cl => cl.childId!==pid && !!doc.unions[cl.unionId]);
-        selected={type:null,id:null}; render();
-      };
-    }else{
-      const u = doc.unions[selected.id] || {};
-      const [a,b]=u.partners||[];
-      el.textContent = "選取婚姻：" + (doc.persons[a]?.name||"?") + " ↔ " + (doc.persons[b]?.name||"?") +
-                       "（狀態：" + (u.status==="divorced"?"離婚":"婚姻") + "）";
-      btnDiv.style.display="inline-block";
-      btnDiv.textContent = (u.status==="divorced")?"恢復婚姻":"設為離婚";
-      btnDiv.onclick = ()=>{ u.status = (u.status==="divorced")?"married":"divorced"; render(); };
-      btnDel.style.display="inline-block";
-      btnDel.onclick = ()=>{
-        const uid_ = selected.id;
-        delete doc.unions[uid_];
-        doc.children = doc.children.filter(cl => cl.unionId!==uid_);
-        selected={type:null,id:null}; render();
-      };
+        "persons": {},          # pid -> {name, sex('男'/'女'), alive(True/False), note}
+        "marriages": {},        # mid -> {a, b, divorced(bool)}
+        "children": [],         # list of {mid, child}
+        "sibling_links": [],    # list of (pid1, pid2)  (無序對；用排序後的tuple去重)
+        "_seq": 0,              # for id generation
     }
-  }
 
-  /* 事件 */
-  document.getElementById("btnDemo").addEventListener("click", ()=>demo());
-  document.getElementById("btnClear").addEventListener("click", clearAll);
+def ensure_session():
+    if "data" not in st.session_state:
+        st.session_state.data = _empty_data()
 
-  document.getElementById("btnAddPerson").addEventListener("click", ()=>{
-    const name = document.getElementById("namePerson").value.trim();
-    const id = uid("P");
-    doc.persons[id]={id, name: name || ("新成員 " + (Object.keys(doc.persons).length+1)), deceased:false};
-    document.getElementById("namePerson").value=""; render();
-  });
+def next_id():
+    st.session_state.data["_seq"] += 1
+    return str(st.session_state.data["_seq"])
 
-  document.getElementById("btnAddUnion").addEventListener("click", ()=>{
-    const a = document.getElementById("selA").value;
-    const b = document.getElementById("selB").value;
-    if(!a||!b||a===b) return;
-    const id = uid("U"); doc.unions[id]={id, partners:[a,b], status:"married"}; render();
-  });
+# -------------------------------
+# Demo Data
+# -------------------------------
 
-  document.getElementById("btnAddChild").addEventListener("click", ()=>{
-    const mid = document.getElementById("selUnion").value; if(!mid) return;
-    const name = document.getElementById("nameChild").value.trim();
-    const id = uid("P"); doc.persons[id]={id, name: name || ("新子女 " + (doc.children.length+1)), deceased:false};
-    // 以資料順序記錄：子女永遠在自己父母婚姻的中線下方
-    doc.children.push({unionId: mid, childId: id});
-    document.getElementById("nameChild").value=""; render();
-  });
+def ensure_person(name, sex="男", alive=True, note=""):
+    """Find or create person by name; return pid."""
+    d = st.session_state.data
+    for pid, p in d["persons"].items():
+        if p["name"] == name:
+            return pid
+    pid = next_id()
+    d["persons"][pid] = {"name": name, "sex": sex, "alive": alive, "note": note}
+    return pid
 
-  // 初始空白畫面；你可以按「載入示例」
-  render(true);
-})();
-</script>
-</body>
-</html>
-"""
+def add_marriage(a, b, divorced=False):
+    """Return mid if created; if same pair exists, return that mid."""
+    d = st.session_state.data
+    # check exists
+    for mid, m in d["marriages"].items():
+        if {m["a"], m["b"]} == {a, b}:
+            # update divorced flag if different
+            m["divorced"] = bool(divorced)
+            return mid
+    mid = f"M{next_id()}"
+    d["marriages"][mid] = {"a": a, "b": b, "divorced": bool(divorced)}
+    return mid
 
-components.html(HTML, height=860, scrolling=True)
+def add_child(mid, child):
+    d = st.session_state.data
+    if mid not in d["marriages"]:
+        return
+    if not any((x["mid"] == mid and x["child"] == child) for x in d["children"]):
+        d["children"].append({"mid": mid, "child": child})
+
+def add_sibling_link(a, b):
+    if a == b: 
+        return
+    a, b = sorted([a, b])
+    d = st.session_state.data
+    if (a, b) not in d["sibling_links"]:
+        d["sibling_links"].append((a, b))
+
+def load_demo(clear=True):
+    if clear:
+        st.session_state.data = _empty_data()
+    # 人物
+    yilang = ensure_person("陳一郎", "男", True)
+    exwife = ensure_person("陳前妻", "女", True)
+    wife   = ensure_person("陳妻",   "女", True)
+    wangzi = ensure_person("王子",   "男", True)
+    wz_wife= ensure_person("王子妻", "女", True)
+    chenda = ensure_person("陳大",   "男", True)
+    chener = ensure_person("陳二",   "男", True)
+    chensan= ensure_person("陳三",   "男", True)
+    w_sun  = ensure_person("王孫",   "男", True)
+
+    # 婚姻：現任（陳一郎×陳妻）、前任（陳一郎×陳前妻）
+    mid_now = add_marriage(yilang, wife,   divorced=False)
+    mid_ex  = add_marriage(yilang, exwife, divorced=True)
+
+    # 子女
+    add_child(mid_now, chenda)
+    add_child(mid_now, chener)
+    add_child(mid_now, chensan)
+    add_child(mid_ex,  wangzi)
+
+    # 王子家庭
+    mid_wz = add_marriage(wangzi, wz_wife, divorced=False)
+    add_child(mid_wz, w_sun)
+
+# -------------------------------
+# Helpers (UI & common)
+# -------------------------------
+
+def start_fresh():
+    st.session_state.data = _empty_data()
+
+def list_person_options(include_empty=False, empty_label="— 未選擇 —"):
+    d = st.session_state.data
+    opts = []
+    if include_empty:
+        opts.append((None, empty_label))
+    for pid, p in d["persons"].items():
+        label = f'{p["name"]}（{p["sex"]}）'
+        if not p["alive"]:
+            label += "（殁）"
+        opts.append((pid, label))
+    # sort by label Chinese-friendly (keep as-insert order usually ok)
+    return opts
+
+def list_marriage_options(include_empty=False, empty_label="— 未選擇 —"):
+    d = st.session_state.data
+    opts = []
+    if include_empty:
+        opts.append((None, empty_label))
+    for mid, m in d["marriages"].items():
+        a = d["persons"].get(m["a"], {"name":"?"})["name"]
+        b = d["persons"].get(m["b"], {"name":"?"})["name"]
+        status = "離婚" if m["divorced"] else "在婚"
+        label = f"{a} – {b}（{status}）"
+        opts.append((mid, label))
+    return opts
+
+def pick_from(label, options, key):
+    """ options: list[(value, label)] ; returns value """
+    labels = [lab for _, lab in options]
+    vals   = [val for val, _ in options]
+    idx = st.selectbox(label, labels, index=0, key=key)
+    # find index
+    sel_index = labels.index(idx)
+    return vals[sel_index]
+
+# -------------------------------
+# Inheritance (Civil Code 1138)
+# -------------------------------
+
+def build_child_map():
+    """mid -> (father, mother), parent_map[child] = {parents} ; and direct children per parent"""
+    d = st.session_state.data
+    mid_parents = {}
+    children_by_parent = defaultdict(list)
+    parent_set = defaultdict(set)
+
+    for mid, m in d["marriages"].items():
+        a, b = m["a"], m["b"]
+        mid_parents[mid] = (a, b)
+    for row in d["children"]:
+        mid, c = row["mid"], row["child"]
+        if mid in mid_parents:
+            a, b = mid_parents[mid]
+            children_by_parent[a].append(c)
+            children_by_parent[b].append(c)
+            parent_set[c].update([a, b])
+    return children_by_parent, parent_set
+
+def descendants_of(pid):
+    """Return all living descendants list (with representation for lineal only)."""
+    d = st.session_state.data
+    children_by_parent, _ = build_child_map()
+
+    res = []
+    q = deque(children_by_parent.get(pid, []))
+    while q:
+        c = q.popleft()
+        res.append(c)
+        q.extend(children_by_parent.get(c, []))
+    return res
+
+def lineal_heirs_with_representation(decedent):
+    """第一順位 直系卑親屬（含代位）"""
+    d = st.session_state.data
+    children_by_parent, _ = build_child_map()
+
+    heirs = []
+
+    # 直系卑親屬的代位（簡化版）：子女活的直接入列；死亡者由其直系卑親屬代位（遞迴）
+    def collect_lineal(children_list):
+        line = []
+        for c in children_list:
+            person = d["persons"].get(c)
+            if not person:
+                continue
+            if person["alive"]:
+                line.append(c)
+            else:
+                # 代位：找這個子女的子女
+                cc = children_by_parent.get(c, [])
+                line.extend(collect_lineal(cc))
+        return line
+
+    children = children_by_parent.get(decedent, [])
+    heirs = collect_lineal(children)
+    return list(dict.fromkeys(heirs))  # unique & keep order
+
+def parents_of(pid):
+    d = st.session_state.data
+    _, parent_set = build_child_map()
+    return list(parent_set.get(pid, []))
+
+def siblings_of(pid):
+    d = st.session_state.data
+    # 同父母的
+    _, parent_map = build_child_map()
+    sibs = set()
+    my_parents = set(parent_map.get(pid, []))
+    for cid, parents in parent_map.items():
+        if cid == pid:
+            continue
+        if set(parents) == my_parents and parents:
+            sibs.add(cid)
+    # 另外：透過 sibling_links 手動接的，也算
+    for a, b in d["sibling_links"]:
+        if a == pid:
+            sibs.add(b)
+        if b == pid:
+            sibs.add(a)
+    return list(sibs)
+
+def grandparents_of(pid):
+    gps = set()
+    for p in parents_of(pid):
+        gps.update(parents_of(p))
+    return list(gps)
+
+def find_spouses(pid):
+    d = st.session_state.data
+    res = []
+    for mid, m in d["marriages"].items():
+        if m["a"] == pid:
+            res.append((mid, m["b"], m["divorced"]))
+        elif m["b"] == pid:
+            res.append((mid, m["a"], m["divorced"]))
+    return res
+
+def heirs_1138(decedent):
+    """Return dict with groups and textual explanation."""
+    d = st.session_state.data
+    out = {"spouse": [], "rank": 0, "heirs": []}
+
+    # 配偶永遠參與分配
+    spouses = [sp for _, sp, _ in find_spouses(decedent)]
+    out["spouse"] = spouses
+
+    # 第一順位：直系卑親屬（含代位）
+    rank1 = [x for x in lineal_heirs_with_representation(decedent) if d["persons"][x]["alive"]]
+    if rank1:
+        out["rank"] = 1
+        out["heirs"] = rank1
+        return out
+
+    # 第二順位：父母
+    rank2 = [p for p in parents_of(decedent) if d["persons"][p]["alive"]]
+    if rank2:
+        out["rank"] = 2
+        out["heirs"] = rank2
+        return out
+
+    # 第三順位：兄弟姊妹（無代位）
+    rank3 = [s for s in siblings_of(decedent) if d["persons"][s]["alive"]]
+    if rank3:
+        out["rank"] = 3
+        out["heirs"] = rank3
+        return out
+
+    # 第四順位：祖父母
+    rank4 = [g for g in grandparents_of(decedent) if d["persons"][g]["alive"]]
+    if rank4:
+        out["rank"] = 4
+        out["heirs"] = rank4
+        return out
+
+    out["rank"] = 0
+    out["heirs"] = []
+    return out
+
+# -------------------------------
+# Graphviz Family Tree
+# -------------------------------
+
+COLOR_MALE   = "#d8eaff"
+COLOR_FEMALE = "#ffdbe1"
+COLOR_DEAD   = "#e6e6e6"
+BORDER_COLOR = "#164b5f"
+
+def person_node(dot, pid, p):
+    label = p["name"]
+    if not p["alive"]:
+        label += "（殁）"
+
+    shape = "box" if p["sex"] == "男" else "ellipse"
+    fill = COLOR_DEAD if not p["alive"] else (COLOR_MALE if p["sex"] == "男" else COLOR_FEMALE)
+
+    dot.node(pid, label, shape=shape, style="filled", fillcolor=fill,
+             color=BORDER_COLOR, fontcolor="#0b2430", penwidth="1.4")
+
+def draw_tree():
+    d = st.session_state.data
+    if not d["persons"]:
+        st.info("請先新增人物與關係，或載入示範。")
+        return
+
+    dot = Digraph("Family", format="svg", engine="dot")
+    dot.graph_attr.update(rankdir="TB", splines="ortho", nodesep="0.5", ranksep="0.7")
+
+    # 節點
+    for pid, p in d["persons"].items():
+        person_node(dot, pid, p)
+
+    # 夫妻（婚姻節點）+ 子女
+    # —— 唯一改動：夫妻之間畫「水平橫線」（現任實線、前任虛線），其餘位置不變 ——
+    for mid, m in d["marriages"].items():
+        a, b, divorced = m["a"], m["b"], m["divorced"]
+        jn = f"J_{mid}"
+        dot.node(jn, "", shape="point", width="0.02", color=BORDER_COLOR)
+
+        style = "dashed" if divorced else "solid"
+
+        # 夫妻水平線（不改變原本佈局）；孩子仍從中點 jn 往下
+        dot.edge(a, b, dir="none", style=style, color=BORDER_COLOR, constraint="false")
+
+        # 用隱形邊讓 jn 停在兩人之間，維持既有版面
+        dot.edge(a, jn, dir="none", style="invis", weight="50")
+        dot.edge(b, jn, dir="none", style="invis", weight="50")
+
+        # 讓夫妻併排
+        with dot.subgraph() as s:
+            s.attr(rank="same")
+            s.node(a)
+            s.node(b)
+
+        # 小孩垂直往下
+        kids = [row["child"] for row in d["children"] if row["mid"] == mid]
+        if kids:
+            with dot.subgraph() as s:
+                s.attr(rank="same")
+                for c in kids:
+                    s.node(c)
+            for c in kids:
+                dot.edge(jn, c, color=BORDER_COLOR)
+
+    # 兄弟姊妹(無共同父母時)用虛線相連，並強制 rank=same
+    # 收集已有共同父母的兄弟姊妹，避免重複畫
+    _, parent_map = build_child_map()
+    def has_same_parents(x, y):
+        return parent_map.get(x, set()) and parent_map.get(x, set()) == parent_map.get(y, set())
+
+    for a, b in d["sibling_links"]:
+        if has_same_parents(a, b):
+            continue
+        with dot.subgraph() as s:
+            s.attr(rank="same")
+            s.node(a)
+            s.node(b)
+        dot.edge(a, b, style="dashed", color=BORDER_COLOR, dir="none")
+
+    st.graphviz_chart(dot, use_container_width=True)
+
+# -------------------------------
+# UI: People
+# -------------------------------
+
+def page_people():
+    d = st.session_state.data
+
+    st.subheader("👤 人物")
+    st.caption("先新增人物，再到「關係」分頁建立婚姻與子女。")
+
+    # 新增人物
+    with st.form("add_person"):
+        st.markdown("**新增人物**")
+        name = st.text_input("姓名", "")
+        sex  = st.radio("性別", ["男", "女"], horizontal=True, index=0)
+        alive = st.checkbox("尚在人世", value=True)
+        note = st.text_input("備註", "")
+        ok = st.form_submit_button("新增")
+        if ok:
+            if name.strip():
+                ensure_person(name.strip(), sex, alive, note)
+                st.success(f"已新增：{name}")
+                st.rerun()
+            else:
+                st.warning("請輸入姓名。")
+
+    st.divider()
+
+    # 編修人物
+    p_opts = list_person_options(include_empty=True)
+    p_pick = pick_from("選擇要編修的人物", p_opts, key="edit_person_pick")
+    if p_pick:
+        p = d["persons"][p_pick]
+        with st.form("edit_person"):
+            name = st.text_input("姓名", p["name"])
+            sex  = st.radio("性別", ["男", "女"], index=(0 if p["sex"]=="男" else 1), horizontal=True)
+            alive = st.checkbox("尚在人世", value=p["alive"])
+            note = st.text_input("備註", p.get("note",""))
+            c1, c2 = st.columns(2)
+            ok = c1.form_submit_button("儲存")
+            del_ = c2.form_submit_button("刪除此人")
+            if ok:
+                p.update({"name": name.strip() or p["name"], "sex": sex, "alive": alive, "note": note})
+                st.success("已更新")
+                st.rerun()
+            if del_:
+                # 同步刪除關係
+                # 刪婚姻
+                mids_to_del = [mid for mid, m in d["marriages"].items() if p_pick in (m["a"], m["b"])]
+                for mid in mids_to_del:
+                    # 刪除底下子女關係
+                    d["children"] = [row for row in d["children"] if row["mid"] != mid]
+                    d["marriages"].pop(mid, None)
+                # 刪除子女掛載
+                d["children"] = [row for row in d["children"] if row["child"] != p_pick]
+                # 刪除兄弟姊妹連結
+                d["sibling_links"] = [t for t in d["sibling_links"] if p_pick not in t]
+                # 刪人
+                d["persons"].pop(p_pick, None)
+                st.success("已刪除")
+                st.rerun()
+
+# -------------------------------
+# UI: Relations
+# -------------------------------
+
+def page_relations():
+    d = st.session_state.data
+
+    st.subheader("🔗 關係")
+
+    # -- 建立婚姻
+    st.markdown("### 建立婚姻（現任 / 離婚）")
+    with st.form("form_marriage"):
+        colA, colB, colC = st.columns([2,2,1])
+        with colA:
+            a = pick_from("配偶 A", list_person_options(include_empty=True), key="marry_a")
+        with colB:
+            b = pick_from("配偶 B", list_person_options(include_empty=True), key="marry_b")
+        with colC:
+            divorced = st.checkbox("此婚姻為離婚/前配偶", value=False)
+        ok = st.form_submit_button("建立婚姻")
+        if ok:
+            if not a or not b:
+                st.warning("請選擇雙方。")
+            elif a == b:
+                st.warning("兩個欄位不可為同一人。")
+            else:
+                add_marriage(a, b, divorced)
+                st.success("婚姻已建立/更新")
+                st.rerun()
+
+    st.divider()
+
+    # -- 把子女掛到父母（某段婚姻）
+    st.markdown("### 把子女掛到父母（某段婚姻）")
+    m = pick_from("選擇父母（某段婚姻）", list_marriage_options(include_empty=True), key="kid_mid")
+    with st.form("form_child"):
+        kid = pick_from("子女", list_person_options(include_empty=True), key="kid_pid")
+        ok = st.form_submit_button("掛上子女")
+        if ok:
+            if not m:
+                st.warning("請先選擇婚姻。")
+            elif not kid:
+                st.warning("請選擇子女。")
+            else:
+                add_child(m, kid)
+                st.success("子女已掛上")
+                st.rerun()
+
+    st.divider()
+
+    # -- 兄弟姊妹
+    st.markdown("### 掛上兄弟姊妹（沒有血緣連線也可）")
+    with st.form("form_sibling"):
+        base = pick_from("基準成員", list_person_options(include_empty=True), key="sib_base")
+        sib  = pick_from("要掛為其兄弟姊妹者", list_person_options(include_empty=True), key="sib_other")
+        ok = st.form_submit_button("建立兄弟姊妹關係")
+        if ok:
+            if not base or not sib:
+                st.warning("請選擇兩個人。")
+            elif base == sib:
+                st.warning("同一個人無法建立兄弟姊妹關係。")
+            else:
+                add_sibling_link(base, sib)
+                st.success("已建立兄弟姊妹關係")
+                st.rerun()
+
+# -------------------------------
+# UI: Inheritance
+# -------------------------------
+
+def page_inheritance():
+    d = st.session_state.data
+
+    st.subheader("⚖️ 法定繼承試算")
+    if not d["persons"]:
+        st.info("尚無資料，請先新增人物或載入示範。")
+        return
+
+    target = pick_from("選擇被繼承人", list_person_options(include_empty=True), key="succ_target")
+    if not target:
+        st.info("請選擇被繼承人。")
+        return
+
+    result = heirs_1138(target)
+    if result["rank"] == 0 and not result["spouse"]:
+        st.info("查無可繼承人（四順位皆無、且無配偶）。")
+        return
+
+    def show_names(ids):
+        return "、".join([d["persons"][i]["name"] for i in ids]) if ids else "（無）"
+
+    st.markdown("---")
+    st.markdown(f"**被繼承人**：{d['persons'][target]['name']}")
+    st.markdown(f"**配偶**（當然繼承人）：{show_names(result['spouse'])}")
+    rank_txt = {1:"第一順位（直系卑親屬，含代位）", 2:"第二順位（父母）", 3:"第三順位（兄弟姊妹）", 4:"第四順位（祖父母）", 0:"（無）"}
+    st.markdown(f"**適用順位**：{rank_txt[result['rank']]}")
+    st.markdown(f"**本順位繼承人**：{show_names(result['heirs'])}")
+
+    st.caption("說明：依民法第1138條，配偶為當然繼承人；先檢視第一順位（直系卑親屬），無者再依序檢視第二至第四順位。代位繼承僅適用於直系卑親屬。")
+
+# -------------------------------
+# UI: Tree
+# -------------------------------
+
+def page_tree():
+    st.subheader("🧬 家族樹")
+    draw_tree()
+
+# -------------------------------
+# Main Layout
+# -------------------------------
+
+st.set_page_config(page_title="家族平台", layout="wide")
+ensure_session()
+
+st.title("🌳 家族平台（人物｜關係｜法定繼承｜家族樹）")
+
+c1, c2 = st.columns([1,1])
+with c1:
+    if st.button("📘 載入示範（陳一郎家族）", use_container_width=True):
+        load_demo(clear=True)
+        st.success("已載入示範資料。")
+        st.rerun()
+with c2:
+    # 有二次確認的清空
+    with st.popover("🧹 開始輸入我的資料（清空）", use_container_width=True):
+        st.warning("此動作會刪除目前所有資料（人物、婚姻、子女、兄弟姊妹），且無法復原。")
+        agree = st.checkbox("我了解並同意清空")
+        if st.button("確認清空", type="primary", disabled=not agree):
+            start_fresh()
+            st.success("資料已清空，請到「人物」分頁新增第一位成員。")
+            st.rerun()
+
+st.markdown("本圖以 **陳一郎家族譜** 為示範。")
+st.markdown(
+    """
+    <div style="margin:.4rem 0 1.2rem 0;">
+      <a href="#人物" style="margin-right:12px;">➡️ 先到「人物」新增家人</a>
+      <a href="#關係">➡️ 再到「關係」建立婚姻、子女與兄弟姊妹</a>
+    </div>
+    """,
+    unsafe_allow_html=True
+)
+
+tab1, tab2, tab3, tab4 = st.tabs(["人物", "關係", "法定繼承試算", "家族樹"])
+
+with tab1:
+    page_people()
+with tab2:
+    page_relations()
+with tab3:
+    page_inheritance()
+with tab4:
+    page_tree()
