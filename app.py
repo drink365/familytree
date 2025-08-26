@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-🌳 家族樹小幫手（單頁版）
-- 單一頁面、無側欄、無新手模式
-- 輸入介面重整：先選/新增成員 → 編輯成員 → 新增父母/配偶/子女/兄弟姊妹 → 檢視與刪除關係
-- 圖像：夫妻強制相鄰；同父同母兄弟姊妹依出生年(小→大)排序；已故 = 名稱後「（殁）」且灰底
-- 可刪除整段婚姻關係（不刪任何人）
+🌳 家族樹小幫手（單頁、無側欄｜修正外框與佈局）
+- 取消 cluster 子圖，解決外框與佈局錯位
+- 夫妻相鄰：rank=same + 隱形邊
+- 子女依出生年(小→大)排序，同 rank + 隱形鏈條固定左右
+- 已故：名字後加「（殁）」＋灰底
+- 可刪除整段關係（不刪任何人）
 """
 from __future__ import annotations
 import json
@@ -14,7 +15,7 @@ from typing import List, Optional, Tuple
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-single-page-ui-v1"
+VERSION = "2025-08-26-single-page-ui-v2-no-clusters"
 
 # ========= 基本常數 =========
 GENDER_OPTIONS = ["女", "男", "其他/不透漏"]
@@ -60,10 +61,8 @@ def init_state():
         p.setdefault("is_me", False)
         p.setdefault("year", "")
 
-    # 單頁選單記憶
     if "tab" not in st.session_state:
         st.session_state.tab = "🖼 家族圖"
-
     if "layout_lr" not in st.session_state:
         st.session_state.layout_lr = False  # False=垂直(TB), True=水平(LR)
 
@@ -174,10 +173,10 @@ def seed_demo():
     mid_fj = add_or_get_marriage(frank, jessie, "married")
     add_child(mid_fj, add_person("女兒Y", "女", "2003"))
 
-    # 故意留一段可供刪除的空關係：爸爸與已刪除的前任
+    # 測試「刪掉人但關係殘留」
     ex = add_person("爸爸前任", "女")
     ghost_mid = add_or_get_marriage(dad, ex, "divorced")
-    delete_person(ex)  # 刪人但留關係
+    delete_person(ex)
     st.toast("已載入示範家族。", icon="✅")
 
 # ========= 圖像 =========
@@ -190,7 +189,7 @@ def _parse_year(y: str) -> Optional[int]:
         return None
 
 def _order_children(children: List[str], persons: dict) -> List[str]:
-    # 先有年分的照年分小→大；沒有年分的排後面，並保持原相對順序（Python sort 穩定）
+    # 有年分的照年分小→大；沒有年分的排最後（並保留原相對順序）
     return sorted(
         children,
         key=lambda pid: (
@@ -209,8 +208,8 @@ def render_graph() -> Digraph:
         graph_attr={
             "rankdir": "LR" if st.session_state.layout_lr else "TB",
             "splines": "spline",
-            "nodesep": "0.35",
-            "ranksep": "0.55",
+            "nodesep": "0.40",
+            "ranksep": "0.65",
             "fontname": "PingFang TC, Microsoft JhengHei, Noto Sans CJK TC, Arial",
         },
     )
@@ -224,7 +223,6 @@ def render_graph() -> Digraph:
             fill = DECEASED_FILL
         else:
             fill = GENDER_FILL.get(p.get("gender") or "其他/不透漏", GENDER_FILL["其他/不透漏"])
-
         if p.get("is_me"):
             label = "⭐ " + label
 
@@ -234,31 +232,35 @@ def render_graph() -> Digraph:
     # 婚姻與孩子
     for mid, m in marriages.items():
         s1, s2 = m.get("spouse1"), m.get("spouse2")
+
+        # 婚姻（連接點）
         dot.node(mid, label="", shape="point", width="0.02")
 
-        # 夫妻並排（關係點一起 rank）
-        with dot.subgraph(name="cluster_" + mid) as sg:
+        # 夫妻與婚姻點同層：用「普通子圖」（不是 cluster），不會畫外框
+        with dot.subgraph(name="rs_{}".format(mid)) as sg:
             sg.attr(rank="same")
             if s1: sg.node(s1)
             if s2: sg.node(s2)
             sg.node(mid)
             if s1 and s2:
-                sg.edge(s1, s2, style="invis", weight="100", dir="none", minlen="1")
+                # 隱形邊幫助把配偶靠近，但不破壞層級
+                sg.edge(s1, s2, style="invis", weight="80", dir="none", minlen="1")
 
-        # 配偶↔婚姻點
+        # 配偶 ↔ 婚姻點
         est = STATUS_EDGE.get(m.get("status", "married"), STATUS_EDGE["married"])
         if s1: dot.edge(s1, mid, color=est["color"], style=est["style"], weight=est["weight"])
         if s2: dot.edge(s2, mid, color=est["color"], style=est["style"], weight=est["weight"])
 
-        # 孩子排序與固定左右順序
+        # 子女排序與固定左右順序（普通子圖，避免外框）
         kids = _order_children([c for c in m.get("children", []) if c in persons], persons)
         if kids:
-            with dot.subgraph(name="cluster_kids_" + mid) as sk:
+            with dot.subgraph(name="rk_{}".format(mid)) as sk:
                 sk.attr(rank="same")
                 for c in kids:
                     sk.node(c)
-                for i in range(len(kids)-1):
-                    sk.edge(kids[i], kids[i+1], style="invis", weight="5")
+                # 用隱形鏈條固定左右，不讓 Graphviz 打散
+                for i in range(len(kids) - 1):
+                    sk.edge(kids[i], kids[i+1], style="invis", weight="10", dir="none", minlen="1")
 
         for c in kids:
             rel = child_types.get(mid, {}).get(c, "bio")
@@ -282,7 +284,6 @@ def section_topbar():
 
 def tabbar():
     tabs = ["🖼 家族圖", "✍️ 建立/編輯", "📋 資料表", "📦 匯入/匯出"]
-    # 用 radio 做上方導覽，避免 tabs 每次 rerun 重置
     st.session_state.tab = st.radio("導覽", tabs, horizontal=True, index=tabs.index(st.session_state.tab))
     st.write("")  # 間距
 
@@ -303,43 +304,38 @@ def panel_build_edit():
 
     st.header("✍️ 建立 / 編輯")
 
-    # A. 先選/新增一位成員（卡片 1）
-    with st.container():
-        st.subheader("A. 選擇或新增成員")
-        cols = st.columns([2, 1.2, 1.2, 1.2])
-        pid_list = list(persons.keys())
-        if pid_list:
-            idx = cols[0].selectbox("選擇成員", options=list(range(len(pid_list))),
-                                    format_func=lambda i: persons[pid_list[i]]["name"])
-            current_pid = pid_list[idx]
-        else:
-            current_pid = None
-            cols[0].info("目前尚無成員，請在右側先新增。")
-
-        with cols[1]:
-            new_name = st.text_input("姓名（新增）", placeholder="例如：我 / 陳先生 / 王小美")
-        with cols[2]:
-            new_gender = st.selectbox("性別（新增）", GENDER_OPTIONS, index=0)
-        with cols[3]:
-            new_is_me = st.checkbox("此人是『我』", value=(not pid_list))
-        c2 = st.columns([1, 3])
-        with c2[0]:
-            if st.button("➕ 新增成員", use_container_width=True, disabled=not new_name.strip()):
-                npid = add_person(new_name.strip(), new_gender, is_me=new_is_me)
-                # 若設為我，清除其他 is_me
-                if new_is_me:
-                    for k, v in persons.items():
-                        if k != npid:
-                            v["is_me"] = False
-                st.success("已新增：{}".format(new_name.strip()))
-                current_pid = npid
-
-        if not current_pid:
-            st.stop()
+    # A. 選擇或新增成員
+    st.subheader("A. 選擇或新增成員")
+    cols = st.columns([2, 1.2, 1.2, 1.2])
+    pid_list = list(persons.keys())
+    if pid_list:
+        idx = cols[0].selectbox("選擇成員", options=list(range(len(pid_list))),
+                                format_func=lambda i: persons[pid_list[i]]["name"])
+        current_pid = pid_list[idx]
+    else:
+        current_pid = None
+        cols[0].info("目前尚無成員，請在右側先新增。")
+    with cols[1]:
+        new_name = st.text_input("姓名（新增）", placeholder="例如：我 / 陳先生 / 王小美")
+    with cols[2]:
+        new_gender = st.selectbox("性別（新增）", GENDER_OPTIONS, index=0)
+    with cols[3]:
+        new_is_me = st.checkbox("此人是『我』", value=(not pid_list))
+    c2 = st.columns([1, 3])
+    with c2[0]:
+        if st.button("➕ 新增成員", use_container_width=True, disabled=not new_name.strip()):
+            npid = add_person(new_name.strip(), new_gender, is_me=new_is_me)
+            if new_is_me:
+                for k, v in persons.items():
+                    if k != npid: v["is_me"] = False
+            st.success("已新增：{}".format(new_name.strip()))
+            current_pid = npid
+    if not current_pid:
+        st.stop()
 
     st.divider()
 
-    # B. 編輯這位成員（卡片 2：表單提交）
+    # B. 編輯成員
     p = persons[current_pid]
     st.subheader("B. 編輯「{}」的資料".format(p.get("name","")))
     with st.form("edit_person_{}".format(current_pid)):
@@ -376,10 +372,9 @@ def panel_build_edit():
 
     st.divider()
 
-    # C. 為此人建立或擴充關係（卡片 3）
+    # C. 關係操作
     st.subheader("C. 關係操作（父母／配偶／子女／兄弟姊妹）")
 
-    # C1. 一鍵加父母
     cc1, cc2, cc3 = st.columns([1.2, 1.2, 1.2])
     with cc1:
         fa = st.text_input("父親姓名（可留白跳過）", key="add_pa_{}".format(current_pid))
@@ -396,7 +391,6 @@ def panel_build_edit():
                 add_child(mid, current_pid, "bio")
                 st.success("已建立父母並連結")
 
-    # C2. 新增配偶/關係（提交制）
     with st.expander("➕ 新增配偶／關係", expanded=False):
         with st.form("add_spouse_{}".format(current_pid), clear_on_submit=True):
             spn = st.text_input("配偶姓名")
@@ -413,7 +407,6 @@ def panel_build_edit():
                 add_or_get_marriage(current_pid, spid, sps)
                 st.success("已新增關係")
 
-    # C3. 新增子女（先選一段關係）
     my_mids = get_marriages_of(current_pid)
     if my_mids:
         label_items = []
@@ -443,7 +436,6 @@ def panel_build_edit():
                     add_child(chosen_mid, cid, relation=cr)
                     st.success("已新增子女")
 
-    # C4. 兄弟姊妹（批次）
     pmid = get_parent_marriage_of(current_pid)
     with st.expander("👫 批次新增兄弟姊妹", expanded=False):
         if pmid is None:
@@ -465,7 +457,7 @@ def panel_build_edit():
 
     st.divider()
 
-    # D. 關係檢視／微調／刪除（卡片 4）
+    # D. 關係檢視／微調／刪除
     st.subheader("D. 關係檢視與微調")
     for mid, m in list(marriages.items()):
         s1 = persons.get(m.get("spouse1"), {}).get("name", m.get("spouse1"))
@@ -474,7 +466,6 @@ def panel_build_edit():
             m["status"] = st.selectbox("婚姻狀態", list(STATUS_MAP.keys()),
                                        index=_safe_index(list(STATUS_MAP.keys()), m.get("status","married"), 0),
                                        format_func=lambda s: STATUS_MAP[s], key="stat_{}".format(mid))
-            # 子女關係微調
             for cid in m.get("children", []):
                 cname = persons.get(cid, {}).get("name", cid)
                 cur = child_types.get(mid, {}).get(cid, "bio")
