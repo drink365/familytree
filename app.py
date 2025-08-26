@@ -843,26 +843,66 @@ def block_io():
 
     st.divider()
 
-    # 上傳 ≠ 立即匯入；必須按「套用匯入」才覆蓋
+    # 讓上傳檔在 rerun 後仍可用：先存到 session_state
+    if "upload_bytes" not in st.session_state:
+        st.session_state.upload_bytes = None
+        st.session_state.upload_name = None
+
     up = st.file_uploader("選擇 family_tree.json（選擇後仍需按下方按鈕才會匯入）",
                           type=["json"], key="uploader_json")
 
     if up is not None:
-        st.info("已選擇檔案：{}".format(getattr(up, "name", "未命名")))
-        apply = st.button("📥 套用匯入（覆蓋目前資料）", key="btn_apply_import")
+        st.session_state.upload_bytes = up.getvalue()
+        st.session_state.upload_name = getattr(up, "name", "未命名")
+
+    if st.session_state.upload_bytes:
+        st.info("已選擇檔案：{}".format(st.session_state.upload_name))
+
+        # 嘗試解析並顯示預覽資訊（不覆蓋）
+        try:
+            preview = json.loads(st.session_state.upload_bytes.decode("utf-8"))
+            persons_cnt = len(preview.get("persons", {})) if isinstance(preview, dict) else 0
+            marriages_cnt = len(preview.get("marriages", {})) if isinstance(preview, dict) else 0
+            st.caption("預覽：成員 {} 人、關係 {} 筆".format(persons_cnt, marriages_cnt))
+        except Exception as e:
+            st.error("檔案無法解析為 JSON：{}".format(e))
+
+        cols = st.columns([1,1,2])
+        apply = cols[0].button("📥 套用匯入（覆蓋目前資料）", key="btn_apply_import")
+        clear  = cols[1].button("🧹 取消選擇", key="btn_clear_upload")
+
         if apply:
             try:
-                data = json.load(up)
-                # 簡單驗證
-                assert isinstance(data, dict) and "persons" in data and "marriages" in data
-                st.session_state.tree = data
-                # 重新補齊預設欄位，避免舊檔缺欄位
-                init_state()
-                st.toast("已匯入 JSON。", icon="📥")
+                raw = st.session_state.upload_bytes.decode("utf-8")
+                data = json.loads(raw)
+
+                # 寬鬆相容舊版結構
+                if not isinstance(data, dict):
+                    raise ValueError("JSON 頂層不是物件")
+                tree = {
+                    "persons": data.get("persons", {}) or {},
+                    "marriages": data.get("marriages", {}) or {},
+                    "child_types": data.get("child_types", {}) or {},
+                }
+                st.session_state.tree = tree
+                init_state()  # 補預設欄位
+                st.success("✅ 匯入完成：成員 {} 人、關係 {} 筆"
+                           .format(len(tree["persons"]), len(tree["marriages"])))
+                # 匯入後清掉暫存，避免之後又誤覆蓋
+                st.session_state.upload_bytes = None
+                st.session_state.upload_name = None
+                st.rerun()
             except Exception as e:
-                st.error("上傳格式有誤或檔案內容不完整：{}".format(e))
+                st.error("套用匯入失敗：{}".format(e))
+
+        if clear:
+            st.session_state.upload_bytes = None
+            st.session_state.upload_name = None
+            st.toast("已清除選擇的檔案。", icon="🧹")
+            st.rerun()
     else:
         st.caption("提示：選擇檔案後，需按「📥 套用匯入」才會覆蓋目前資料。未按按鈕不會自動匯入。")
+
 
 # ====== Main ======
 def main():
