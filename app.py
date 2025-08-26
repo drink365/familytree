@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-🌳 家族樹小幫手（含新手模式精靈 + 進階模式 + 快速兩代；No f-strings）
+🌳 家族樹小幫手（含新手模式精靈 + 進階模式 + 穩定導覽；No f-strings）
 - 新手模式：一步一頁（建立我→配偶→子女→預覽）
 - 進階模式：大家族/多段婚姻/收養/繼親/半血緣/批次兄弟姊妹
+- 穩定導覽：用 radio 當主導航，rerun 後仍停留在原頁，不會跳回第一頁
 - 行為：所有新增皆需「勾選 + 提交」，避免誤新增；刪除成員具紅色確認鍵
 - 隱私：資料僅存在 session，不寫入資料庫
 """
@@ -14,7 +15,7 @@ from typing import List, Optional
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-beginner-wizard"
+VERSION = "2025-08-26-beginner-wizard-stable-nav"
 
 # =============================
 # Helpers & State
@@ -54,11 +55,16 @@ def init_state():
         st.session_state.layout_lr = False  # False=TB, True=LR
     if "celebrate_ready" not in st.session_state:
         st.session_state.celebrate_ready = False
-    # 新手模式旗標
+    # 新手模式 & 精靈步驟
     if "beginner_mode" not in st.session_state:
         st.session_state.beginner_mode = True
     if "wizard_step" not in st.session_state:
         st.session_state.wizard_step = 1  # 1~4
+    # 穩定導覽：記住目前所在頁
+    if "main_nav" not in st.session_state:
+        st.session_state.main_nav = "✍️ 建立家庭"      # 進階模式預設
+    if "main_nav_beginner" not in st.session_state:
+        st.session_state.main_nav_beginner = "🖼 家族圖"  # 新手模式預設
 
 # =============================
 # CRUD
@@ -376,6 +382,7 @@ def onboarding_wizard():
         with colA:
             if st.button("🔧 進階模式（大家族）"):
                 st.session_state.beginner_mode = False
+                st.session_state.main_nav = "🎛 進階建立"  # 切換後直接進入進階建立
                 st.rerun()
         with colB:
             if st.button("↩️ 回到 Step 2"):
@@ -534,7 +541,7 @@ def form_spouse_and_children():
     else:
         st.info("尚未新增任何配偶/婚姻，請先新增配偶。")
 
-# —— ⚡ 快速加直系兩代（父母 + 配偶 + 多子女；按鈕可按、提交時驗證）
+# —— ⚡ 快速加直系兩代（父母 + 配偶 + 多子女；提交時驗證）
 def quick_two_gen(pid: str):
     persons = st.session_state.tree["persons"]
 
@@ -584,7 +591,7 @@ def quick_two_gen(pid: str):
             with col_ok1:
                 confirm_q2g = st.checkbox("我確認建立上述資料", key="q2g_ok_{}".format(pid))
             with col_ok2:
-                submit_q2g = st.form_submit_button("🚀 一鍵建立")  # 不再 disabled
+                submit_q2g = st.form_submit_button("🚀 一鍵建立")  # 總是可按
 
         if submit_q2g:
             if not confirm_q2g:
@@ -665,6 +672,7 @@ def advanced_builder():
     quick_two_gen(pid)
 
     st.markdown("---")
+    # 四個功能區
     cA, cB, cC, cD = st.columns(4)
 
     # 一鍵新增父母
@@ -702,6 +710,7 @@ def advanced_builder():
     # 新增子女（提交制）
     with cC:
         st.markdown("**子女**")
+        persons = st.session_state.tree["persons"]
         my_mids = get_marriages_of(pid)
         if my_mids:
             mid_labels = []
@@ -758,7 +767,7 @@ def advanced_builder():
             sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
             confirm_sibs = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
 
-            # 整行主要按鈕（不放在 columns 裡，避免被誤判為 disabled）
+            # 整行主要按鈕（避免被誤判 disabled）
             click_add_sibs = st.button("👫 提交新增兄弟姊妹", key="btn_add_sibs_submit_{}".format(pid))
 
             if click_add_sibs:
@@ -776,6 +785,7 @@ def advanced_builder():
                         st.success("已新增兄弟姊妹")
                         st.rerun()
 
+    st.markdown("---")
 
     marriages = st.session_state.tree["marriages"]
     child_types = st.session_state.tree["child_types"]
@@ -857,7 +867,7 @@ def main():
 
     st.write("🟢 App booted — {}".format(VERSION))  # 顯示版本號方便確認
     st.title("🌳 家族樹小幫手｜低調好玩版")
-    st.caption("新手用精靈，老手用進階。你隨時可在左側切換模式。")
+    st.caption("新手用精靈，老手用進階。你可在左側切換模式。")
 
     with st.sidebar:
         if st.button("✨ 載入示範家族", key="seed_demo_btn"):
@@ -871,54 +881,64 @@ def main():
     except Exception as e:
         st.error("側欄進度顯示失敗：{}".format(e))
 
-    # 切換：新手模式 vs 進階模式
+    # 切換：新手模式 vs 進階模式（使用 radio 導覽，rerun 後保留所在頁）
     if st.session_state.beginner_mode:
-        # 新手模式：顯示精靈 + 簡版圖/表/匯出
         onboarding_wizard()
-        tab_graph, tab_table, tab_io = st.tabs(["🖼 家族圖", "📋 資料表", "📦 匯入/匯出"])
-        with tab_graph:
+
+        nav_items_b = ["🖼 家族圖", "📋 資料表", "📦 匯入/匯出"]
+        st.session_state.main_nav_beginner = st.radio(
+            "導覽", nav_items_b, index=nav_items_b.index(st.session_state.main_nav_beginner),
+            horizontal=True, key="nav_b"
+        )
+
+        if st.session_state.main_nav_beginner == "🖼 家族圖":
             try:
                 dot = render_graph()
                 st.graphviz_chart(dot, use_container_width=True)
             except Exception:
                 st.info("尚未有資料。請在上方步驟建立成員。")
-        with tab_table:
-            data_tables()
-        with tab_io:
-            import_export()
-    else:
-        # 進階模式：完整功能
-        try:
-            tab_build, tab_graph, tab_table, tab_adv, tab_io = st.tabs(
-                ["✍️ 建立家庭", "🖼 家族圖", "📋 資料表", "🎛 進階建立", "📦 匯入/匯出"]
-            )
-        except Exception as e:
-            st.error("Tabs 建立失敗：{}".format(e))
-            return
 
-        with tab_build:
+        elif st.session_state.main_nav_beginner == "📋 資料表":
+            data_tables()
+
+        elif st.session_state.main_nav_beginner == "📦 匯入/匯出":
+            import_export()
+
+    else:
+        nav_items = ["✍️ 建立家庭", "🖼 家族圖", "📋 資料表", "🎛 進階建立", "📦 匯入/匯出"]
+        st.session_state.main_nav = st.radio(
+            "導覽", nav_items, index=nav_items.index(st.session_state.main_nav),
+            horizontal=True, key="nav_main"
+        )
+
+        current = st.session_state.main_nav
+        if current == "✍️ 建立家庭":
             try:
                 form_me(); st.divider(); form_parents(); st.divider(); form_spouse_and_children()
             except Exception as e:
                 st.error("建立家庭區塊失敗：{}".format(e))
-        with tab_graph:
+
+        elif current == "🖼 家族圖":
             try:
                 dot = render_graph()
                 st.graphviz_chart(dot, use_container_width=True)
             except Exception as e:
                 st.error("圖形渲染失敗：{}".format(e))
             st.caption("提示：可在側欄切換水平/垂直排列；離異/分居以虛線/點線表示；收養/繼親子女以不同線型表示。")
-        with tab_table:
+
+        elif current == "📋 資料表":
             try:
                 data_tables()
             except Exception as e:
                 st.error("資料表顯示失敗：{}".format(e))
-        with tab_adv:
+
+        elif current == "🎛 進階建立":
             try:
                 advanced_builder()
             except Exception as e:
                 st.error("進階建立區塊失敗：{}".format(e))
-        with tab_io:
+
+        elif current == "📦 匯入/匯出":
             try:
                 import_export()
             except Exception as e:
