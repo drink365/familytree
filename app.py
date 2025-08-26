@@ -1,595 +1,407 @@
+# app.py
+# -*- coding: utf-8 -*-
 import streamlit as st
+import uuid
+from datetime import datetime, timedelta, timezone
+import random
+import time
 import pandas as pd
-import io, json, random
-from typing import Dict, Any
+import matplotlib.pyplot as plt
 
-# =========================
-# 基礎設定
-# =========================
+# ----------------------------
+# 基本設定
+# ----------------------------
 st.set_page_config(
-    page_title="永傳｜家族樹（清爽 + 小樂趣版）",
-    page_icon="🌳",
-    layout="wide"
+    page_title="影響力傳承平台｜Octalysis 原型",
+    page_icon="🌟",
+    layout="wide",
 )
 
-# -------------------------
-# 全域樣式（低調、清爽、有點溫度）
-# -------------------------
-BASE_CSS = """
-<style>
-:root{
-  --brand:#4f8cff;
-  --ink:#1f2328;
-  --muted:#6b7280;
-  --card:#ffffff;
-  --soft:#f6f7fb;
-  --line:#eceef3;
-  --accent:#79ffe1;
-  --male:#3b82f6;
-  --female:#ec4899;
-}
-html,body,[class*="css"]{letter-spacing:.01em;}
-h1,h2,h3{margin:.2rem 0 .6rem}
-.small{font-size:.92rem;color:var(--muted)}
-.hr{height:1px;background:var(--line);margin:.6rem 0 1rem}
-.header-wrap{
-  background: linear-gradient(135deg, #eef3ff 0%, #fff 100%);
-  border:1px solid var(--line);
-  border-radius:18px; padding:18px 20px; margin-bottom:14px;
-}
-.header-title{font-size:1.3rem;font-weight:700;color:var(--ink)}
-.header-sub{color:var(--muted);margin-top:4px}
-.wrap{display:block;background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
-.kbd{display:inline-block;border:1px solid var(--line);border-radius:8px;padding:3px 8px;background:var(--soft);font-size:.85rem;color:var(--muted)}
-.badge{display:inline-block;border:1px solid var(--line);background:#fff;border-radius:999px;padding:4px 10px;font-size:.8rem;color:#555}
-.card{
-  border:1px solid var(--line);border-radius:16px;padding:14px;background:#fff;
-  transition: transform .08s ease; height:100%;
-}
-.card:hover{transform: translateY(-2px)}
-.avatar{
-  width:42px;height:42px;border-radius:999px;display:flex;align-items:center;justify-content:center;
-  font-weight:700;color:#fff; background:#9ca3af;
-}
-.gender-m{background: var(--male)}
-.gender-f{background: var(--female)}
-.tag{font-size:.78rem;border:1px solid var(--line);border-radius:999px;padding:2px 8px;color:#555;background:#fafafa}
-.grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(260px,1fr)); gap:12px}
-.row{display:flex;gap:10px;align-items:center}
-.row-space{display:flex;gap:10px;align-items:center;justify-content:space-between}
-.kit{display:flex;gap:8px;flex-wrap:wrap}
-.btnlink a{color:var(--brand) !important;text-decoration:none !important;font-weight:600}
-.note{background:#fff8e1;border:1px solid #ffe9a8;color:#7a5b00;border-radius:10px;padding:8px 10px;font-size:.92rem}
-.footer-stat{color:var(--muted);font-size:.9rem}
-</style>
-"""
-st.markdown(BASE_CSS, unsafe_allow_html=True)
+# 方便在台灣時區顯示（UTC+8）
+TZ = timezone(timedelta(hours=8))
 
-# =========================
-# State & 工具
-# =========================
-def ensure_state():
-    if "data" not in st.session_state:
-        st.session_state.data = {
-            "people": {}, "marriages": {},
-            "meta": {"title": "我的家族樹", "version": "0.2.0"}
-        }
-    if "next_ids" not in st.session_state:
-        st.session_state.next_ids = {"person": 1, "marriage": 1}
-    if "page" not in st.session_state:
-        st.session_state.page = "首頁"
-    if "view_mode" not in st.session_state:
-        st.session_state.view_mode = "卡片"
+# ----------------------------
+# 初始化 Session State
+# ----------------------------
+def init_state():
+    ss = st.session_state
+    ss.setdefault("profile_done", False)                 # 完成基本資料（Ownership）
+    ss.setdefault("assets_done", False)                  # 完成資產輸入（Development）
+    ss.setdefault("plan_done", False)                    # 完成策略配置（Empowerment）
+    ss.setdefault("quiz_done", False)                    # 完成小測驗（Unpredictability）
+    ss.setdefault("advisor_booked", False)               # 完成顧問預約（Scarcity）
+    ss.setdefault("badges", set())                       # 已解鎖徽章
+    ss.setdefault("versions", [])                        # 版本管理（Ownership）
+    ss.setdefault("invite_code", str(uuid.uuid4())[:8])  # 社交協作邀請碼（Social Influence）
+    ss.setdefault("consult_slots_total", 10)             # 限時名額
+    ss.setdefault("consult_slots_left", 10)              # 剩餘名額（Scarcity）
+    ss.setdefault("consult_deadline", month_end_2359())  # 倒數（Scarcity）
+    ss.setdefault("mission_ack", False)                  # 使命召喚已閱讀（Epic Meaning）
+    ss.setdefault("family_name", "")
+    ss.setdefault("assets", {"公司股權":0, "不動產":0, "金融資產":0, "保單":0, "海外資產":0, "其他":0})
+    ss.setdefault("plan", {"股權給下一代":40, "保單留配偶":30, "慈善信託":10, "留現金緊急金":20})
+    ss.setdefault("risk_rate_no_plan", 0.18)             # 未規劃假設稅負
+    ss.setdefault("risk_rate_with_plan", 0.10)           # 已規劃假設稅負
+    ss.setdefault("tips_unlocked", [])                   # 隨機知識卡
+init_state()
 
-ensure_state()
+# ----------------------------
+# 工具函式
+# ----------------------------
+def month_end_2359():
+    today = datetime.now(TZ)
+    # 找到當月最後一天
+    first_of_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+    last_of_this = first_of_next - timedelta(seconds=1)
+    # 設為 23:59:59
+    return last_of_this.replace(hour=23, minute=59, second=59, microsecond=0)
 
-def go(p): st.session_state.page = p; st.toast(f"→ {p}")
+def progress_score():
+    """根據完成度計算進度條"""
+    checks = [
+        st.session_state.mission_ack,
+        st.session_state.profile_done,
+        st.session_state.assets_done,
+        st.session_state.plan_done,
+        st.session_state.quiz_done,
+        st.session_state.advisor_booked,
+    ]
+    return int(sum(checks) / len(checks) * 100)
 
-def gen_person_id():
-    pid = f"P{st.session_state.next_ids['person']}"
-    st.session_state.next_ids['person'] += 1
-    return pid
+def add_badge(name):
+    st.session_state.badges.add(name)
 
-def gen_marriage_id():
-    mid = f"M{st.session_state.next_ids['marriage']}"
-    st.session_state.next_ids['marriage'] += 1
-    return mid
+def human_time(dt: datetime):
+    return dt.strftime("%Y-%m-%d %H:%M")
 
-def add_person(obj: Dict[str, Any]) -> str:
-    pid = gen_person_id()
-    st.session_state.data["people"][pid] = {
-        "id": pid,
-        "name": obj.get("name","").strip(),
-        "gender": obj.get("gender","").strip(),
-        "birth": obj.get("birth","").strip(),
-        "death": obj.get("death","").strip(),
-        "father_id": obj.get("father_id","").strip(),
-        "mother_id": obj.get("mother_id","").strip(),
-        "notes": obj.get("notes","").strip(),
-    }
-    return pid
+def guidance_note(text):
+    st.markdown(f":bulb: **引導**：{text}")
 
-def add_marriage(a, b, date=""):
-    mid = gen_marriage_id()
-    st.session_state.data["marriages"][mid] = {"id": mid, "spouse1_id": a, "spouse2_id": b, "date": date}
-    return mid
+def section_title(emoji, title):
+    st.markdown(f"### {emoji} {title}")
 
-def export_json_bytes() -> bytes:
-    return json.dumps(st.session_state.data, ensure_ascii=False, indent=2).encode("utf-8")
+def chip(text):
+    st.markdown(f"<span style='padding:4px 8px;border-radius:12px;border:1px solid #ddd;'> {text} </span>", unsafe_allow_html=True)
 
-def clear_all():
-    st.session_state.data = {"people": {}, "marriages": {}, "meta": {"title": "我的家族樹", "version": "0.2.0"}}
-    st.session_state.next_ids = {"person": 1, "marriage": 1}
+RANDOM_TIPS = [
+    "家族憲章可明確價值觀與決策機制，降低紛爭風險。",
+    "跨境資產需要同步考量不同稅制下的課稅時點與估值規則。",
+    "保單身故給付可快速補足遺產稅與流動性缺口。",
+    "先做資產盤點，再決定工具；先談價值觀，再定分配比例。",
+    "信託可把『錢給誰、何時給、給多少、在何條件下給』寫清楚。",
+    "『用不完的錢如何安心交棒』是第三階段的關鍵提問。",
+]
 
-def load_demo():
-    clear_all()
-    gpa = add_person({"name":"外公","gender":"M","birth":"1935"})
-    gma = add_person({"name":"外婆","gender":"F","birth":"1937"})
-    add_marriage(gpa, gma, "1956-06-01")
-    mom = add_person({"name":"媽媽","gender":"F","birth":"1965","father_id":gpa,"mother_id":gma})
-    dad = add_person({"name":"爸爸","gender":"M","birth":"1963"})
-    add_marriage(mom, dad, "1988-09-12")
-    add_person({"name":"我","gender":"F","birth":"1990","father_id":dad,"mother_id":mom})
-    add_person({"name":"姐姐","gender":"F","birth":"1988","father_id":dad,"mother_id":mom})
+def unlock_random_tip():
+    left = [t for t in RANDOM_TIPS if t not in st.session_state.tips_unlocked]
+    if not left:
+        return None
+    tip = random.choice(left)
+    st.session_state.tips_unlocked.append(tip)
+    return tip
 
-def initials(name:str)->str:
-    if not name: return "?"
-    s = "".join([w[0] for w in name.replace("（"," ").replace("("," ").split() if w])
-    return (s[:2]).upper()
-
-def build_graphviz():
-    from graphviz import Digraph
-    dot = Digraph(comment='FamilyTree', format="svg")
-    dot.attr(rankdir="TB", splines="spline", nodesep="0.4", ranksep="0.6")
-    dot.attr("node", shape="box", style="rounded,filled", fillcolor="white",
-             fontname="Taipei Sans TC, Noto Sans CJK TC, Arial")
-    P = st.session_state.data["people"]; M = st.session_state.data["marriages"]
-    for pid, p in P.items():
-        label = f"{p.get('name','')}\n({p.get('birth','')}{' - '+p.get('death','') if p.get('death') else ''})"
-        dot.node(pid, label)
-    for cid, c in P.items():
-        for parent in [c.get("father_id",""), c.get("mother_id","")]:
-            if parent and parent in P: dot.edge(parent, cid, arrowhead="normal")
-    for mid, m in M.items():
-        a, b = m.get("spouse1_id"), m.get("spouse2_id")
-        if a in P and b in P: dot.edge(a, b, dir="none", color="#9aa3b2")
-    return dot.source
-
-def sync_next_ids_from_data():
-    P = st.session_state.data["people"]; M = st.session_state.data["marriages"]
-    mp = max([int(pid[1:]) for pid in P if pid.startswith("P")] + [0]) + 1
-    mm = max([int(mid[1:]) for mid in M if mid.startswith("M")] + [0]) + 1
-    st.session_state.next_ids = {"person": mp, "marriage": mm}
-
-# =========================
-# 側邊導覽
-# =========================
+# ----------------------------
+# 側邊欄：進度與徽章
+# ----------------------------
 with st.sidebar:
-    st.markdown('<div class="header-wrap">', unsafe_allow_html=True)
-    st.markdown('<div class="header-title">🌳 永傳｜家族樹</div>', unsafe_allow_html=True)
-    st.markdown('<div class="header-sub small">低調、乾淨、帶點小樂趣</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown("## 🧭 目前進度")
+    prog = progress_score()
+    st.progress(prog, text=f"完成度 {prog}%")
+    st.caption("完成各區塊互動以提升完成度。")
 
-    page = st.radio("功能選單",
-        ["首頁","建立家族樹","查看成員","編輯資料","匯入資料","清除資料","設定"],
-        index=["首頁","建立家族樹","查看成員","編輯資料","匯入資料","清除資料","設定"].index(st.session_state.page)
-    )
-    if page != st.session_state.page: go(page)
+    st.markdown("## 🏅 徽章")
+    if not st.session_state.badges:
+        st.caption("尚未解鎖徽章，完成任務即可獲得獎章。")
+    else:
+        for b in sorted(list(st.session_state.badges)):
+            chip(f"🏅 {b}")
 
     st.divider()
-    st.caption(f"版本：{st.session_state.data['meta'].get('version','0.2.0')}")
+    st.markdown("**邀請家族成員共建**")
+    st.code(f"Invite Code: {st.session_state.invite_code}")
+    st.caption("（示意：分享此代碼讓成員加入協作）")
 
-# =========================
-# 首頁
-# =========================
-if st.session_state.page == "首頁":
-    left, right = st.columns([2,1], vertical_alignment="center")
-    with left:
-        st.markdown('<div class="wrap">', unsafe_allow_html=True)
-        st.subheader("開始你的家族小工作室")
-        st.write("用最少步驟，把關係與故事慢慢長出來。")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("➕ 新增成員", use_container_width=True): go("建立家族樹")
-        with c2:
-            if st.button("👀 查看成員", use_container_width=True): go("查看成員")
-        with c3:
-            if st.button("📂 匯入資料", use_container_width=True): go("匯入資料")
+# ----------------------------
+# 頁面標頭
+# ----------------------------
+st.title("🌟 影響力傳承平台｜Octalysis Gamification 原型")
+st.caption("以『準備與從容』為精神，讓家族影響力得以溫暖延續。")
 
-        st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-        # 小 checklist
-        P = st.session_state.data["people"]
-        steps = [
-            ("新增第一位成員", len(P)>=1),
-            ("連結父母/子女關係", any(v.get("father_id") or v.get("mother_id") for v in P.values())),
-            ("建立一段婚姻關係", len(st.session_state.data["marriages"])>=1),
-            ("成功匯出 JSON 備份", False) # 無法偵測；留作引導
-        ]
-        done = sum(1 for _, ok in steps if ok)
-        st.write(f"完成度：**{done}/{len(steps)}**")
-        for label, ok in steps:
-            st.write(f"- [{'x' if ok else ' '}] {label}")
-        if done in (1,3,4):
-            st.balloons()
-        # 小提醒
-        tips = [
-            "小提醒：用 Excel 模板匯入，多人資料會快很多。",
-            "小提醒：成員名片右上角的彩色點點，是性別提示。",
-            "小提醒：先畫直系，再補旁系，會更清楚！",
-        ]
-        st.info(random.choice(tips))
-        st.markdown('</div>', unsafe_allow_html=True)
+# Tabs 對應 Octalysis 的八大動力模組
+tabs = st.tabs([
+    "1 使命召喚",         # Epic Meaning & Calling
+    "2 進步與成就",       # Development & Accomplishment
+    "3 創意沙盒",         # Empowerment of Creativity & Feedback
+    "4 擁有與版本",       # Ownership & Possession
+    "5 協作與關係",       # Social Influence & Relatedness
+    "6 稀缺與急迫",       # Scarcity & Impatience
+    "7 驚喜與好奇",       # Unpredictability & Curiosity
+    "8 風險與避免",       # Loss & Avoidance
+])
 
-    with right:
-        st.markdown('<div class="wrap">', unsafe_allow_html=True)
-        st.subheader("匯出 / 匯入（JSON）")
-        st.download_button("下載目前資料（JSON）", data=export_json_bytes(),
-                           file_name="familytree.json", mime="application/json", use_container_width=True)
-        up = st.file_uploader("匯入 JSON", type=["json"])
-        if up:
-            try:
-                st.session_state.data = json.load(up)
-                sync_next_ids_from_data()
-                st.success("JSON 匯入完成！")
-            except Exception as e:
-                st.error(f"JSON 匯入失敗：{e}")
-        st.markdown('</div>', unsafe_allow_html=True)
+# ----------------------------
+# 1. Epic Meaning & Calling
+# ----------------------------
+with tabs[0]:
+    section_title("📜", "家族使命與起心動念")
+    st.markdown("""
+**讓家族的愛與價值觀，跨越世代，溫柔延續。**  
+本平台以家族傳承為核心，協助您用**可視化工具**整合 **法 / 稅 / 財**，把「用不完的錢如何安心交棒」說清楚、做踏實。
+""")
+    colA, colB = st.columns([3,2])
+    with colA:
+        st.video("https://www.youtube.com/watch?v=dQw4w9WgXcQ", disabled=True)
+        st.caption("（示意：此處可放品牌使命短片或動態 Banner）")
+    with colB:
+        st.info("任務卡｜今天的目標：完成『家族資料 + 資產盤點 + 初版策略』，解鎖「家族建築師」徽章。")
+        guidance_note("點選上方分頁依序完成互動。")
 
-        st.markdown('<div class="wrap">', unsafe_allow_html=True)
-        st.subheader("目前統計")
-        st.write(f"成員：**{len(st.session_state.data['people'])}**　婚姻：**{len(st.session_state.data['marriages'])}**")
-        st.markdown('</div>', unsafe_allow_html=True)
+    if st.button("我已理解並願意開始", use_container_width=True):
+        st.session_state.mission_ack = True
+        add_badge("使命啟動者")
+        st.success("已啟動任務，獲得徽章：使命啟動者！")
 
-# =========================
-# 建立家族樹
-# =========================
-elif st.session_state.page == "建立家族樹":
-    st.markdown('<div class="wrap">', unsafe_allow_html=True)
-    st.header("➕ 建立家族樹")
-    tab1, tab2 = st.tabs(["新增成員","新增婚姻"])
+# ----------------------------
+# 2. Development & Accomplishment
+# ----------------------------
+with tabs[1]:
+    section_title("🧱", "基本資料與資產盤點（進度與成就）")
+    st.write("完成以下步驟可提升完成度並解鎖徽章。")
 
-    with tab1:
-        with st.form("add-person", clear_on_submit=True):
-            col1, col2, col3 = st.columns([2,1,1])
-            name = col1.text_input("姓名*", placeholder="例如：王小明")
-            gender = col2.selectbox("性別*", ["","M","F"], index=0)
-            birth = col3.text_input("出生（YYYY 或 YYYY-MM-DD）")
-            death = st.text_input("死亡（可留空）", placeholder="")
-            P = st.session_state.data["people"]
-            opts = [""] + [f"{p['name']} ({pid})" for pid, p in P.items()]
-            c1, c2 = st.columns(2)
-            father_str = c1.selectbox("父親（可選）", opts, index=0)
-            mother_str = c2.selectbox("母親（可選）", opts, index=0)
-            notes = st.text_area("備註（可留空）", placeholder="特殊關係、稱謂、住址等")
-            ok = st.form_submit_button("新增")
-            if ok:
-                if not name or not gender:
-                    st.error("姓名與性別必填。")
-                else:
-                    f = father_str.split("(")[-1][:-1] if "(" in father_str else ""
-                    m = mother_str.split("(")[-1][:-1] if "(" in mother_str else ""
-                    pid = add_person({"name":name,"gender":gender,"birth":birth,"death":death,
-                                      "father_id":f,"mother_id":m,"notes":notes})
-                    st.success(f"已新增：{name}（{pid}）")
-
-    with tab2:
-        P = st.session_state.data["people"]
-        if not P:
-            st.info("先新增成員，才能建立婚姻關係。")
-        else:
-            c1, c2, c3 = st.columns([2,2,1])
-            opts = [f"{p['name']} ({pid})" for pid, p in P.items()]
-            a = c1.selectbox("配偶 A", opts)
-            b = c2.selectbox("配偶 B", opts)
-            date = c3.text_input("結婚日期", placeholder="YYYY-MM-DD")
-            if st.button("建立婚姻"):
-                aid = a.split("(")[-1][:-1]
-                bid = b.split("(")[-1][:-1]
-                if aid == bid:
-                    st.error("請選擇不同的兩位成員。")
-                else:
-                    mid = add_marriage(aid, bid, date.strip())
-                    st.success(f"婚姻已建立（{mid}）：{a} ↔ {b}")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # 簡圖
-    st.markdown('<div class="wrap">', unsafe_allow_html=True)
-    st.subheader("家族樹（簡圖）")
-    if st.session_state.data["people"]:
-        try:
-            dot = build_graphviz()
-            st.graphviz_chart(dot, use_container_width=True)
-        except Exception as e:
-            st.warning("尚未安裝 Graphviz，暫無法顯示樹圖。請先用「查看成員」管理資料。")
-            st.caption(f"技術訊息：{e}")
-    else:
-        st.info("尚無資料。")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# 查看成員（卡片/表格切換）
-# =========================
-elif st.session_state.page == "查看成員":
-    P = st.session_state.data["people"]
-    st.header("👀 查看成員")
-    if not P:
-        st.info("尚無成員，請先到「建立家族樹」新增。")
-    else:
-        top = st.container()
-        with top:
-            left, right = st.columns([1.5,1])
-            st.session_state.view_mode = left.segmented_control(
-                "檢視模式", options=["卡片","表格"], default=st.session_state.view_mode
-            )
-            q = right.text_input("快速搜尋（姓名包含）", "")
-        st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-
-        # 篩選
-        items = list(P.items())
-        if q.strip():
-            items = [(pid, p) for pid, p in items if q.strip() in p.get("name","")]
-
-        if st.session_state.view_mode == "表格":
-            st.markdown('<div class="wrap">', unsafe_allow_html=True)
-            df = pd.DataFrame([p for _, p in items])
-            cols = ["id","name","gender","birth","death","father_id","mother_id","notes"]
-            df = df[[c for c in cols if c in df.columns]]
-            st.dataframe(df, use_container_width=True, hide_index=True)
-            st.download_button("下載成員（CSV）", data=df.to_csv(index=False).encode("utf-8-sig"),
-                               file_name="people.csv", mime="text/csv")
-            st.markdown('</div>', unsafe_allow_html=True)
-        else:
-            # 卡片版
-            st.markdown('<div class="grid">', unsafe_allow_html=True)
-            for pid, p in items:
-                avatar_class = "avatar gender-m" if p.get("gender")=="M" else ("avatar gender-f" if p.get("gender")=="F" else "avatar")
-                gender_tag = "男" if p.get("gender")=="M" else ("女" if p.get("gender")=="F" else "—")
-                st.markdown('<div class="card">', unsafe_allow_html=True)
-                colA, colB = st.columns([1,4])
-                with colA:
-                    st.markdown(f'<div class="{avatar_class}">{initials(p.get("name",""))}</div>', unsafe_allow_html=True)
-                with colB:
-                    st.markdown(f"**{p.get('name','') }**  <span class='badge'>{gender_tag}</span>", unsafe_allow_html=True)
-                    span = f"{p.get('birth','')}"
-                    if p.get("death"): span += f" – {p.get('death')}"
-                    st.caption(span or "—")
-                    with st.expander("更多"):
-                        st.write(f"ID：{pid}")
-                        st.write(f"父：{p.get('father_id','') or '—'}　母：{p.get('mother_id','') or '—'}")
-                        st.write(p.get("notes","").strip() or "—")
-                        if st.button("✏️ 去編輯這位", key=f"goedit-{pid}"):
-                            st.session_state.page = "編輯資料"
-                            st.session_state._preselect_pid = pid
-                            st.rerun()
-                st.markdown('</div>', unsafe_allow_html=True)
-            st.markdown('</div>', unsafe_allow_html=True)
-
-        # 簡圖
-        st.markdown('<div class="wrap">', unsafe_allow_html=True)
-        st.subheader("家族樹（簡圖）")
-        try:
-            dot = build_graphviz()
-            st.graphviz_chart(dot, use_container_width=True)
-        except Exception as e:
-            st.warning("尚未安裝 Graphviz，暫無法顯示樹圖。")
-            st.caption(f"技術訊息：{e}")
-        st.markdown('</div>', unsafe_allow_html=True)
-
-# =========================
-# 編輯資料
-# =========================
-elif st.session_state.page == "編輯資料":
-    P = st.session_state.data["people"]
-    st.header("✏️ 編輯資料")
-    if not P:
-        st.info("尚無資料。請先新增成員。")
-    else:
-        # 可由「查看成員」帶入指定 pid
-        default_opt = 0
-        options = [f"{p['name']} ({pid})" for pid, p in P.items()]
-        if "_preselect_pid" in st.session_state:
-            pre = st.session_state.pop("_preselect_pid")
-            target = f"{P[pre]['name']} ({pre})" if pre in P else None
-            if target and target in options:
-                default_opt = options.index(target)
-
-        pick = st.selectbox("選擇成員", options, index=default_opt)
-        pid = pick.split("(")[-1][:-1]; person = P[pid]
-
-        with st.form("edit-form"):
-            c1,c2,c3 = st.columns([2,1,1])
-            name = c1.text_input("姓名*", value=person.get("name",""))
-            gender = c2.selectbox("性別*", ["","M","F"], index=["","M","F"].index(person.get("gender","")))
-            birth = c3.text_input("出生", value=person.get("birth",""))
-            death = st.text_input("死亡", value=person.get("death",""))
-            # 父母選單
-            parent_opts = [""] + [f"{p['name']} ({ppid})" for ppid, p in P.items() if ppid != pid]
-            def_fmt = lambda x: "" if not x else f"{P[x]['name']} ({x})" if x in P else ""
-            fdef, mdef = def_fmt(person.get("father_id","")), def_fmt(person.get("mother_id",""))
-            father_sel = st.selectbox("父親", parent_opts, index=parent_opts.index(fdef) if fdef in parent_opts else 0)
-            mother_sel = st.selectbox("母親", parent_opts, index=parent_opts.index(mdef) if mdef in parent_opts else 0)
-            notes = st.text_area("備註", value=person.get("notes",""))
-            colx, coly, colz = st.columns(3)
-            update = colx.form_submit_button("儲存")
-            delete = coly.form_submit_button("刪除此人", type="secondary")
-            cancel = colz.form_submit_button("取消")
-
-        if update:
-            if not name or not gender:
-                st.error("姓名與性別必填。")
+    with st.container(border=True):
+        st.subheader("Step 1｜建立家族識別")
+        fam = st.text_input("家族名稱（將用於專屬封面與報告）", value=st.session_state.family_name, placeholder="例如：黃氏家族")
+        if st.button("儲存家族識別", key="btn_profile"):
+            st.session_state.family_name = fam.strip()
+            st.session_state.profile_done = bool(st.session_state.family_name)
+            if st.session_state.profile_done:
+                add_badge("家族識別完成")
+                st.success("已儲存。徽章：家族識別完成")
             else:
-                P[pid].update({
-                    "name": name.strip(), "gender": gender, "birth": birth.strip(), "death": death.strip(),
-                    "father_id": father_sel.split("(")[-1][:-1] if "(" in father_sel else "",
-                    "mother_id": mother_sel.split("(")[-1][:-1] if "(" in mother_sel else "",
-                    "notes": notes.strip()
+                st.warning("請輸入家族名稱後再儲存。")
+
+    with st.container(border=True):
+        st.subheader("Step 2｜輸入資產結構")
+        a1, a2, a3 = st.columns(3)
+        a4, a5, a6 = st.columns(3)
+        st.session_state.assets["公司股權"] = a1.number_input("公司股權（萬元）", 0, 10_000_000, st.session_state.assets["公司股權"])
+        st.session_state.assets["不動產"] = a2.number_input("不動產（萬元）", 0, 10_000_000, st.session_state.assets["不動產"])
+        st.session_state.assets["金融資產"] = a3.number_input("金融資產（萬元）", 0, 10_000_000, st.session_state.assets["金融資產"])
+        st.session_state.assets["保單"]   = a4.number_input("保單（萬元）",   0, 10_000_000, st.session_state.assets["保單"])
+        st.session_state.assets["海外資產"] = a5.number_input("海外資產（萬元）", 0, 10_000_000, st.session_state.assets["海外資產"])
+        st.session_state.assets["其他"]   = a6.number_input("其他（萬元）",   0, 10_000_000, st.session_state.assets["其他"])
+
+        if st.button("完成資產盤點", key="btn_assets"):
+            total = sum(st.session_state.assets.values())
+            if total > 0:
+                st.session_state.assets_done = True
+                add_badge("家族建築師")
+                st.success(f"已完成資產盤點（總額 {total:,} 萬元）。徽章：家族建築師")
+            else:
+                st.warning("尚未輸入任何資產金額。")
+
+    with st.expander("查看我目前的完成度與徽章"):
+        st.metric("目前完成度", f"{progress_score()}%")
+        st.write("徽章：", ", ".join(sorted(list(st.session_state.badges))) if st.session_state.badges else "尚無")
+
+# ----------------------------
+# 3. Empowerment of Creativity & Feedback
+# ----------------------------
+with tabs[2]:
+    section_title("🧪", "策略沙盒（拖拉比例 / 即時回饋）")
+    st.write("在這裡自由調整分配比例，AI 即時回饋稅務與現金流差異（示意模型）。")
+
+    colL, colR = st.columns([3,2])
+
+    with colL, st.form("plan_form"):
+        p1 = st.slider("股權給下一代（%）", 0, 100, st.session_state.plan["股權給下一代"])
+        p2 = st.slider("保單留配偶（%）",   0, 100, st.session_state.plan["保單留配偶"])
+        p3 = st.slider("慈善信託（%）",     0, 100, st.session_state.plan["慈善信託"])
+        p4 = st.slider("留現金緊急金（%）", 0, 100, st.session_state.plan["留現金緊急金"])
+        submitted = st.form_submit_button("更新策略並模擬")
+        if submitted:
+            total_pct = p1 + p2 + p3 + p4
+            if total_pct != 100:
+                st.error(f"目前總和為 {total_pct}%，請調整至 100%。")
+            else:
+                st.session_state.plan.update({
+                    "股權給下一代": p1,
+                    "保單留配偶": p2,
+                    "慈善信託": p3,
+                    "留現金緊急金": p4
                 })
-                st.success("已更新。")
+                st.session_state.plan_done = True
+                add_badge("策略設計師")
+                st.success("已更新策略。徽章：策略設計師")
 
-        if delete:
-            # 清除其作為父母關聯與婚姻
-            for cid, c in list(P.items()):
-                if c.get("father_id")==pid: P[cid]["father_id"]=""
-                if c.get("mother_id")==pid: P[cid]["mother_id"]=""
-            for mid, m in list(st.session_state.data["marriages"].items()):
-                if m.get("spouse1_id")==pid or m.get("spouse2_id")==pid:
-                    del st.session_state.data["marriages"][mid]
-            del P[pid]
-            st.warning("已刪除該成員與相關婚姻。")
+    with colR:
+        total_asset = sum(st.session_state.assets.values())
+        plan = st.session_state.plan
+        st.subheader("即時回饋（示意）")
+        if total_asset <= 0:
+            st.info("請先於『進步與成就』分頁完成資產盤點。")
+        else:
+            # 簡化稅估（示意）
+            base_tax_rate = st.session_state.risk_rate_with_plan
+            # 若慈善信託比例較高，視為改善稅務效率
+            effective_rate = max(0.05, base_tax_rate - (plan["慈善信託"] / 100) * 0.03)
+            est_tax = int(total_asset * 10_000 * effective_rate)  # 萬元 -> 元
+            cash_liq = int(total_asset * 10_000 * (plan["留現金緊急金"]/100 + plan["保單留配偶"]/100*0.8))
 
-# =========================
-# 匯入資料
-# =========================
-elif st.session_state.page == "匯入資料":
-    st.header("📂 匯入資料")
-    st.caption("建議先下載模板檔，再上傳；可選擇「合併」或「清空後匯入」。")
+            st.metric("估算遺產稅（元）", f"{est_tax:,}")
+            st.metric("估算可動用現金（元）", f"{cash_liq:,}")
+            guidance_note("可增加『保單留配偶』或『留現金緊急金』比例以強化流動性。")
 
-    def make_people_tpl()->pd.DataFrame:
-        return pd.DataFrame([
-            {"id":"","name":"我","gender":"F","birth":"1990-05-01","death":"","father_id":"","mother_id":"","notes":""},
-            {"id":"","name":"爸爸","gender":"M","birth":"1963-01-01","death":"","father_id":"","mother_id":"","notes":""},
-            {"id":"","name":"媽媽","gender":"F","birth":"1965-02-02","death":"","father_id":"","mother_id":"","notes":""},
-        ])
-    def make_mar_tpl()->pd.DataFrame:
-        return pd.DataFrame([
-            {"id":"","spouse1_id":"","spouse1_name":"爸爸","spouse2_id":"","spouse2_name":"媽媽","date":"1988-09-12"}
-        ])
+# ----------------------------
+# 4. Ownership & Possession
+# ----------------------------
+with tabs[3]:
+    section_title("📁", "我的專屬藍圖（版本管理 / 下載示意）")
 
-    box = st.container()
-    with box:
-        c1,c2 = st.columns(2)
-        # people
-        ppl = make_people_tpl(); buf = io.BytesIO(); ppl.to_excel(buf, index=False, sheet_name="people")
-        c1.download_button("下載成員模板（Excel）", data=buf.getvalue(),
-                           file_name="people_template.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        c1.download_button("下載成員模板（CSV）",
-                           data=ppl.to_csv(index=False).encode("utf-8-sig"),
-                           file_name="people_template.csv", mime="text/csv",
-                           use_container_width=True)
-        # marriages
-        mar = make_mar_tpl(); buf2 = io.BytesIO(); mar.to_excel(buf2, index=False, sheet_name="marriages")
-        c2.download_button("下載婚姻模板（Excel）", data=buf2.getvalue(),
-                           file_name="marriages_template.xlsx",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                           use_container_width=True)
-        c2.download_button("下載婚姻模板（CSV）",
-                           data=mar.to_csv(index=False).encode("utf-8-sig"),
-                           file_name="marriages_template.csv", mime="text/csv",
-                           use_container_width=True)
+    colL, colR = st.columns([2,3])
+    with colL:
+        st.text_input("家族名稱", value=st.session_state.family_name, disabled=True)
+        st.json(st.session_state.assets, expanded=False)
+        st.json(st.session_state.plan, expanded=False)
+        if st.button("保存為新版本", use_container_width=True):
+            snapshot = {
+                "time": datetime.now(TZ),
+                "family": st.session_state.family_name,
+                "assets": st.session_state.assets.copy(),
+                "plan": st.session_state.plan.copy()
+            }
+            st.session_state.versions.append(snapshot)
+            add_badge("版本管理者")
+            st.success(f"已保存版本（{human_time(snapshot['time'])}）。徽章：版本管理者")
 
-    st.markdown('<div class="hr"></div>', unsafe_allow_html=True)
-    up = st.file_uploader("選擇上傳檔案（CSV / Excel / JSON）", type=["csv","xlsx","json"])
-    mode = st.radio("匯入模式", ["合併到現有資料", "清空後再匯入"], horizontal=True)
+    with colR:
+        st.subheader("版本記錄")
+        if not st.session_state.versions:
+            st.caption("尚無版本記錄。完成前述步驟後，可在此保存版本。")
+        else:
+            data = [{
+                "時間": human_time(v["time"]),
+                "家族": v["family"] or "未命名家族",
+                "股權給下一代%": v["plan"]["股權給下一代"],
+                "保單留配偶%": v["plan"]["保單留配偶"],
+                "慈善信託%": v["plan"]["慈善信託"],
+                "留現金緊急金%": v["plan"]["留現金緊急金"],
+                "資產總額(萬)": sum(v["assets"].values())
+            } for v in st.session_state.versions]
+            df = pd.DataFrame(data)
+            st.dataframe(df, use_container_width=True)
 
-    def name_lookup_to_id(name: str) -> str:
-        for pid, p in st.session_state.data["people"].items():
-            if p.get("name")==name: return pid
-        return ""
+# ----------------------------
+# 5. Social Influence & Relatedness
+# ----------------------------
+with tabs[4]:
+    section_title("👥", "家族共建與顧問協作（示意）")
+    st.write("透過邀請碼邀請家族成員加入協作，可在傳承地圖上留言、提議。")
 
-    if up:
-        try:
-            if up.name.lower().endswith(".json"):
-                payload = json.load(up)
-                if mode == "清空後再匯入": clear_all()
-                st.session_state.data = payload
-                sync_next_ids_from_data()
-                st.success("JSON 匯入完成！")
+    st.code(f"Invite Code：{st.session_state.invite_code}")
+    st.caption("（實作時可串接後端建立多使用者協作與權限）")
 
-            elif up.name.lower().endswith(".csv"):
-                df = pd.read_csv(up)
-                if mode == "清空後再匯入": clear_all()
-                for _, r in df.iterrows():
-                    rid = str(r.get("id")) if pd.notna(r.get("id")) and str(r.get("id")).strip() not in ["","nan","None"] else ""
-                    payload = {
-                        "name": str(r.get("name","")).strip(), "gender": str(r.get("gender","")).strip(),
-                        "birth": str(r.get("birth","")).strip(), "death": str(r.get("death","")).strip(),
-                        "father_id": str(r.get("father_id","")).strip(), "mother_id": str(r.get("mother_id","")).strip(),
-                        "notes": str(r.get("notes","")).strip()
-                    }
-                    if rid:
-                        st.session_state.data["people"][rid] = {"id": rid, **payload}
-                        if rid.startswith("P"):
-                            try: st.session_state.next_ids["person"] = max(st.session_state.next_ids["person"], int(rid[1:])+1)
-                            except: pass
-                    else:
-                        add_person(payload)
-                st.success("CSV 匯入（成員）完成。")
+    with st.chat_message("user"):
+        st.write("我覺得『慈善信託』比例可以再拉高一點，因為媽媽很在意回饋社會。")
+    with st.chat_message("assistant"):
+        st.write("收到～我會在策略會議上把這一點列為優先討論。")
 
-            elif up.name.lower().endswith(".xlsx"):
-                xls = pd.ExcelFile(up)
-                if mode == "清空後再匯入": clear_all()
-                if "people" in xls.sheet_names:
-                    dfp = pd.read_excel(xls, sheet_name="people")
-                    for _, r in dfp.iterrows():
-                        rid = str(r.get("id")) if pd.notna(r.get("id")) and str(r.get("id")).strip() not in ["","nan","None"] else ""
-                        payload = {
-                            "name": str(r.get("name","")).strip(), "gender": str(r.get("gender","")).strip(),
-                            "birth": str(r.get("birth","")).strip(), "death": str(r.get("death","")).strip(),
-                            "father_id": str(r.get("father_id","")).strip(), "mother_id": str(r.get("mother_id","")).strip(),
-                            "notes": str(r.get("notes","")).strip()
-                        }
-                        if rid:
-                            st.session_state.data["people"][rid] = {"id": rid, **payload}
-                            if rid.startswith("P"):
-                                try: st.session_state.next_ids["person"] = max(st.session_state.next_ids["person"], int(rid[1:])+1)
-                                except: pass
-                        else:
-                            add_person(payload)
-                    st.success("Excel 匯入（people）完成。")
-                if "marriages" in xls.sheet_names:
-                    dfm = pd.read_excel(xls, sheet_name="marriages")
-                    for _, r in dfm.iterrows():
-                        mid = str(r.get("id")) if pd.notna(r.get("id")) and str(r.get("id")).strip() not in ["","nan","None"] else ""
-                        s1 = str(r.get("spouse1_id","")).strip(); s2 = str(r.get("spouse2_id","")).strip()
-                        s1n = str(r.get("spouse1_name","")).strip(); s2n = str(r.get("spouse2_name","")).strip()
-                        date = str(r.get("date","")).strip()
-                        if not s1 and s1n: s1 = name_lookup_to_id(s1n)
-                        if not s2 and s2n: s2 = name_lookup_to_id(s2n)
-                        if s1 and s2:
-                            if mid:
-                                st.session_state.data["marriages"][mid] = {"id": mid, "spouse1_id": s1, "spouse2_id": s2, "date": date}
-                                if mid.startswith("M"):
-                                    try: st.session_state.next_ids["marriage"] = max(st.session_state.next_ids["marriage"], int(mid[1:])+1)
-                                    except: pass
-                            else:
-                                add_marriage(s1, s2, date)
-                    st.success("Excel 匯入（marriages）完成。")
-        except Exception as e:
-            st.error(f"匯入失敗：{e}")
+    add_badge("協作啟動者")
 
-# =========================
-# 清除資料
-# =========================
-elif st.session_state.page == "清除資料":
-    st.header("🗑️ 清除資料")
-    st.markdown('<div class="wrap">', unsafe_allow_html=True)
-    st.warning("此動作會刪除所有成員與婚姻紀錄，請先備份。")
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("下載備份（JSON）", data=export_json_bytes(),
-                           file_name="backup_familytree.json", mime="application/json", use_container_width=True)
-    with c2:
-        ok = st.toggle("我已理解風險並確認刪除")
-        st.button("清空所有資料", type="primary", disabled=not ok, use_container_width=True, on_click=clear_all)
-    st.markdown('</div>', unsafe_allow_html=True)
+# ----------------------------
+# 6. Scarcity & Impatience
+# ----------------------------
+with tabs[5]:
+    section_title("⏳", "限時挑戰與預約名額")
+    deadline = st.session_state.consult_deadline
+    now = datetime.now(TZ)
+    remain = max(0, int((deadline - now).total_seconds()))
 
-# =========================
-# 設定
-# =========================
-elif st.session_state.page == "設定":
-    st.header("⚙️ 設定")
-    st.markdown('<div class="wrap">', unsafe_allow_html=True)
-    title = st.text_input("專案標題", value=st.session_state.data["meta"].get("title","我的家族樹"))
-    if st.button("儲存設定", use_container_width=True):
-        st.session_state.data["meta"]["title"] = title.strip() or "我的家族樹"
-        st.success("已儲存。")
-    st.markdown('</div>', unsafe_allow_html=True)
+    colL, colR = st.columns(2)
+    with colL:
+        st.subheader("🎯 本月挑戰")
+        st.write("在**截止前**完成『資產盤點 + 策略初稿 + 版本保存』，可獲得 30 分鐘顧問諮詢。")
+        st.metric("剩餘名額", st.session_state.consult_slots_left)
+        st.metric("截止時間", human_time(deadline))
+        st.caption("（名額與倒數為示意，可串接真實後台）")
 
-    st.markdown('<div class="wrap">', unsafe_allow_html=True)
-    st.subheader("資料匯出")
-    st.download_button("下載 JSON", data=export_json_bytes(),
-                       file_name="familytree.json", mime="application/json", use_container_width=True)
-    st.caption(f"成員：{len(st.session_state.data['people'])}　婚姻：{len(st.session_state.data['marriages'])}")
-    st.markdown('</div>', unsafe_allow_html=True)
+        if st.session_state.consult_slots_left > 0:
+            if st.button("我要預約諮詢", use_container_width=True):
+                st.session_state.advisor_booked = True
+                st.session_state.consult_slots_left -= 1
+                add_badge("行動派")
+                st.success("已預約成功！徽章：行動派")
+        else:
+            st.error("本月名額已滿，請下月再試。")
+
+    with colR:
+        st.subheader("⏱️ 倒數計時（示意）")
+        # 簡單顯示秒數（避免真實 sleep 造成部署負擔）
+        st.write(f"距離截止約 **{remain} 秒**")
+        guidance_note("活動、名額、倒數能有效提升行動率，但請避免過度焦慮感。")
+
+# ----------------------------
+# 7. Unpredictability & Curiosity
+# ----------------------------
+with tabs[6]:
+    section_title("🎁", "小測驗 & 驚喜知識卡")
+    st.write("完成 3 題隨機小測驗，即可解鎖 1 則知識卡。")
+
+    with st.form("quiz_form"):
+        q1 = st.radio("Q1. 信託可以把『錢什麼時候給、給誰、給多少、在何條件下給』寫清楚嗎？", ["可以", "不行"], index=0)
+        q2 = st.radio("Q2. 保單身故金是否可作為遺產稅與流動性缺口的緩衝？", ["是", "否"], index=0)
+        q3 = st.radio("Q3. 跨境資產規劃需留意不同法域的課稅時點與估值規則？", ["需要", "不需要"], index=0)
+        ok = st.form_submit_button("提交")
+    if ok:
+        correct = (q1=="可以") + (q2=="是") + (q3=="需要")
+        if correct == 3:
+            st.success("全對！恭喜完成小測驗。")
+            st.session_state.quiz_done = True
+            add_badge("好奇探索者")
+            tip = unlock_random_tip()
+            if tip:
+                st.info(f"🎉 解鎖知識卡：{tip}")
+            else:
+                st.caption("（你已解鎖所有知識卡！）")
+        else:
+            st.warning(f"目前答對 {correct}/3 題，再試試！")
+
+    if st.session_state.tips_unlocked:
+        st.markdown("**已解鎖知識卡**")
+        for t in st.session_state.tips_unlocked:
+            chip(t)
+
+# ----------------------------
+# 8. Loss & Avoidance
+# ----------------------------
+with tabs[7]:
+    section_title("⚖️", "未規劃 vs 已規劃｜風險對比（示意）")
+    total_asset = sum(st.session_state.assets.values())
+    if total_asset <= 0:
+        st.info("請先完成『進步與成就』分頁的資產盤點。")
+    else:
+        st.write("以下為示意：未規劃假設稅負率 18%，規劃後可降至 10%（含慈善與保單等工具綜效）。")
+
+        # 計算
+        tax_no = int(total_asset * 10_000 * st.session_state.risk_rate_no_plan)
+        tax_yes = int(total_asset * 10_000 * st.session_state.risk_rate_with_plan)
+
+        colA, colB, colC = st.columns(3)
+        colA.metric("未規劃估算稅額（元）", f"{tax_no:,}")
+        colB.metric("已規劃估算稅額（元）", f"{tax_yes:,}")
+        colC.metric("估計節省（元）", f"{(tax_no-tax_yes):,}")
+
+        # 視覺化（遵循：單圖、無特定色）
+        fig, ax = plt.subplots()
+        ax.bar(["未規劃", "已規劃"], [tax_no, tax_yes])
+        ax.set_ylabel("估算稅額（元）")
+        ax.set_title("風險與避免：稅負對比（示意）")
+        st.pyplot(fig, use_container_width=True)
+
+        guidance_note("把『沒有規劃的後果』具象化，有助於推動決策；同時保持尊重與安心的語氣。")
+
+# ----------------------------
+# 頁尾說明
+# ----------------------------
+st.divider()
+st.caption("《影響力》傳承策略平台｜永傳家族辦公室｜此頁為 Octalysis gamification 原型示意，非真實稅務建議。")
