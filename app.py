@@ -5,6 +5,7 @@
 - 行為：所有新增皆需「勾選 + 提交」，避免誤新增；按鈕永遠可按（提交時驗證）
 - 支援：多段婚姻、前任/分居、收養/繼親、半血緣、批次兄弟姊妹、快速兩代、一鍵刪除
 - 已故顯示：名字後加「(殁)」，底色淺灰
+- 匯入需按「📥 套用匯入」才覆蓋，避免選檔後每次 rerun 被自動覆蓋
 """
 from __future__ import annotations
 import json, uuid
@@ -13,7 +14,7 @@ from typing import List, Optional
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-onepage-minimal-deceased-grey"
+VERSION = "2025-08-26-onepage-minimal-deceased-grey-import-button"
 
 # ====== 常量 ======
 GENDER_OPTIONS = ["女", "男", "其他/不透漏"]
@@ -256,7 +257,6 @@ def block_spouse_children():
         st.info("尚未新增任何配偶/婚姻，請先新增配偶。")
 
 def block_quick_two_gen(target_pid):
-    persons = st.session_state.tree["persons"]
     with st.expander("⚡ 快速加直系兩代（父母 + 配偶 + 多子女）", expanded=False):
         st.caption("可只填需要的欄位；未提交前不會建立任何資料。")
         with st.form("form_q2g_{}".format(target_pid), clear_on_submit=True):
@@ -513,16 +513,39 @@ def block_tables():
 
 def block_io():
     st.subheader("📦 匯入 / 匯出")
+
+    # 匯出目前資料
     data = json.dumps(st.session_state.tree, ensure_ascii=False, indent=2)
-    st.download_button("⬇ 下載 JSON", data=data, file_name="family_tree.json",
-                       mime="application/json", key="btn_dl_json")
-    up = st.file_uploader("上傳 family_tree.json 以還原", type=["json"], key="uploader_json")
+    st.download_button(
+        "⬇ 下載 JSON",
+        data=data,
+        file_name="family_tree.json",
+        mime="application/json",
+        key="btn_dl_json"
+    )
+
+    st.divider()
+
+    # 上傳 ≠ 立即匯入；必須按「套用匯入」才覆蓋
+    up = st.file_uploader("選擇 family_tree.json（選擇後仍需按下方按鈕才會匯入）",
+                          type=["json"], key="uploader_json")
+
     if up is not None:
-        try:
-            st.session_state.tree = json.load(up)
-            init_state(); st.toast("已匯入 JSON。", icon="📥")
-        except Exception as e:
-            st.error("上傳格式有誤：{}".format(e))
+        st.info("已選擇檔案：{}".format(getattr(up, "name", "未命名")))
+        apply = st.button("📥 套用匯入（覆蓋目前資料）", key="btn_apply_import")
+        if apply:
+            try:
+                data = json.load(up)
+                # 簡單驗證
+                assert isinstance(data, dict) and "persons" in data and "marriages" in data
+                st.session_state.tree = data
+                # 重新補齊預設欄位，避免舊檔缺欄位
+                init_state()
+                st.toast("已匯入 JSON。", icon="📥")
+            except Exception as e:
+                st.error("上傳格式有誤或檔案內容不完整：{}".format(e))
+    else:
+        st.caption("提示：選擇檔案後，需按「📥 套用匯入」才會覆蓋目前資料。未按按鈕不會自動匯入。")
 
 # ====== Main ======
 def main():
