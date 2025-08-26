@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 """
-🌳 家族樹小幫手（MVP + 進階模式 + 快速兩代；含防呆；No f-strings）
-- 極簡模式：3~4 步畫出家族樹
+🌳 家族樹小幫手（MVP + 進階模式 + 快速兩代；No f-strings）
 - 進階模式：多段婚姻、前任/分居、收養/繼親、同父/同母半血緣、批次兄弟姊妹
 - 新增：⚡ 快速加直系兩代（一次加 父母 + 配偶 + 多個子女）
+- 行為：所有「新增」皆需勾選＋提交，避免誤新增；刪除成員帶紅色確認鍵
 - 隱私：僅暫存在 session，不寫入資料庫
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ from typing import List, Optional
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-Quick2Gen-nofstring"
+VERSION = "2025-08-26-UXsubmit-quick2gen"
 
 # =============================
 # Helpers & State
@@ -52,6 +52,8 @@ def init_state():
         st.session_state.quests = {"me": False, "parents": False, "spouse": False, "child": False}
     if "layout_lr" not in st.session_state:
         st.session_state.layout_lr = False  # False=TB, True=LR
+    if "celebrate_ready" not in st.session_state:
+        st.session_state.celebrate_ready = False
 
 # =============================
 # CRUD
@@ -170,6 +172,7 @@ def seed_demo():
     hbro = add_person("同父異母弟弟", "男", year="1980")
     add_child(mid_ex, hbro, relation="bio")
 
+    st.session_state.celebrate_ready = True
     st.toast("已載入示範家族（含前任/同父異母）。", icon="✅")
 
 # =============================
@@ -278,8 +281,9 @@ def sidebar_progress():
 
     st.sidebar.divider()
     st.sidebar.caption("不會儲存到資料庫。下載或關閉頁面即清空。")
-    if pct == 100:
+    if pct == 100 and st.session_state.celebrate_ready:
         st.balloons()
+        st.session_state.celebrate_ready = False
 
 def form_me():
     st.subheader("Step 1｜建立『我』")
@@ -305,6 +309,7 @@ def form_me():
             ok = st.form_submit_button("＋ 建立『我』")
             if ok:
                 add_person(name, gender, year=year, is_me=True)
+                st.session_state.celebrate_ready = True
                 st.toast("已建立『我』", icon="✅")
 
 def form_parents():
@@ -324,6 +329,7 @@ def form_parents():
             m = add_person(mother_name, "女")
             mid = add_or_get_marriage(f, m)
             add_child(mid, me_pid, relation="bio")
+            st.session_state.celebrate_ready = True
             st.toast("已新增父母並連結到『我』", icon="👨‍👩‍👧")
 
 def form_spouse_and_children():
@@ -335,18 +341,31 @@ def form_spouse_and_children():
 
     persons = st.session_state.tree["persons"]
 
+    # —— 新增配偶/另一半：必須提交才生效
     with st.expander("＋ 新增配偶/另一半（可標注前任/分居）"):
-        sp_name = st.text_input("姓名", value="另一半", key="sp_name_main")
-        sp_gender = st.selectbox("性別", GENDER_OPTIONS, index=1, key="sp_gender_main")
-        sp_status = st.selectbox(
-            "關係狀態", list(STATUS_MAP.keys()),
-            index=0, format_func=lambda s: STATUS_MAP[s], key="sp_status_main"
-        )
-        if st.button("新增並建立關係", key="add_spouse_main"):
-            sp = add_person(sp_name, sp_gender)
-            add_or_get_marriage(me_pid, sp, status=sp_status)
-            st.toast("已新增關係", icon="💍")
+        with st.form("form_add_spouse_main", clear_on_submit=True):
+            sp_name = st.text_input("姓名", value="", key="sp_name_main")
+            sp_gender = st.selectbox("性別", GENDER_OPTIONS, index=1, key="sp_gender_main")
+            sp_status = st.selectbox(
+                "關係狀態", list(STATUS_MAP.keys()), index=0,
+                format_func=lambda s: STATUS_MAP[s], key="sp_status_main"
+            )
+            col_ok1, col_ok2 = st.columns([1,2])
+            with col_ok1:
+                confirm_add_sp = st.checkbox("我確認新增", key="confirm_add_sp_main")
+            with col_ok2:
+                submit_sp = st.form_submit_button("✅ 提交新增關係", disabled=not confirm_add_sp)
 
+        if submit_sp:
+            if sp_name.strip():
+                sp = add_person(sp_name.strip(), sp_gender)
+                add_or_get_marriage(me_pid, sp, status=sp_status)
+                st.session_state.celebrate_ready = True
+                st.success("已新增關係")
+            else:
+                st.warning("請輸入配偶姓名後再提交。")
+
+    # —— 選擇關係新增子女（仍需按鈕提交）
     my_mids = get_marriages_of(me_pid)
     if my_mids:
         mid_labels = []
@@ -365,69 +384,83 @@ def form_spouse_and_children():
         chosen_mid = mid_labels[mid_idx][0]
 
         with st.expander("＋ 新增子女"):
-            c_name = st.text_input("子女姓名", value="孩子", key="child_name_main_{}".format(chosen_mid))
-            c_gender = st.selectbox("性別", GENDER_OPTIONS, index=0, key="child_gender_main_{}".format(chosen_mid))
-            c_year = st.text_input("出生年(選填)", key="child_year_main_{}".format(chosen_mid))
-            c_rel = st.selectbox(
-                "關係類型", list(REL_MAP.keys()),
-                index=0, format_func=lambda s: REL_MAP[s], key="child_rel_main_{}".format(chosen_mid)
-            )
-            if st.button("新增子女並連結", key="add_child_main_{}".format(chosen_mid)):
-                cid = add_person(c_name, c_gender, year=c_year)
-                add_child(chosen_mid, cid, relation=c_rel)
-                st.toast("已新增子女", icon="🧒")
+            with st.form("form_add_child_main_{}".format(chosen_mid), clear_on_submit=True):
+                c_name = st.text_input("子女姓名", value="", key="child_name_main_{}".format(chosen_mid))
+                c_gender = st.selectbox("性別", GENDER_OPTIONS, index=0, key="child_gender_main_{}".format(chosen_mid))
+                c_year = st.text_input("出生年(選填)", key="child_year_main_{}".format(chosen_mid))
+                c_rel = st.selectbox(
+                    "關係類型", list(REL_MAP.keys()),
+                    index=0, format_func=lambda s: REL_MAP[s], key="child_rel_main_{}".format(chosen_mid)
+                )
+                colc1, colc2 = st.columns([1,2])
+                with colc1:
+                    confirm_add_ch = st.checkbox("我確認新增", key="confirm_add_child_{}".format(chosen_mid))
+                with colc2:
+                    submit_child = st.form_submit_button("👶 提交新增子女", disabled=not confirm_add_ch)
+
+            if submit_child:
+                if c_name.strip():
+                    cid = add_person(c_name.strip(), c_gender, year=c_year)
+                    add_child(chosen_mid, cid, relation=c_rel)
+                    st.session_state.celebrate_ready = True
+                    st.success("已新增子女")
+                else:
+                    st.warning("請輸入子女姓名後再提交。")
     else:
         st.info("尚未新增任何配偶/婚姻，請先新增配偶。")
 
-# —— ⚡ 快速加直系兩代（父母 + 配偶 + 多子女一次完成）
+# —— ⚡ 快速加直系兩代（父母 + 配偶 + 多子女一次完成；全採提交）
 def quick_two_gen(pid: str):
     persons = st.session_state.tree["persons"]
-    p = persons[pid]
 
     with st.expander("⚡ 快速加直系兩代（父母 + 配偶 + 多子女）", expanded=False):
-        st.caption("可只填需要的欄位；未填的不會建立。")
-
-        # A. 父母
-        st.markdown("**A. 父母**（可留白略過）")
-        c1, c2, c3 = st.columns([1.2, 1.2, 1.0])
-        with c1:
-            fa_name = st.text_input("父親姓名", key="q2g_fa_{}".format(pid))
-        with c2:
-            mo_name = st.text_input("母親姓名", key="q2g_mo_{}".format(pid))
-        with c3:
+        st.caption("可只填需要的欄位；未提交前不會建立任何資料。")
+        with st.form("form_q2g_{}".format(pid), clear_on_submit=True):
+            # A. 父母
+            st.markdown("**A. 父母**（可留白略過）")
+            c1, c2 = st.columns([1.2, 1.2])
+            with c1:
+                fa_name = st.text_input("父親姓名", key="q2g_fa_{}".format(pid))
+            with c2:
+                mo_name = st.text_input("母親姓名", key="q2g_mo_{}".format(pid))
             add_parents = st.checkbox("建立父母並連結", key="q2g_addp_{}".format(pid))
 
-        # B. 配偶/關係
-        st.markdown("**B. 配偶/關係**（可留白略過）")
-        c4, c5, c6 = st.columns([1.2, 1.0, 1.0])
-        with c4:
-            sp_name = st.text_input("配偶姓名", key="q2g_spn_{}".format(pid))
-        with c5:
-            sp_gender = st.selectbox("性別", GENDER_OPTIONS, index=1, key="q2g_spg_{}".format(pid))
-        with c6:
-            sp_status = st.selectbox(
-                "狀態", list(STATUS_MAP.keys()), index=0,
-                format_func=lambda s: STATUS_MAP[s], key="q2g_sps_{}".format(pid)
-            )
-        add_spouse = st.checkbox("建立配偶/關係", key="q2g_adds_{}".format(pid))
+            # B. 配偶/關係
+            st.markdown("**B. 配偶/關係**（可留白略過）")
+            c4, c5, c6 = st.columns([1.2, 1.0, 1.0])
+            with c4:
+                sp_name = st.text_input("配偶姓名", key="q2g_spn_{}".format(pid))
+            with c5:
+                sp_gender = st.selectbox("性別", GENDER_OPTIONS, index=1, key="q2g_spg_{}".format(pid))
+            with c6:
+                sp_status = st.selectbox(
+                    "狀態", list(STATUS_MAP.keys()), index=0,
+                    format_func=lambda s: STATUS_MAP[s], key="q2g_sps_{}".format(pid)
+                )
+            add_spouse = st.checkbox("建立配偶/關係", key="q2g_adds_{}".format(pid))
 
-        # C. 子女（逗號分隔多個）
-        st.markdown("**C. 子女**（可留白略過）")
-        c7, c8, c9, c10 = st.columns([2.0, 1.0, 1.0, 1.2])
-        with c7:
-            kids_csv = st.text_input("子女姓名（以逗號分隔）", key="q2g_kcsv_{}".format(pid))
-        with c8:
-            kid_gender = st.selectbox("預設性別", GENDER_OPTIONS, index=0, key="q2g_kg_{}".format(pid))
-        with c9:
-            kid_rel = st.selectbox(
-                "關係類型", list(REL_MAP.keys()), index=0,
-                format_func=lambda s: REL_MAP[s], key="q2g_krel_{}".format(pid)
-            )
-        with c10:
-            kid_year = st.text_input("預設出生年(選填)", key="q2g_kyr_{}".format(pid))
+            # C. 子女（逗號分隔多個）
+            st.markdown("**C. 子女**（可留白略過）")
+            c7, c8, c9, c10 = st.columns([2.0, 1.0, 1.0, 1.2])
+            with c7:
+                kids_csv = st.text_input("子女姓名（以逗號分隔）", key="q2g_kcsv_{}".format(pid))
+            with c8:
+                kid_gender = st.selectbox("預設性別", GENDER_OPTIONS, index=0, key="q2g_kg_{}".format(pid))
+            with c9:
+                kid_rel = st.selectbox(
+                    "關係類型", list(REL_MAP.keys()), index=0,
+                    format_func=lambda s: REL_MAP[s], key="q2g_krel_{}".format(pid)
+                )
+            with c10:
+                kid_year = st.text_input("預設出生年(選填)", key="q2g_kyr_{}".format(pid))
 
-        ok = st.button("🚀 一鍵建立上述資料", key="q2g_go_{}".format(pid))
-        if ok:
+            col_ok1, col_ok2 = st.columns([1, 2])
+            with col_ok1:
+                confirm_q2g = st.checkbox("我確認建立上述資料", key="q2g_ok_{}".format(pid))
+            with col_ok2:
+                submit_q2g = st.form_submit_button("🚀 一鍵建立", disabled=not confirm_q2g)
+
+        if submit_q2g:
             # A. 父母
             if add_parents and (fa_name or mo_name):
                 fpid = add_person(fa_name or "父親", "男")
@@ -445,13 +478,13 @@ def quick_two_gen(pid: str):
             kids = [s.strip() for s in (kids_csv or "").split(",") if s.strip()]
             if kids:
                 if chosen_mid is None:
-                    # 建立占位配偶，避免孩子沒有婚姻節點可掛
                     placeholder = add_person("未知配偶", "其他/不透漏")
                     chosen_mid = add_or_get_marriage(pid, placeholder, status="married")
                 for nm in kids:
                     cid = add_person(nm, kid_gender, year=kid_year)
                     add_child(chosen_mid, cid, relation=kid_rel)
 
+            st.session_state.celebrate_ready = True
             st.success("已完成快速建立。")
             st.rerun()
 
@@ -483,18 +516,19 @@ def advanced_builder():
         p["note"] = st.text_area("備註(收養/繼親/職業等)", value=p.get("note", ""), key="edit_note_{}".format(pid))
         st.caption("提示：標註『†』= 已故；可在備註註明關係特殊情形。")
 
-        st.markdown("-" * 20)
-        st.markdown("🛑 **危險區**")
+        st.markdown("---")
+        st.markdown("🗑️ **刪除這位成員**")
         if p.get("is_me"):
             st.caption("此成員為『我』，不可刪除。")
         else:
-            col_del1, col_del2 = st.columns([1,2])
-            with col_del1:
-                confirm_del = st.checkbox("我確定要刪除此成員", key="confirm_del_{}".format(pid))
-            with col_del2:
-                if st.button("❌ 刪除此成員", key="btn_del_{}".format(pid), disabled=not confirm_del):
+            cold1, cold2 = st.columns([1,2])
+            with cold1:
+                confirm_del = st.checkbox("我確定要刪除", key="confirm_del_{}".format(pid))
+            with cold2:
+                del_clicked = st.button("❌ 刪除此成員", key="btn_del_{}".format(pid), type="primary", disabled=not confirm_del)
+                if del_clicked:
                     delete_person(pid)
-                    st.success("已刪除。")
+                    st.success("已刪除")
                     st.rerun()
 
     # ⚡ 快速兩代精靈
@@ -513,9 +547,10 @@ def advanced_builder():
             mpid = add_person(mo or "母親", "女")
             mid = add_or_get_marriage(fpid, mpid, status="married")
             add_child(mid, pid, relation="bio")
+            st.session_state.celebrate_ready = True
             st.toast("已新增父母並連結", icon="👨‍👩‍👧")
 
-    # 新增配偶/關係
+    # 新增配偶/關係（單顆按鈕，仍需點擊才新增）
     with cB:
         st.markdown("**配偶/關係**")
         spn = st.text_input("配偶姓名", key="adv_sp_{}".format(pid))
@@ -526,9 +561,13 @@ def advanced_builder():
             key="adv_sps_{}".format(pid),
         )
         if st.button("➕ 新增關係", key="btn_add_sp_{}".format(pid)):
-            spid = add_person(spn or "配偶", spg)
-            add_or_get_marriage(pid, spid, status=sps)
-            st.toast("已新增關係", icon="💍")
+            if spn.strip():
+                spid = add_person(spn.strip(), spg)
+                add_or_get_marriage(pid, spid, status=sps)
+                st.session_state.celebrate_ready = True
+                st.toast("已新增關係", icon="💍")
+            else:
+                st.warning("請先輸入配偶姓名。")
 
     # 新增子女
     with cC:
@@ -549,18 +588,29 @@ def advanced_builder():
                 key="adv_mid_{}".format(pid),
             )
             chosen_mid = mid_labels[mid_idx][0]
-            cn = st.text_input("子女姓名", key="adv_child_name_{}".format(pid))
-            cg = st.selectbox("性別", GENDER_OPTIONS, index=0, key="adv_child_gender_{}".format(pid))
-            cy = st.text_input("出生年(選填)", key="adv_child_year_{}".format(pid))
-            cr = st.selectbox(
-                "關係類型", list(REL_MAP.keys()), index=0,
-                format_func=lambda s: REL_MAP[s],
-                key="adv_child_rel_{}".format(pid),
-            )
-            if st.button("➕ 新增子女", key="btn_add_child_{}".format(pid)):
-                cid = add_person(cn or "孩子", cg, year=cy)
-                add_child(chosen_mid, cid, relation=cr)
-                st.toast("已新增子女", icon="🧒")
+            with st.form("form_add_child_adv_{}".format(pid), clear_on_submit=True):
+                cn = st.text_input("子女姓名", key="adv_child_name_{}".format(pid))
+                cg = st.selectbox("性別", GENDER_OPTIONS, index=0, key="adv_child_gender_{}".format(pid))
+                cy = st.text_input("出生年(選填)", key="adv_child_year_{}".format(pid))
+                cr = st.selectbox(
+                    "關係類型", list(REL_MAP.keys()), index=0,
+                    format_func=lambda s: REL_MAP[s],
+                    key="adv_child_rel_{}".format(pid),
+                )
+                colx1, colx2 = st.columns([1,2])
+                with colx1:
+                    confirm_add_child2 = st.checkbox("我確認新增", key="adv_confirm_child_{}".format(pid))
+                with colx2:
+                    submit_child2 = st.form_submit_button("👶 提交新增子女", disabled=not confirm_add_child2)
+
+            if submit_child2:
+                if cn.strip():
+                    cid = add_person(cn.strip(), cg, year=cy)
+                    add_child(chosen_mid, cid, relation=cr)
+                    st.session_state.celebrate_ready = True
+                    st.success("已新增子女")
+                else:
+                    st.warning("請輸入子女姓名後再提交。")
         else:
             st.caption("尚無關係，請先新增配偶/另一半。")
 
@@ -569,14 +619,22 @@ def advanced_builder():
         st.markdown("**兄弟姊妹（批次）**")
         pmid = get_parent_marriage_of(pid)
         if pmid:
-            sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
-            sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
-            if st.button("➕ 批次新增兄弟姊妹", key="btn_add_sibs_{}".format(pid)):
+            with st.form("form_add_sibs_{}".format(pid), clear_on_submit=True):
+                sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
+                sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
+                cols1, cols2 = st.columns([1,2])
+                with cols1:
+                    confirm_sibs = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
+                with cols2:
+                    submit_sibs = st.form_submit_button("👫 提交新增兄弟姊妹", disabled=not confirm_sibs)
+
+            if submit_sibs:
                 names = [s.strip() for s in sibs.split(",") if s.strip()]
                 for nm in names:
                     sid = add_person(nm, sg)
                     add_child(pmid, sid, relation="bio")
-                st.toast("已新增兄弟姊妹", icon="👫")
+                st.session_state.celebrate_ready = True
+                st.success("已新增兄弟姊妹")
         else:
             st.caption("此成員尚無已知父母，請先新增父母後再新增兄弟姊妹。")
 
