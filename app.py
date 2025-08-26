@@ -461,12 +461,20 @@ def block_graph():
         # 人
         for pid, p in persons.items():
             label = p.get("name","未命名")
-            if p.get("year"): label = label + "\n(" + str(p.get("year")) + ")"
-            if p.get("deceased"): label = label + " †"
-            if p.get("is_me"): label = "⭐ " + label
-            style = GENDER_STYLE.get(p.get("gender") or "其他/不透漏", GENDER_STYLE["其他/不透漏"])
+            if p.get("year"):
+                label = label + "\n(" + str(p.get("year")) + ")"
+            if p.get("deceased"):
+                label = label + "(殁)"
+                fill = "#E0E0E0"   # 淺灰
+            else:
+                fill = GENDER_STYLE.get(p.get("gender") or "其他/不透漏",
+                                        GENDER_STYLE["其他/不透漏"])["fillcolor"]
+            if p.get("is_me"):
+                label = "⭐ " + label
+
             dot.node(pid, label=label, shape="box", style="rounded,filled",
-                     color="#90A4AE", fillcolor=style["fillcolor"], penwidth="1.2")
+                     color="#90A4AE", fillcolor=fill, penwidth="1.2")
+
         # 關係
         marriages = st.session_state.tree["marriages"]
         child_types = st.session_state.tree["child_types"]
