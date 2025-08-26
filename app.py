@@ -251,7 +251,8 @@ def render_graph() -> Digraph:
     for pid, p in persons.items():
         label = p["name"]
         if p.get("year"):
-            label += f"\n({p['year']})"
+            label += f"
+({p['year']})"
         if p.get("deceased"):
             label += " †"
         if p.get("is_me"):
