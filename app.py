@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-🌳 家族樹小幫手（MVP + 進階模式 + 快速兩代；No f-strings）
-- 進階模式：多段婚姻、前任/分居、收養/繼親、半血緣、批次兄弟姊妹
-- 新增：⚡ 快速加直系兩代（父母 + 配偶 + 多子女）
-- 行為保障：所有新增皆需「勾選 + 提交」，避免誤新增；刪除成員有紅色確認鍵
-- 隱私：僅存在 session，不寫入資料庫
+🌳 家族樹小幫手（含新手模式精靈 + 進階模式 + 快速兩代；No f-strings）
+- 新手模式：一步一頁（建立我→配偶→子女→預覽）
+- 進階模式：大家族/多段婚姻/收養/繼親/半血緣/批次兄弟姊妹
+- 行為：所有新增皆需「勾選 + 提交」，避免誤新增；刪除成員具紅色確認鍵
+- 隱私：資料僅存在 session，不寫入資料庫
 """
 from __future__ import annotations
 import json
@@ -14,7 +14,7 @@ from typing import List, Optional
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-UXsubmit-quick2gen-FIX"
+VERSION = "2025-08-26-beginner-wizard"
 
 # =============================
 # Helpers & State
@@ -54,6 +54,11 @@ def init_state():
         st.session_state.layout_lr = False  # False=TB, True=LR
     if "celebrate_ready" not in st.session_state:
         st.session_state.celebrate_ready = False
+    # 新手模式旗標
+    if "beginner_mode" not in st.session_state:
+        st.session_state.beginner_mode = True
+    if "wizard_step" not in st.session_state:
+        st.session_state.wizard_step = 1  # 1~4
 
 # =============================
 # CRUD
@@ -265,7 +270,123 @@ def render_graph() -> Digraph:
     return dot
 
 # =============================
-# UI Sections
+# Newbie Wizard
+# =============================
+def onboarding_wizard():
+    st.header("🪄 新手模式｜一步一步建立家族")
+    step = st.session_state.wizard_step
+    st.progress((step-1)/4.0, text="步驟 {}/4".format(step))
+
+    # Step 1：建立「我」
+    if step == 1:
+        st.subheader("Step 1｜建立『我』")
+        with st.form("wiz_me", clear_on_submit=False):
+            name = st.text_input("我的名稱", value="我", placeholder="例如：黃榮如")
+            gender = st.selectbox("性別", GENDER_OPTIONS, index=0)
+            year = st.text_input("出生年(選填)", placeholder="例如：1968")
+            confirm = st.checkbox("我確認以上資料正確")
+            ok = st.form_submit_button("✅ 建立『我』")
+        if ok:
+            if not confirm:
+                st.warning("請先勾選確認。")
+            else:
+                add_person(name, gender, year=year, is_me=True)
+                st.session_state.celebrate_ready = True
+                st.session_state.wizard_step = 2
+                st.rerun()
+
+    # Step 2：新增配偶（可略過）
+    if step == 2:
+        st.subheader("Step 2｜新增配偶（可略過）")
+        with st.form("wiz_spouse", clear_on_submit=True):
+            sp_name = st.text_input("配偶姓名", placeholder="例如：陳威翔")
+            sp_gender = st.selectbox("性別", GENDER_OPTIONS, index=1)
+            sp_status = st.selectbox("關係狀態", list(STATUS_MAP.keys()),
+                                     index=0, format_func=lambda s: STATUS_MAP[s])
+            col1, col2 = st.columns(2)
+            with col1:
+                skip = st.form_submit_button("先略過 →")
+            with col2:
+                confirm = st.checkbox("我確認新增", key="wiz_spouse_confirm")
+                ok = st.form_submit_button("💍 新增配偶")
+        if skip:
+            st.session_state.wizard_step = 3
+            st.rerun()
+        if ok:
+            if not confirm or not sp_name.strip():
+                st.warning("請輸入姓名並勾選確認；或按「先略過」。")
+            else:
+                me = get_me_pid()
+                sp = add_person(sp_name.strip(), sp_gender)
+                add_or_get_marriage(me, sp, status=sp_status)
+                st.session_state.celebrate_ready = True
+                st.session_state.wizard_step = 3
+                st.rerun()
+
+    # Step 3：新增子女（可略過）
+    if step == 3:
+        st.subheader("Step 3｜新增子女（可略過）")
+        mids = get_marriages_of(get_me_pid()) if get_me_pid() else []
+        if not mids:
+            st.info("你尚未新增配偶，若要先加孩子也可以，系統會建立一位『未知配偶』以便連結。")
+        with st.form("wiz_child", clear_on_submit=True):
+            c_name = st.text_input("子女姓名", placeholder="例如：黃榮惠")
+            c_gender = st.selectbox("性別", GENDER_OPTIONS, index=0)
+            c_year = st.text_input("出生年(選填)", placeholder="例如：1998")
+            col1, col2 = st.columns(2)
+            with col1:
+                skip = st.form_submit_button("先略過 →")
+            with col2:
+                confirm = st.checkbox("我確認新增", key="wiz_child_confirm")
+                ok = st.form_submit_button("👶 新增子女")
+        if skip:
+            st.session_state.wizard_step = 4
+            st.rerun()
+        if ok:
+            if not confirm or not c_name.strip():
+                st.warning("請輸入姓名並勾選確認；或按「先略過」。")
+            else:
+                me = get_me_pid()
+                mids = get_marriages_of(me)
+                chosen_mid = mids[0] if mids else None
+                if chosen_mid is None:
+                    placeholder = add_person("未知配偶", "其他/不透漏")
+                    chosen_mid = add_or_get_marriage(me, placeholder, status="married")
+                cid = add_person(c_name.strip(), c_gender, year=c_year)
+                add_child(chosen_mid, cid, relation="bio")
+                st.session_state.celebrate_ready = True
+                st.session_state.wizard_step = 4
+                st.rerun()
+
+    # Step 4：預覽家族圖 & 建議下一步
+    if step == 4:
+        st.subheader("Step 4｜預覽家族圖")
+        try:
+            dot = render_graph()
+            st.graphviz_chart(dot, use_container_width=True)
+        except Exception as e:
+            st.error("圖形渲染失敗：{}".format(e))
+
+        st.markdown("### ✅ 接下來你可以：")
+        st.markdown("1. 前往 **進階模式** 補：父母、前任/分居、出生年、備註")
+        st.markdown("2. 開啟 **⚡ 快速兩代**：一次補上父母/配偶/多個子女")
+        st.markdown("3. 到 **📦 匯入/匯出** 下載 JSON 備份")
+
+        colA, colB = st.columns([1,1])
+        with colA:
+            if st.button("🔧 進階模式（大家族）"):
+                st.session_state.beginner_mode = False
+                st.rerun()
+        with colB:
+            if st.button("↩️ 回到 Step 2"):
+                st.session_state.wizard_step = 2
+                st.rerun()
+
+    st.divider()
+    st.caption("提示：任何步驟都可以略過；你可以隨時切換回進階模式。")
+
+# =============================
+# UI Sections (Advanced)
 # =============================
 def sidebar_progress():
     st.sidebar.header("🎯 小任務進度")
@@ -413,7 +534,7 @@ def form_spouse_and_children():
     else:
         st.info("尚未新增任何配偶/婚姻，請先新增配偶。")
 
-# —— ⚡ 快速加直系兩代（父母 + 配偶 + 多子女；按鈕永遠可按，提交時驗證）
+# —— ⚡ 快速加直系兩代（父母 + 配偶 + 多子女；按鈕可按、提交時驗證）
 def quick_two_gen(pid: str):
     persons = st.session_state.tree["persons"]
 
@@ -625,30 +746,34 @@ def advanced_builder():
         else:
             st.caption("尚無關係，請先新增配偶/另一半。")
 
-    # 批次兄弟姊妹（提交制）
+    # 批次兄弟姊妹（不使用 form；按鈕可按，點擊時驗證）
     with cD:
         st.markdown("**兄弟姊妹（批次）**")
         pmid = get_parent_marriage_of(pid)
         if pmid:
-            with st.form("form_add_sibs_{}".format(pid), clear_on_submit=True):
-                sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
-                sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
-                cols1, cols2 = st.columns([1,2])
-                with cols1:
-                    confirm_sibs = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
-                with cols2:
-                    submit_sibs = st.form_submit_button("👫 提交新增兄弟姊妹", disabled=False)
+            sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
+            sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
 
-            if submit_sibs:
+            cols1, cols2 = st.columns([1, 2])
+            with cols1:
+                confirm_sibs = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
+            with cols2:
+                click_add_sibs = st.button("👫 提交新增兄弟姊妹", key="btn_add_sibs_submit_{}".format(pid))
+
+            if click_add_sibs:
                 if not confirm_sibs:
                     st.warning("請先勾選「我確認新增」。")
                 else:
-                    names = [s.strip() for s in sibs.split(",") if s.strip()]
-                    for nm in names:
-                        sid = add_person(nm, sg)
-                        add_child(pmid, sid, relation="bio")
-                    st.session_state.celebrate_ready = True
-                    st.success("已新增兄弟姊妹")
+                    names = [s.strip() for s in (sibs or "").split(",") if s.strip()]
+                    if not names:
+                        st.warning("請至少輸入一個姓名（以逗號分隔）。")
+                    else:
+                        for nm in names:
+                            sid = add_person(nm, sg)
+                            add_child(pmid, sid, relation="bio")
+                        st.session_state.celebrate_ready = True
+                        st.success("已新增兄弟姊妹")
+                        st.rerun()
         else:
             st.caption("此成員尚無已知父母，請先新增父母後再新增兄弟姊妹。")
 
@@ -733,63 +858,73 @@ def main():
     init_state()
 
     st.write("🟢 App booted — {}".format(VERSION))  # 顯示版本號方便確認
-
     st.title("🌳 家族樹小幫手｜低調好玩版")
-    st.caption("填三四個欄位，立刻畫出家族樹；需要時開啟進階模式處理大家族與複雜關係。")
+    st.caption("新手用精靈，老手用進階。你隨時可在左側切換模式。")
 
     with st.sidebar:
         if st.button("✨ 載入示範家族", key="seed_demo_btn"):
             seed_demo()
         st.toggle("水平排列 (LR)", key="layout_lr", help="預設為垂直排列 (TB)")
+        st.markdown("---")
+        st.checkbox("新手模式（建議新用戶）", key="beginner_mode")
 
     try:
         sidebar_progress()
     except Exception as e:
         st.error("側欄進度顯示失敗：{}".format(e))
 
-    try:
-        tab_build, tab_graph, tab_table, tab_adv, tab_io = st.tabs(
-            ["✍️ 建立家庭", "🖼 家族圖", "📋 資料表", "🎛 進階建立", "📦 匯入/匯出"]
-        )
-    except Exception as e:
-        st.error("Tabs 建立失敗：{}".format(e))
-        return
-
-    with tab_build:
-        try:
-            form_me()
-            st.divider()
-            form_parents()
-            st.divider()
-            form_spouse_and_children()
-        except Exception as e:
-            st.error("建立家庭區塊失敗：{}".format(e))
-
-    with tab_graph:
-        try:
-            dot = render_graph()
-            st.graphviz_chart(dot, use_container_width=True)
-        except Exception as e:
-            st.error("圖形渲染失敗：{}".format(e))
-        st.caption("提示：可在側欄切換水平/垂直排列；離異/分居以虛線/點線表示；收養/繼親子女以不同線型表示。")
-
-    with tab_table:
-        try:
+    # 切換：新手模式 vs 進階模式
+    if st.session_state.beginner_mode:
+        # 新手模式：顯示精靈 + 簡版圖/表/匯出
+        onboarding_wizard()
+        tab_graph, tab_table, tab_io = st.tabs(["🖼 家族圖", "📋 資料表", "📦 匯入/匯出"])
+        with tab_graph:
+            try:
+                dot = render_graph()
+                st.graphviz_chart(dot, use_container_width=True)
+            except Exception:
+                st.info("尚未有資料。請在上方步驟建立成員。")
+        with tab_table:
             data_tables()
-        except Exception as e:
-            st.error("資料表顯示失敗：{}".format(e))
-
-    with tab_adv:
-        try:
-            advanced_builder()
-        except Exception as e:
-            st.error("進階建立區塊失敗：{}".format(e))
-
-    with tab_io:
-        try:
+        with tab_io:
             import_export()
+    else:
+        # 進階模式：完整功能
+        try:
+            tab_build, tab_graph, tab_table, tab_adv, tab_io = st.tabs(
+                ["✍️ 建立家庭", "🖼 家族圖", "📋 資料表", "🎛 進階建立", "📦 匯入/匯出"]
+            )
         except Exception as e:
-            st.error("匯入/匯出區塊失敗：{}".format(e))
+            st.error("Tabs 建立失敗：{}".format(e))
+            return
+
+        with tab_build:
+            try:
+                form_me(); st.divider(); form_parents(); st.divider(); form_spouse_and_children()
+            except Exception as e:
+                st.error("建立家庭區塊失敗：{}".format(e))
+        with tab_graph:
+            try:
+                dot = render_graph()
+                st.graphviz_chart(dot, use_container_width=True)
+            except Exception as e:
+                st.error("圖形渲染失敗：{}".format(e))
+            st.caption("提示：可在側欄切換水平/垂直排列；離異/分居以虛線/點線表示；收養/繼親子女以不同線型表示。")
+        with tab_table:
+            try:
+                data_tables()
+            except Exception as e:
+                st.error("資料表顯示失敗：{}".format(e))
+        with tab_adv:
+            try:
+                advanced_builder()
+            except Exception as e:
+                st.error("進階建立區塊失敗：{}".format(e))
+        with tab_io:
+            try:
+                import_export()
+            except Exception as e:
+                st.error("匯入/匯出區塊失敗：{}".format(e))
 
     st.divider()
     st.caption("隱私承諾：您的輸入僅用於本次即時計算，不寫入資料庫；下載/離開頁面即清空。")
