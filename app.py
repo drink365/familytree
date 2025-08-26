@@ -364,8 +364,8 @@ def form_spouse_and_children():
     # 配偶（含狀態）
     with st.expander("＋ 新增配偶/另一半（可標注前任/分居）"):
         sp_name = st.text_input("姓名", value="另一半")
-        sp_gender = st.selectbox("性別", ["女", "男", "其他/不透漏"], index=1)
-        sp_status = st.selectbox("關係狀態", ["married", "divorced", "separated"], format_func=lambda s:{"married":"已婚","divorced":"前任(離異)","separated":"分居"}[s])
+        sp_gender = st.selectbox("性別", ["女", "男", "其他/不透漏"], index=1, key="sp_gender_main")
+        sp_status = st.selectbox("關係狀態", ["married", "divorced", "separated"], format_func=lambda s:{"married":"已婚","divorced":"前任(離異)","separated":"分居"}[s], key="sp_status_main")
         add_sp = st.button("新增並建立關係")
         if add_sp:
             sp = add_person(sp_name, sp_gender)
@@ -387,9 +387,9 @@ def form_spouse_and_children():
 
         with st.expander("＋ 新增子女"):
             c_name = st.text_input("子女姓名", value="孩子")
-            c_gender = st.selectbox("性別", ["女", "男", "其他/不透漏"], index=0)
+            c_gender = st.selectbox("性別", ["女", "男", "其他/不透漏"], index=0, key=f"child_gender_main_{chosen_mid}")
             c_year = st.text_input("出生年(選填)")
-            c_rel = st.selectbox("關係類型", ["bio", "adopted", "step"], format_func=lambda s:{"bio":"親生","adopted":"收養","step":"繼親"}[s])
+            c_rel = st.selectbox("關係類型", ["bio", "adopted", "step"], format_func=lambda s:{"bio":"親生","adopted":"收養","step":"繼親"}[s], key=f"child_rel_main_{chosen_mid}")
             add_c = st.button("新增子女並連結")
             if add_c:
                 cid = add_person(c_name, c_gender, year=c_year)
@@ -418,11 +418,11 @@ def advanced_builder():
 
     with st.expander("✏️ 編輯成員資料", expanded=True):
         c1, c2, c3, c4 = st.columns([2,1,1,1])
-        p["name"] = c1.text_input("名稱", value=p["name"])
-        p["gender"] = c2.selectbox("性別", ["女", "男", "其他/不透漏"], index=["女","男","其他/不透漏"].index(p.get("gender","其他/不透漏")))
-        p["year"] = c3.text_input("出生年(選填)", value=p.get("year",""))
-        p["deceased"] = c4.toggle("已故?", value=p.get("deceased", False))
-        p["note"] = st.text_area("備註(收養/繼親/職業等)", value=p.get("note",""))
+        p["name"] = c1.text_input("名稱", value=p["name"], key=f"edit_name_{pid}")
+        p["gender"] = c2.selectbox("性別", ["女", "男", "其他/不透漏"], index=["女","男","其他/不透漏"].index(p.get("gender","其他/不透漏")), key=f"edit_gender_{pid}")
+        p["year"] = c3.text_input("出生年(選填)", value=p.get("year",""), key=f"edit_year_{pid}")
+        p["deceased"] = c4.toggle("已故?", value=p.get("deceased", False), key=f"edit_dec_{pid}")
+        p["note"] = st.text_area("備註(收養/繼親/職業等)", value=p.get("note",""), key=f"edit_note_{pid}")
         st.caption("提示：標註『†』= 已故；可在備註註明關係特殊情形。")
 
     st.markdown("---")
