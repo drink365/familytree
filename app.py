@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-🌳 家族樹小幫手（含新手模式精靈 + 進階模式 + 穩定導覽；No f-strings）
+🌳 家族樹小幫手（新手精靈 + 進階模式 + 穩定導覽 + 夫妻並排；No f-strings）
 - 新手模式：一步一頁（建立我→配偶→子女→預覽）
 - 進階模式：大家族/多段婚姻/收養/繼親/半血緣/批次兄弟姊妹
 - 穩定導覽：用 radio 當主導航，rerun 後仍停留在原頁，不會跳回第一頁
-- 行為：所有新增皆需「勾選 + 提交」，避免誤新增；刪除成員具紅色確認鍵
+- 編輯成員：表單提交制，按「💾 儲存變更」才會寫入
+- 家族圖：每段婚姻用 subgraph(rank=same) 讓配偶緊鄰；用隱形邊與權重強化並排
 - 隱私：資料僅存在 session，不寫入資料庫
 """
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import List, Optional
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-beginner-wizard-stable-nav"
+VERSION = "2025-08-26-stable-nav-save-form-spouse-pair"
 
 # =============================
 # Helpers & State
@@ -62,9 +63,9 @@ def init_state():
         st.session_state.wizard_step = 1  # 1~4
     # 穩定導覽：記住目前所在頁
     if "main_nav" not in st.session_state:
-        st.session_state.main_nav = "✍️ 建立家庭"      # 進階模式預設
+        st.session_state.main_nav = "🎛 進階建立"      # 以你的使用情境，預設落在進階建立
     if "main_nav_beginner" not in st.session_state:
-        st.session_state.main_nav_beginner = "🖼 家族圖"  # 新手模式預設
+        st.session_state.main_nav_beginner = "🖼 家族圖"
 
 # =============================
 # CRUD
@@ -219,14 +220,14 @@ GENDER_STYLE = {
     "其他/不透漏": {"fillcolor": "#F3F4F6"},
 }
 STATUS_EDGE_STYLE = {
-    "married":   {"style": "solid",  "color": "#9E9E9E"},
-    "divorced":  {"style": "dashed", "color": "#9E9E9E"},
-    "separated": {"style": "dotted", "color": "#9E9E9E"},
+    "married":   {"style": "solid",  "color": "#9E9E9E", "weight": "2"},
+    "divorced":  {"style": "dashed", "color": "#9E9E9E", "weight": "1"},
+    "separated": {"style": "dotted", "color": "#9E9E9E", "weight": "1"},
 }
 CHILD_EDGE_STYLE = {
-    "bio":     {"style": "solid",  "color": "#BDBDBD"},
-    "adopted": {"style": "dotted", "color": "#BDBDBD"},
-    "step":    {"style": "dashed", "color": "#BDBDBD"},
+    "bio":     {"style": "solid",  "color": "#BDBDBD", "weight": "2"},
+    "adopted": {"style": "dotted", "color": "#BDBDBD", "weight": "1"},
+    "step":    {"style": "dashed", "color": "#BDBDBD", "weight": "1"},
 }
 
 def render_graph() -> Digraph:
@@ -239,13 +240,13 @@ def render_graph() -> Digraph:
         graph_attr={
             "rankdir": "LR" if st.session_state.layout_lr else "TB",
             "splines": "spline",
-            "nodesep": "0.4",
-            "ranksep": "0.6",
+            "nodesep": "0.35",
+            "ranksep": "0.55",
             "fontname": "PingFang TC, Microsoft JhengHei, Noto Sans CJK TC, Arial",
         },
     )
 
-    # 人
+    # 先畫所有人
     for pid, p in persons.items():
         label = p.get("name", "未命名")
         year = p.get("year")
@@ -261,18 +262,38 @@ def render_graph() -> Digraph:
             style="rounded,filled", color="#90A4AE", fillcolor=style["fillcolor"], penwidth="1.2"
         )
 
-    # 婚姻點 + 線
+    # 針對每段婚姻，建立一個 subgraph 讓配偶與婚姻點 rank=same（緊鄰）
     for mid, m in marriages.items():
+        s1 = m.get("spouse1")
+        s2 = m.get("spouse2")
+        # 婚姻點
         dot.node(mid, label="", shape="point", width="0.02")
+
+        # 配偶兩人與婚姻點同 rank，並加一條隱形邊以保持貼近
+        with dot.subgraph(name="cluster_" + mid) as sg:
+            sg.attr(rank="same")
+            if s1:
+                sg.node(s1)
+            if s2:
+                sg.node(s2)
+            sg.node(mid)
+            if s1 and s2:
+                sg.edge(s1, s2, style="invis", weight="10")  # invisible to glue spouses
+
+        # 婚姻邊線
         stl = STATUS_EDGE_STYLE.get(m.get("status", "married"), STATUS_EDGE_STYLE["married"])
-        if m.get("spouse1") and m.get("spouse2"):
-            dot.edge(m["spouse1"], mid, color=stl["color"], style=stl["style"])
-            dot.edge(m["spouse2"], mid, color=stl["color"], style=stl["style"])
+        if s1:
+            dot.edge(s1, mid, color=stl["color"], style=stl["style"], weight=stl["weight"])
+        if s2:
+            dot.edge(s2, mid, color=stl["color"], style=stl["style"], weight=stl["weight"])
+
+        # 子女線（依關係型式指定線型）
         for c in m.get("children", []):
             if c in persons:
                 rel = child_types.get(mid, {}).get(c, "bio")
                 cstl = CHILD_EDGE_STYLE.get(rel, CHILD_EDGE_STYLE["bio"])
-                dot.edge(mid, c, color=cstl["color"], style=cstl["style"])
+                dot.edge(mid, c, color=cstl["color"], style=cstl["style"], weight=cstl["weight"])
+
     return dot
 
 # =============================
@@ -418,6 +439,7 @@ def form_me():
     me_pid = get_me_pid()
     if me_pid:
         p = st.session_state.tree["persons"][me_pid]
+        # 直接編輯我：這裡維持即時寫入，避免兩層表單
         col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
         with col1:
             p["name"] = st.text_input("我的名稱", value=p["name"], key="me_name")
@@ -642,16 +664,26 @@ def advanced_builder():
     pid = id_list[idx]
     p = persons[pid]
 
-    # ✏️ 編輯成員
+    # ✏️ 編輯成員（表單提交制）
     with st.expander("✏️ 編輯成員資料", expanded=True):
-        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-        p["name"] = c1.text_input("名稱", value=p["name"], key="edit_name_{}".format(pid))
-        g_idx = _safe_index(GENDER_OPTIONS, p.get("gender", "其他/不透漏"), default=2)
-        p["gender"] = c2.selectbox("性別", GENDER_OPTIONS, index=g_idx, key="edit_gender_{}".format(pid))
-        p["year"] = c3.text_input("出生年(選填)", value=p.get("year", ""), key="edit_year_{}".format(pid))
-        p["deceased"] = c4.toggle("已故?", value=p.get("deceased", False), key="edit_dec_{}".format(pid))
-        p["note"] = st.text_area("備註(收養/繼親/職業等)", value=p.get("note", ""), key="edit_note_{}".format(pid))
-        st.caption("提示：標註『†』= 已故；可在備註註明關係特殊情形。")
+        with st.form("form_edit_{}".format(pid), clear_on_submit=False):
+            c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+            name_buf = c1.text_input("名稱", value=p.get("name", ""), key="edit_name_{}".format(pid))
+            g_idx = _safe_index(GENDER_OPTIONS, p.get("gender", "其他/不透漏"), default=2)
+            gender_buf = c2.selectbox("性別", GENDER_OPTIONS, index=g_idx, key="edit_gender_{}".format(pid))
+            year_buf = c3.text_input("出生年(選填)", value=p.get("year", ""), key="edit_year_{}".format(pid))
+            dec_buf = c4.toggle("已故?", value=p.get("deceased", False), key="edit_dec_{}".format(pid))
+            note_buf = st.text_area("備註(收養/繼親/職業等)", value=p.get("note", ""), key="edit_note_{}".format(pid))
+            saved = st.form_submit_button("💾 儲存變更")
+        if saved:
+            p["name"] = (name_buf or "").strip() or "未命名"
+            p["gender"] = gender_buf
+            p["year"] = (year_buf or "").strip()
+            p["deceased"] = bool(dec_buf)
+            p["note"] = (note_buf or "").strip()
+            st.success("已儲存變更")
+
+        st.caption("提示：標註『†』= 已故；只有按下「💾 儲存變更」才會寫入。")
 
         st.markdown("---")
         st.markdown("🗑️ **刪除這位成員**")
@@ -755,7 +787,7 @@ def advanced_builder():
         else:
             st.caption("尚無關係，請先新增配偶/另一半。")
 
-    # 兄弟姊妹（批次）— 簡化版：整行按鈕、點擊時驗證
+    # 兄弟姊妹（批次）— 整行按鈕、點擊時驗證
     with cD:
         st.markdown("**兄弟姊妹（批次）**")
         pmid = get_parent_marriage_of(pid)
@@ -766,8 +798,6 @@ def advanced_builder():
             sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
             sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
             confirm_sibs = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
-
-            # 整行主要按鈕（避免被誤判 disabled）
             click_add_sibs = st.button("👫 提交新增兄弟姊妹", key="btn_add_sibs_submit_{}".format(pid))
 
             if click_add_sibs:
@@ -881,11 +911,13 @@ def main():
     except Exception as e:
         st.error("側欄進度顯示失敗：{}".format(e))
 
-    # 切換：新手模式 vs 進階模式（使用 radio 導覽，rerun 後保留所在頁）
+    # 切換：新手模式 vs 進階模式（radio 導覽，rerun 後保留所在頁）
     if st.session_state.beginner_mode:
         onboarding_wizard()
 
         nav_items_b = ["🖼 家族圖", "📋 資料表", "📦 匯入/匯出"]
+        if st.session_state.main_nav_beginner not in nav_items_b:
+            st.session_state.main_nav_beginner = "🖼 家族圖"
         st.session_state.main_nav_beginner = st.radio(
             "導覽", nav_items_b, index=nav_items_b.index(st.session_state.main_nav_beginner),
             horizontal=True, key="nav_b"
@@ -906,6 +938,8 @@ def main():
 
     else:
         nav_items = ["✍️ 建立家庭", "🖼 家族圖", "📋 資料表", "🎛 進階建立", "📦 匯入/匯出"]
+        if st.session_state.main_nav not in nav_items:
+            st.session_state.main_nav = "🎛 進階建立"
         st.session_state.main_nav = st.radio(
             "導覽", nav_items, index=nav_items.index(st.session_state.main_nav),
             horizontal=True, key="nav_main"
