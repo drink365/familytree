@@ -5,8 +5,8 @@
 - 行為：所有新增皆需「勾選 + 提交」，避免誤新增；按鈕永遠可按（提交時驗證）
 - 支援：多段婚姻、前任/分居、收養/繼親、半血緣、批次兄弟姊妹、快速兩代、一鍵刪除
 - 已故顯示：名字後加「(殁)」，底色淺灰
-- 匯入需按「📥 套用匯入」才覆蓋，避免選檔後每次 rerun 被自動覆蓋
-- 法定繼承：依民法 1138（法定繼承人及其順位）、1139（第一順序繼承人之決定）、1140（代位繼承）、1144（配偶之應繼分）
+- 匯入：先暫存於 session_state，上按「📥 套用匯入」才覆蓋（避免 rerun 造成沒反應）
+- 法定繼承：依民法 1138（順位）、1139（第一順序繼承人之決定）、1140（代位繼承）、1144（配偶應繼分）
 """
 from __future__ import annotations
 import json, uuid
@@ -15,7 +15,7 @@ from typing import List, Optional, Dict, Tuple
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-onepage-heirs-1138-1140"
+VERSION = "2025-08-26-onepage-heirs-1138-1144-import-stable"
 
 # ====== 常量 ======
 GENDER_OPTIONS = ["女", "男", "其他/不透漏"]
@@ -136,7 +136,7 @@ def seed_demo():
     st.session_state.celebrate_ready = True
     st.toast("已載入示範家族。", icon="✅")
 
-# ====== 法定繼承：核心演算法 ======
+# ====== 法定繼承：核心演算法（1138/1139/1140/1144） ======
 def _is_alive(pid):
     p = st.session_state.tree["persons"].get(pid, {})
     return not p.get("deceased", False)
@@ -145,12 +145,11 @@ def _child_rel(mid, cid):
     return st.session_state.tree["child_types"].get(mid, {}).get(cid, "bio")
 
 def _eligible_child(mid, cid):
-    # 只有親生與收養有繼承權；繼親不具法定血親/收養關係
+    # 只有親生與收養有法定繼承親子關係；繼親不具
     rel = _child_rel(mid, cid)
     return rel in ("bio", "adopted")
 
 def _list_children_of(person_id):
-    # 收集此人的所有親生/收養子女（跨婚姻）
     res = []
     for mid, m in st.session_state.tree["marriages"].items():
         if person_id in (m.get("spouse1"), m.get("spouse2")):
@@ -166,25 +165,17 @@ def _list_parents_of(person_id):
     return [p for p in [m.get("spouse1"), m.get("spouse2")] if p]
 
 def _list_siblings_of(person_id):
-    # 透過父母婚姻找全血/半血兄弟姊妹（跨雙親所有婚姻）
-    persons = st.session_state.tree["persons"]
     sibs = set()
-
-    # 同父同母（父母的婚姻）
     pmid = get_parent_marriage_of(person_id)
     if pmid:
         for cid in st.session_state.tree["marriages"][pmid].get("children", []):
             if cid != person_id: sibs.add(cid)
-
-    # 同父異母（父親其他婚姻）
     parents = _list_parents_of(person_id)
     for par in parents:
-        # 找此家長的所有婚姻
         for mid, m in st.session_state.tree["marriages"].items():
             if par in (m.get("spouse1"), m.get("spouse2")):
                 for cid in m.get("children", []):
-                    if cid != person_id:
-                        sibs.add(cid)
+                    if cid != person_id: sibs.add(cid)
     return list(sibs)
 
 def _list_spouses_alive_of(person_id):
@@ -192,51 +183,36 @@ def _list_spouses_alive_of(person_id):
     for mid, m in st.session_state.tree["marriages"].items():
         if person_id in (m.get("spouse1"), m.get("spouse2")):
             status = m.get("status", "married")
-            if status == "divorced":  # 離異不具配偶身分
+            if status == "divorced":
                 continue
             other = m.get("spouse1") if m.get("spouse2") == person_id else m.get("spouse2")
             if other and _is_alive(other):
                 spouses.append(other)
-    # 去重
     return list(dict.fromkeys(spouses).keys())
 
 def _stirpes_descendants(children_pairs):
     """
     逐支(per stirpes)遞迴：輸入 list[(mid, child_pid)]
     輸出 list[(heir_pid, weight)]，weights 加總 = 1
-    規則：每個子女（支）先均分 1/N；該子女若死亡，則由其直系卑親屬
-          於該支內再平均承受；可遞迴到更下代。
-    僅納入「仍在世」的實際承受者；若某支全滅則該支不分配，其份額在最上層已被均分，不再重分。
+    - 每位子女（支）先均分 1/N；該子女若先亡，由其直系卑親屬於該支內再平均承受；可遞迴。
+    - 僅納入仍在世之承受者；整支無人在世者捨棄。
     """
-    persons = st.session_state.tree["persons"]
-    # 有效支（子女存活或其下仍有人）
     branches = []
     for mid, child in children_pairs:
         if _eligible_child(mid, child):
             if _is_alive(child):
-                branches.append([("leaf", child)])  # 直接承受
+                branches.append([("leaf", child)])
             else:
-                # 找此子女的子女（孫輩）
-                gkids = _list_children_of(child)
-                leaves = _stirpes_descendants(gkids)
-                if leaves:
-                    branches.append(leaves)
-                else:
-                    # 此支無人在世，整支捨棄
-                    pass
-
+                leaves = _stirpes_descendants(_list_children_of(child))
+                if leaves: branches.append(leaves)
     n = len(branches)
-    if n == 0:
-        return []
-
+    if n == 0: return []
     out = []
     base = 1.0 / float(n)
     for leaves in branches:
-        # 此支內平均
         k = len(leaves)
         for kind, hid in leaves:
             out.append((hid, base / float(k)))
-    # 合併同人
     merged = {}
     for hid, w in out:
         merged[hid] = merged.get(hid, 0.0) + w
@@ -245,159 +221,135 @@ def _stirpes_descendants(children_pairs):
 def heirs_by_order(decedent_pid):
     """
     回傳 (order, heirs_list, spouses_alive)
-    order: 1/2/3/4 或 None（無任何繼承人）
-    heirs_list: 依 order 的人選（第一與第三含代位展開後的最終承受者）
-    spouses_alive: 存活配偶清單
+    order: 1/2/3/4 或 None
+    heirs_list: 依 order 的人選（第1與第3順位含代位展開後的最終承受者）
+    spouses_alive: 存活配偶清單（未處理重婚等例外）
     """
     spouses_alive = _list_spouses_alive_of(decedent_pid)
 
-    # 第1順位：直系卑親屬（子孫；含代位）
+    # 第1順位：直系卑親屬（1138、1139；含代位 1140）
     children = _list_children_of(decedent_pid)
-    first = _stirpes_descendants(children)  # list[(pid, weight)]
+    first = _stirpes_descendants(children)
     if first:
         return (1, first, spouses_alive)
 
-    # 第2順位：父母（在世者）
+    # 第2順位：父母（在世者；1138）
     parents = [pid for pid in _list_parents_of(decedent_pid) if _is_alive(pid)]
     if parents:
-        # 以等分呈現；shares 在後面一起算
         second = [(pid, 1.0 / float(len(parents))) for pid in parents]
         return (2, second, spouses_alive)
 
-    # 第3順位：兄弟姊妹（含代位）
+    # 第3順位：兄弟姊妹與代位（1138、1140）
     sibs = _list_siblings_of(decedent_pid)
-    # 以父母各自支系均分通常涉及更細法條；此處依 1139 代位規則，直接將兄弟姊妹視為同一層的支
-    # 對每位兄弟姊妹做 per stirpes
     branches = []
     for sid in sibs:
-        # 對每位兄弟姊妹，視為一支
         if _is_alive(sid):
             branches.append([("leaf", sid)])
         else:
             leaves = _stirpes_descendants(_list_children_of(sid))
-            if leaves:
-                branches.append(leaves)
+            if leaves: branches.append(leaves)
     if branches:
         n = len(branches)
-        third_out = []
+        out = []
         for leaves in branches:
             k = len(leaves)
             for kind, hid in leaves:
-                third_out.append((hid, 1.0 / float(n) / float(k)))
-        # 合併
+                out.append((hid, 1.0 / float(n) / float(k)))
         merged = {}
-        for hid, w in third_out:
+        for hid, w in out:
             merged[hid] = merged.get(hid, 0.0) + w
         third = [(pid, merged[pid]) for pid in merged]
         return (3, third, spouses_alive)
 
-    # 第4順位：祖父母（在世者）
-    # 祖父母取得方式：找父母，再找其父母
+    # 第4順位：祖父母（在世者；1138）
     gps = set()
     parents_all = _list_parents_of(decedent_pid)
     for par in parents_all:
         for gp in _list_parents_of(par):
-            if _is_alive(gp):
-                gps.add(gp)
+            if _is_alive(gp): gps.add(gp)
     if gps:
         fourth = [(pid, 1.0 / float(len(gps))) for pid in gps]
         return (4, fourth, spouses_alive)
 
-    # 無任何繼承人（不含配偶）
     return (None, [], spouses_alive)
 
 def compute_statutory_shares(decedent_pid):
     """
     回傳 dict:
         {"order": n, "basis": "文字", "result": [{"pid":..,"share":..,"role":..}], "notes":[...]}
-    只依 1138/1139/1140 計算，不處理特留分、特種繼承、酌減贈與、遺囑、拋棄、喪失繼承權等。
+    僅依 1138/1139/1140/1144 試算；未處理遺囑、拋棄/喪失繼承權、特留分、夫妻剩餘財產分配等。
     """
     persons = st.session_state.tree["persons"]
     order, group, spouses = heirs_by_order(decedent_pid)
-    res = []
-    notes = []
-    basis = "依民法第1138條（順位）、1139條（代位）、1140條（配偶應繼分）試算"
+    res, notes = [], []
+    basis = "依民法第1138條（順位）、1139條（第一順序繼承人之決定）、1140條（代位繼承）、1144條（配偶應繼分）試算"
 
-    # 沒有任何血親繼承人
     if order is None:
         if spouses:
-            # 無其他順位時，配偶單獨繼承
             for sp in spouses:
                 res.append({"pid": sp, "share": 1.0, "role": "配偶"})
-            notes.append("無第一至第四順位繼承人，配偶單獨繼承（1140）")
+            notes.append("無第一至第四順位繼承人，配偶單獨繼承（1144）。")
         else:
-            notes.append("未找到法定繼承人（本工具未處理無人承受之歸屬問題）。")
+            notes.append("未找到法定繼承人（本工具未處理無人承受之歸屬）。")
         return {"order": order, "basis": basis, "result": res, "notes": notes}
 
-    # 有配偶的三種並存情形（1140）
+    # 配偶並存（1144）
     if spouses:
         if order == 1:
-            # 配偶 1/2；子孫合計 1/2（逐支）
-            spouse_total = 0.5
+            spouse_total = 0.5    # 與第一順位並存：各半
             line_total = 0.5
             each_sp = spouse_total / float(len(spouses))
-            for sp in spouses:
-                res.append({"pid": sp, "share": each_sp, "role": "配偶"})
-            # 子孫按 group 的 weight 比例分 line_total
+            for sp in spouses: res.append({"pid": sp, "share": each_sp, "role": "配偶"})
             total_w = sum(w for _, w in group) or 1.0
             for pid, w in group:
                 res.append({"pid": pid, "share": line_total * (w / total_w), "role": "直系卑親屬"})
-            notes.append("配偶與第一順位並存：配偶1/2，直系卑親屬合計1/2（1140）。")
+            notes.append("配偶與第一順位並存：配偶1/2，直系卑親屬合計1/2（1144）。")
 
         elif order == 2:
-            # 配偶 2/3；父母合計 1/3（平均）
             spouse_total = 2.0/3.0
             parent_total = 1.0/3.0
             each_sp = spouse_total / float(len(spouses))
-            for sp in spouses:
-                res.append({"pid": sp, "share": each_sp, "role": "配偶"})
+            for sp in spouses: res.append({"pid": sp, "share": each_sp, "role": "配偶"})
             alive_parents = [pid for pid, _ in group]
             if alive_parents:
                 each_parent = parent_total / float(len(alive_parents))
                 for pid in alive_parents:
                     res.append({"pid": pid, "share": each_parent, "role": "父母"})
-            notes.append("配偶與第二順位並存：配偶2/3，父母合計1/3（1140）。")
+            notes.append("配偶與第二順位並存：配偶2/3，父母合計1/3（1144）。")
 
         elif order == 3:
-            # 配偶 2/3；兄弟姊妹合計 1/3（逐支）
             spouse_total = 2.0/3.0
             sib_total = 1.0/3.0
             each_sp = spouse_total / float(len(spouses))
-            for sp in spouses:
-                res.append({"pid": sp, "share": each_sp, "role": "配偶"})
+            for sp in spouses: res.append({"pid": sp, "share": each_sp, "role": "配偶"})
             total_w = sum(w for _, w in group) or 1.0
             for pid, w in group:
                 res.append({"pid": pid, "share": sib_total * (w / total_w), "role": "兄弟姊妹或其後代(代位)"})
-            notes.append("配偶與第三順位並存：配偶2/3，兄弟姊妹合計1/3（1140）。")
+            notes.append("配偶與第三順位並存：配偶2/3，兄弟姊妹合計1/3（1144）。")
 
         else:
-            # order == 4 或其他：配偶單獨繼承
             each_sp = 1.0 / float(len(spouses))
-            for sp in spouses:
-                res.append({"pid": sp, "share": each_sp, "role": "配偶"})
-            notes.append("配偶與第四順位或無其他人：配偶單獨繼承（1140）。")
+            for sp in spouses: res.append({"pid": sp, "share": each_sp, "role": "配偶"})
+            notes.append("配偶與第四順位或無其他人：配偶單獨繼承（1144）。")
         return {"order": order, "basis": basis, "result": res, "notes": notes}
 
-    # 沒有配偶：同順位分配
+    # 無配偶：同順位分配
     if order == 1:
         total_w = sum(w for _, w in group) or 1.0
         for pid, w in group:
             res.append({"pid": pid, "share": w / total_w, "role": "直系卑親屬"})
-        notes.append("無配偶：第一順位按支分配（1138、1139）。")
-
+        notes.append("無配偶：第一順位按支分配（1138、1139、1140）。")
     elif order == 2:
         alive_parents = [pid for pid, _ in group]
         each_parent = 1.0 / float(len(alive_parents)) if alive_parents else 0.0
         for pid in alive_parents:
             res.append({"pid": pid, "share": each_parent, "role": "父母"})
         notes.append("無配偶：由父母平均（1138）。")
-
     elif order == 3:
         total_w = sum(w for _, w in group) or 1.0
         for pid, w in group:
             res.append({"pid": pid, "share": w / total_w, "role": "兄弟姊妹或其後代(代位)"})
-        notes.append("無配偶：第三順位按支分配（1138、1139）。")
-
+        notes.append("無配偶：第三順位按支分配（1138、1140）。")
     elif order == 4:
         heirs = [pid for pid, _ in group]
         each_gp = 1.0 / float(len(heirs)) if heirs else 0.0
@@ -452,8 +404,7 @@ def block_parents():
     st.subheader("Step 2｜一鍵新增父母（可略過）")
     me = get_me_pid()
     if not me:
-        st.info("請先完成 Step 1")
-        return
+        st.info("請先完成 Step 1"); return
     c1, c2, c3 = st.columns([1.2,1.2,1.2])
     fa = c1.text_input("父親姓名", value="爸爸", key="father_name_input")
     mo = c2.text_input("母親姓名", value="媽媽", key="mother_name_input")
@@ -467,8 +418,7 @@ def block_spouse_children():
     st.subheader("Step 3｜配偶 / Step 4｜子女")
     me = get_me_pid()
     if not me:
-        st.info("請先完成 Step 1")
-        return
+        st.info("請先完成 Step 1"); return
 
     # 配偶
     with st.expander("＋ 新增配偶/另一半（可標注前任/分居）", expanded=False):
@@ -490,7 +440,7 @@ def block_spouse_children():
             else:
                 st.warning("請輸入配偶姓名後再提交。")
 
-    # 子女（選擇關係後新增）
+    # 子女
     my_mids = get_marriages_of(me)
     if my_mids:
         persons = st.session_state.tree["persons"]
@@ -505,7 +455,6 @@ def block_spouse_children():
                             options=list(range(len(labels))),
                             format_func=lambda i: labels[i][1], key="choose_mid_main")
         chosen_mid = labels[pick][0]
-
         with st.expander("＋ 新增子女", expanded=False):
             with st.form("form_add_child_main_{}".format(chosen_mid), clear_on_submit=True):
                 c_name = st.text_input("子女姓名", key="child_name_main_{}".format(chosen_mid))
@@ -532,13 +481,12 @@ def block_quick_two_gen(target_pid):
     with st.expander("⚡ 快速加直系兩代（父母 + 配偶 + 多子女）", expanded=False):
         st.caption("可只填需要的欄位；未提交前不會建立任何資料。")
         with st.form("form_q2g_{}".format(target_pid), clear_on_submit=True):
-            # A. 父母
             st.markdown("**A. 父母**（可留白略過）")
             c1, c2 = st.columns([1.2,1.2])
             fa_name = c1.text_input("父親姓名", key="q2g_fa_{}".format(target_pid))
             mo_name = c2.text_input("母親姓名", key="q2g_mo_{}".format(target_pid))
             add_parents = st.checkbox("建立父母並連結", key="q2g_addp_{}".format(target_pid))
-            # B. 配偶
+
             st.markdown("**B. 配偶/關係**（可留白略過）")
             c4, c5, c6 = st.columns([1.2,1.0,1.0])
             sp_name = c4.text_input("配偶姓名", key="q2g_spn_{}".format(target_pid))
@@ -546,7 +494,7 @@ def block_quick_two_gen(target_pid):
             sp_status = c6.selectbox("狀態", list(STATUS_MAP.keys()), index=0,
                                      format_func=lambda s: STATUS_MAP[s], key="q2g_sps_{}".format(target_pid))
             add_spouse = st.checkbox("建立配偶/關係", key="q2g_adds_{}".format(target_pid))
-            # C. 子女
+
             st.markdown("**C. 子女**（可留白略過）")
             c7, c8, c9, c10 = st.columns([2.0,1.0,1.0,1.2])
             kids_csv = c7.text_input("子女姓名（以逗號分隔）", key="q2g_kcsv_{}".format(target_pid))
@@ -583,7 +531,7 @@ def block_quick_two_gen(target_pid):
 def block_advanced():
     st.subheader("🎛 進階建立｜大家族與複雜關係")
     persons = st.session_state.tree["persons"]
-    if not persons: 
+    if not persons:
         st.info("請先建立至少一位成員。"); return
     ids = list(persons.keys())
     pick = st.selectbox("選擇成員以編輯/加關係",
@@ -591,7 +539,6 @@ def block_advanced():
                         format_func=lambda i: persons[ids[i]]["name"], key="adv_pick")
     pid = ids[pick]; p = persons[pid]
 
-    # ✏️ 編輯
     with st.expander("✏️ 編輯成員資料", expanded=True):
         c1,c2,c3,c4 = st.columns([2,1,1,1])
         p["name"] = c1.text_input("名稱", value=p["name"], key="edit_name_{}".format(pid))
@@ -611,13 +558,10 @@ def block_advanced():
             if del_btn:
                 delete_person(pid); st.success("已刪除"); st.rerun()
 
-    # ⚡ 快速兩代（對此成員）
     block_quick_two_gen(pid)
 
     st.markdown("---")
     cA, cB, cC = st.columns(3)
-
-    # 父母
     with cA:
         st.markdown("**父母**")
         fa = st.text_input("父親姓名", key="adv_f_{}".format(pid))
@@ -628,8 +572,6 @@ def block_advanced():
             mid = add_or_get_marriage(fpid, mpid, "married")
             add_child(mid, pid, "bio"); st.session_state.celebrate_ready = True
             st.toast("已新增父母並連結。", icon="👨‍👩‍👧")
-
-    # 配偶
     with cB:
         st.markdown("**配偶/關係**")
         spn = st.text_input("配偶姓名", key="adv_sp_{}".format(pid))
@@ -644,8 +586,6 @@ def block_advanced():
                 st.toast("已新增關係", icon="💍")
             else:
                 st.warning("請先輸入配偶姓名。")
-
-    # 子女
     with cC:
         st.markdown("**子女**")
         my_mids = get_marriages_of(pid)
@@ -682,11 +622,10 @@ def block_advanced():
             st.caption("尚無關係，請先新增配偶/另一半。")
 
     st.markdown("---")
-    # 批次兄弟姊妹（整行按鈕，避免誤判 disabled）
     st.markdown("**兄弟姊妹（批次）**")
     pmid = get_parent_marriage_of(pid)
     if pmid is None:
-        st.caption("此成員目前沒有已知的雙親關係，無法判定兄弟姊妹。請先新增其父母。")
+        st.caption("此成員沒有已知的雙親關係，無法判定兄弟姊妹。請先新增其父母。")
     else:
         sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
         sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
@@ -703,7 +642,6 @@ def block_advanced():
                     st.session_state.celebrate_ready = True
                     st.success("已新增兄弟姊妹"); st.rerun()
 
-    # 微調關係
     st.markdown("---")
     marriages = st.session_state.tree["marriages"]
     child_types = st.session_state.tree["child_types"]
@@ -731,21 +669,17 @@ def block_graph():
         dot = Digraph(comment="FamilyTree",
                       graph_attr={"rankdir": "TB", "splines": "spline", "nodesep": "0.4", "ranksep": "0.6",
                                   "fontname": "PingFang TC, Microsoft JhengHei, Noto Sans CJK TC, Arial"})
-        # 人（已故：名字加(殁)，底色淺灰）
         for pid, p in persons.items():
             label = p.get("name","未命名")
             if p.get("year"): label = label + "\n(" + str(p.get("year")) + ")"
             if p.get("deceased"):
-                label = label + "(殁)"
-                fill = "#E0E0E0"  # 淺灰
+                label = label + "(殁)"; fill = "#E0E0E0"
             else:
                 fill = GENDER_STYLE.get(p.get("gender") or "其他/不透漏",
                                         GENDER_STYLE["其他/不透漏"])["fillcolor"]
             if p.get("is_me"): label = "⭐ " + label
             dot.node(pid, label=label, shape="box", style="rounded,filled",
                      color="#90A4AE", fillcolor=fill, penwidth="1.2")
-
-        # 關係
         marriages = st.session_state.tree["marriages"]
         child_types = st.session_state.tree["child_types"]
         for mid, m in marriages.items():
@@ -764,44 +698,32 @@ def block_graph():
         st.error("圖形渲染失敗：{}".format(e))
 
 def block_heirs():
-    st.subheader("⚖️ 法定繼承人試算（民法1138、1139、1140）")
+    st.subheader("⚖️ 法定繼承人試算（民法1138、1139、1140、1144）")
     persons = st.session_state.tree["persons"]
     if not persons:
         st.info("請先建立至少一位成員。"); return
-
-    # 選擇被繼承人（可選任何人）
     id_list = list(persons.keys())
     pick = st.selectbox("選擇被繼承人", options=list(range(len(id_list))),
                         format_func=lambda i: persons[id_list[i]]["name"], key="heir_pick")
     target = id_list[pick]
 
-    # 以目前「已故」欄位作為死亡判斷；若目標未設為已故，也允許試算（假設死亡時點為現在）
     with st.expander("說明 / 限制", expanded=False):
-        st.caption("本試算僅依民法1138、1139、1140。未涵蓋：遺囑、拋棄/喪失繼承權、特留分、代位限制之特例、收出養特殊規定、直系尊親屬更上層分線細節等。")
+        st.caption("本試算依民法1138（順位）、1139（第一順位決定）、1140（代位繼承）、1144（配偶應繼分）。未涵蓋：遺囑、拋棄或喪失繼承權、特留分、夫妻剩餘財產分配、祖父母更細分線等。")
 
     if st.button("🧮 立即試算", key="btn_calc_heirs"):
         out = compute_statutory_shares(target)
-        persons_map = persons
-
-        # 顯示結果表格
         rows = []
         for item in out["result"]:
             pid = item["pid"]
-            name = persons_map.get(pid, {}).get("name", pid)
+            name = persons.get(pid, {}).get("name", pid)
             share = item["share"]
             role = item.get("role", "")
-            rows.append({
-                "成員": name,
-                "角色": role,
-                "應繼分": "{:.2f}%".format(share * 100.0)
-            })
+            rows.append({"成員": name, "角色": role, "應繼分": "{:.2f}%".format(share * 100.0)})
         if rows:
             st.markdown("**試算結果**")
             st.dataframe(rows, use_container_width=True, hide_index=True)
         else:
             st.info("沒有可分配的繼承人結果。")
-
-        # 總結
         order_name = {1:"第一順位（直系卑親屬）",2:"第二順位（父母）",3:"第三順位（兄弟姊妹）",4:"第四順位（祖父母）"}.get(out["order"], "無")
         st.markdown("**適用順位**：{}".format(order_name))
         st.markdown("**法律依據**：{}".format(out["basis"]))
@@ -833,32 +755,24 @@ def block_io():
 
     # 匯出目前資料
     data = json.dumps(st.session_state.tree, ensure_ascii=False, indent=2)
-    st.download_button(
-        "⬇ 下載 JSON",
-        data=data,
-        file_name="family_tree.json",
-        mime="application/json",
-        key="btn_dl_json"
-    )
+    st.download_button("⬇ 下載 JSON", data=data, file_name="family_tree.json",
+                       mime="application/json", key="btn_dl_json")
 
     st.divider()
 
-    # 讓上傳檔在 rerun 後仍可用：先存到 session_state
+    # 上傳檔先緩存在 session_state，避免 rerun 遺失
     if "upload_bytes" not in st.session_state:
         st.session_state.upload_bytes = None
         st.session_state.upload_name = None
 
     up = st.file_uploader("選擇 family_tree.json（選擇後仍需按下方按鈕才會匯入）",
                           type=["json"], key="uploader_json")
-
     if up is not None:
         st.session_state.upload_bytes = up.getvalue()
         st.session_state.upload_name = getattr(up, "name", "未命名")
 
     if st.session_state.upload_bytes:
         st.info("已選擇檔案：{}".format(st.session_state.upload_name))
-
-        # 嘗試解析並顯示預覽資訊（不覆蓋）
         try:
             preview = json.loads(st.session_state.upload_bytes.decode("utf-8"))
             persons_cnt = len(preview.get("persons", {})) if isinstance(preview, dict) else 0
@@ -875,8 +789,6 @@ def block_io():
             try:
                 raw = st.session_state.upload_bytes.decode("utf-8")
                 data = json.loads(raw)
-
-                # 寬鬆相容舊版結構
                 if not isinstance(data, dict):
                     raise ValueError("JSON 頂層不是物件")
                 tree = {
@@ -885,10 +797,9 @@ def block_io():
                     "child_types": data.get("child_types", {}) or {},
                 }
                 st.session_state.tree = tree
-                init_state()  # 補預設欄位
+                init_state()
                 st.success("✅ 匯入完成：成員 {} 人、關係 {} 筆"
                            .format(len(tree["persons"]), len(tree["marriages"])))
-                # 匯入後清掉暫存，避免之後又誤覆蓋
                 st.session_state.upload_bytes = None
                 st.session_state.upload_name = None
                 st.rerun()
@@ -903,7 +814,6 @@ def block_io():
     else:
         st.caption("提示：選擇檔案後，需按「📥 套用匯入」才會覆蓋目前資料。未按按鈕不會自動匯入。")
 
-
 # ====== Main ======
 def main():
     st.set_page_config(page_title="家族樹小幫手", page_icon="🌳", layout="wide")
@@ -914,7 +824,7 @@ def main():
     block_parents(); st.divider()
     block_spouse_children(); st.divider()
     block_graph(); st.divider()
-    block_heirs(); st.divider()          # ← 新增：法定繼承人試算
+    block_heirs(); st.divider()
     block_advanced(); st.divider()
     block_tables(); st.divider()
     block_io()
