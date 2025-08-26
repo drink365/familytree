@@ -6,7 +6,7 @@
 - 同父同母子女依出生年(小→大)排序；無年分者置後
 - 已故：名字後加「（殁）」＋灰底
 - 可刪除整段關係（不刪任何人與小孩節點）
-- 首次或資料為空：自動載入示範；同時保留手動「載入示範家族」按鈕
+- 首次或資料為空：自動載入示範；保留「載入示範家族」按鈕
 """
 from __future__ import annotations
 import json
@@ -16,7 +16,7 @@ from typing import List, Optional
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-single-page-ui-v3-autoseed-rerun"
+VERSION = "2025-08-26-single-page-ui-v3.2-rerun-fix"
 
 # ===== 常數 =====
 GENDER_OPTIONS = ["女", "男", "其他/不透漏"]
@@ -134,19 +134,14 @@ def delete_marriage(mid: str):
     if mid in t["marriages"]:
         del t["marriages"][mid]
 
-def get_me_pid() -> Optional[str]:
-    for pid, p in st.session_state.tree["persons"].items():
-        if p.get("is_me"): return pid
+def get_parent_marriage_of(pid: str) -> Optional[str]:
+    for mid, m in st.session_state.tree["marriages"].items():
+        if pid in m.get("children", []): return mid
     return None
 
 def get_marriages_of(pid: str) -> List[str]:
     return [mid for mid, m in st.session_state.tree["marriages"].items()
             if pid in (m.get("spouse1"), m.get("spouse2"))]
-
-def get_parent_marriage_of(pid: str) -> Optional[str]:
-    for mid, m in st.session_state.tree["marriages"].items():
-        if pid in m.get("children", []): return mid
-    return None
 
 # ===== Demo =====
 def seed_demo():
@@ -227,7 +222,7 @@ def render_graph() -> Digraph:
         s1, s2 = m.get("spouse1"), m.get("spouse2")
         dot.node(mid, label="", shape="point", width="0.02")
 
-        with dot.subgraph(name="rs_{}".format(mid)) as sg:
+        with dot.subgraph(name=f"rs_{mid}") as sg:
             sg.attr(rank="same")
             if s1: sg.node(s1)
             if s2: sg.node(s2)
@@ -241,7 +236,7 @@ def render_graph() -> Digraph:
 
         kids = _order_children([c for c in m.get("children", []) if c in persons], persons)
         if kids:
-            with dot.subgraph(name="rk_{}".format(mid)) as sk:
+            with dot.subgraph(name=f"rk_{mid}") as sk:
                 sk.attr(rank="same")
                 for c in kids:
                     sk.node(c)
@@ -268,7 +263,7 @@ def section_topbar():
     with col2:
         st.toggle("水平排列", key="layout_lr", help="取消則為垂直排列 (TB)")
     with col3:
-        st.markdown("App 版本：`{}`".format(VERSION))
+        st.markdown(f"App 版本：`{VERSION}`")
 
 def tabbar():
     tabs = ["🖼 家族圖", "✍️ 建立/編輯", "📋 資料表", "📦 匯入/匯出"]
@@ -284,7 +279,7 @@ def view_graph():
         dot = render_graph()
         st.graphviz_chart(dot, use_container_width=True)
     except Exception as e:
-        st.error("圖形渲染失敗：{}".format(e))
+        st.error(f"圖形渲染失敗：{e}")
     st.caption("說明：夫妻一定相鄰；同父同母子女按年齡由左至右；已故以灰底並加「（殁）」；離異/分居用虛線/點線；收養/繼親子女用不同線型。")
 
 def panel_build_edit():
@@ -419,7 +414,7 @@ def panel_build_edit():
                 confirm_ch = st.checkbox("我確認新增")
                 ok_ch = st.form_submit_button("👶 提交新增子女")
             if ok_ch:
-                if not confirm_ch or not cn.strip():
+                if not confirm_ch或 not cn.strip():
                     st.warning("請輸入子女姓名並勾選確認。")
                 else:
                     cid = add_person(cn.strip(), cg, year=cy)
@@ -474,7 +469,7 @@ def panel_build_edit():
             if btn:
                 delete_marriage(mid)
                 st.success("已刪除此關係")
-                st.rerun()
+                st.rerun()  # ← 確保這裡是 st.rerun()
 
 def panel_tables():
     persons = st.session_state.tree["persons"]
@@ -525,7 +520,6 @@ def main():
     st.set_page_config(page_title="家族樹小幫手", page_icon="🌳", layout="wide")
     init_state()
 
-    # 首次或清空時，自動載入示範（可依需求移除）
     if not st.session_state.tree["persons"] and not st.session_state.auto_seeded:
         seed_demo()
         st.session_state.auto_seeded = True
