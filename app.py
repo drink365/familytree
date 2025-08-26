@@ -688,25 +688,64 @@ def block_graph():
     st.subheader("🖼 家族圖")
     try:
         persons = st.session_state.tree["persons"]
-        dot = Digraph(comment="FamilyTree",
-                      graph_attr={"rankdir": "TB", "splines": "spline", "nodesep": "0.4", "ranksep": "0.6",
-                                  "fontname": "PingFang TC, Microsoft JhengHei, Noto Sans CJK TC, Arial"})
+
+        def siblings_under_parents(pid):
+            """回傳該成員的原生家庭兄弟姊妹（含半血），不含自己；無父母婚姻則空陣列。"""
+            pmid = get_parent_marriage_of(pid)
+            if not pmid:
+                return []
+            sibs = []
+            # 同父母
+            for cid in st.session_state.tree["marriages"][pmid].get("children", []):
+                if cid != pid:
+                    sibs.append(cid)
+            # 半血：父或母在其他婚姻的子女
+            m = st.session_state.tree["marriages"][pmid]
+            parents = [m.get("spouse1"), m.get("spouse2")]
+            for par in parents:
+                if not par:
+                    continue
+                for mid, mm in st.session_state.tree["marriages"].items():
+                    if mid == pmid:
+                        continue
+                    if par in (mm.get("spouse1"), mm.get("spouse2")):
+                        for cid in mm.get("children", []):
+                            if cid != pid:
+                                sibs.append(cid)
+            # 去重保序
+            return list(dict.fromkeys(sibs).keys())
+
+        dot = Digraph(
+            comment="FamilyTree",
+            graph_attr={
+                "rankdir": "TB",
+                "splines": "spline",
+                "nodesep": "0.4",
+                "ranksep": "0.6",
+                "ordering": "out",  # 讓不可見邊控制左右順序
+                "fontname": "PingFang TC, Microsoft JhengHei, Noto Sans CJK TC, Arial",
+            },
+        )
+
         # 人節點（已故：名字加(殁)，底色淺灰）
         for pid, p in persons.items():
-            label = p.get("name","未命名")
-            if p.get("year"): label = label + "\n(" + str(p.get("year")) + ")"
+            label = p.get("name", "未命名")
+            if p.get("year"):
+                label = label + "\n(" + str(p.get("year")) + ")"
             if p.get("deceased"):
                 label = label + "(殁)"; fill = "#E0E0E0"
             else:
                 fill = GENDER_STYLE.get(p.get("gender") or "其他/不透漏",
                                         GENDER_STYLE["其他/不透漏"])["fillcolor"]
-            if p.get("is_me"): label = "⭐ " + label
+            if p.get("is_me"):
+                label = "⭐ " + label
             dot.node(pid, label=label, shape="box", style="rounded,filled",
                      color="#90A4AE", fillcolor=fill, penwidth="1.2")
 
-        # 關係與子女
         marriages = st.session_state.tree["marriages"]
         child_types = st.session_state.tree["child_types"]
+
+        # 夫妻→婚姻點→子女
         for mid, m in marriages.items():
             dot.node(mid, label="", shape="point", width="0.02")
             stl = STATUS_EDGE_STYLE.get(m.get("status","married"), STATUS_EDGE_STYLE["married"])
@@ -718,9 +757,39 @@ def block_graph():
                     rel = child_types.get(mid, {}).get(c, "bio")
                     cstl = CHILD_EDGE_STYLE.get(rel, CHILD_EDGE_STYLE["bio"])
                     dot.edge(mid, c, color=cstl["color"], style=cstl["style"])
+
+        # 只針對「我」這一支的配偶，讓配偶貼近核心，且在其原生家庭中排在靠近核心的一端
+        me = next((pid for pid, p in persons.items() if p.get("is_me")), None)
+        if me:
+            # 找「我」的現存配偶（已婚/分居；排除離異）
+            my_spouses = []
+            for mid, m in marriages.items():
+                if me in (m.get("spouse1"), m.get("spouse2")) and m.get("status","married") != "divorced":
+                    other = m.get("spouse1") if m.get("spouse2") == me else m.get("spouse2")
+                    if other:
+                        my_spouses.append(other)
+
+            for sp in my_spouses:
+                # (1) 我與配偶同列，並用不可見邊規定「我→配偶」（配偶靠近我）
+                with dot.subgraph() as same_rank:
+                    same_rank.attr(rank="same")
+                    same_rank.edge(me, sp, style="invis", weight="50")
+
+                # (2) 配偶的原生家庭：建立不可見鏈，讓「配偶」排在該列最靠近我的一端
+                sibs = siblings_under_parents(sp)
+                if sibs:
+                    # 以「配偶」結尾，形成 … → 配偶 的順序
+                    chain = [s for s in sibs if s != sp] + [sp]
+                    with dot.subgraph() as sib_rank:
+                        sib_rank.attr(rank="same")
+                        for i in range(len(chain) - 1):
+                            a, b = chain[i], chain[i + 1]
+                            sib_rank.edge(a, b, style="invis", weight="20")
+
         st.graphviz_chart(dot, use_container_width=True)
     except Exception as e:
         st.error("圖形渲染失敗：{}".format(e))
+
 
 def block_heirs():
     st.subheader("⚖️ 法定繼承人試算（民法§1138、§1139、§1140、§1144）")
