@@ -4,6 +4,7 @@
 - 區塊順序：建立我 → 一鍵父母 → 配偶/子女 → 家族圖 → 進階建立 → 資料表 → 匯入/匯出
 - 行為：所有新增皆需「勾選 + 提交」，避免誤新增；按鈕永遠可按（提交時驗證）
 - 支援：多段婚姻、前任/分居、收養/繼親、半血緣、批次兄弟姊妹、快速兩代、一鍵刪除
+- 已故顯示：名字後加「(殁)」，底色淺灰
 """
 from __future__ import annotations
 import json, uuid
@@ -12,7 +13,7 @@ from typing import List, Optional
 import streamlit as st
 from graphviz import Digraph
 
-VERSION = "2025-08-26-onepage-minimal"
+VERSION = "2025-08-26-onepage-minimal-deceased-grey"
 
 # ====== 常量 ======
 GENDER_OPTIONS = ["女", "男", "其他/不透漏"]
@@ -458,20 +459,17 @@ def block_graph():
         dot = Digraph(comment="FamilyTree",
                       graph_attr={"rankdir": "TB", "splines": "spline", "nodesep": "0.4", "ranksep": "0.6",
                                   "fontname": "PingFang TC, Microsoft JhengHei, Noto Sans CJK TC, Arial"})
-        # 人
+        # 人（已故：名字加(殁)，底色淺灰）
         for pid, p in persons.items():
             label = p.get("name","未命名")
-            if p.get("year"):
-                label = label + "\n(" + str(p.get("year")) + ")"
+            if p.get("year"): label = label + "\n(" + str(p.get("year")) + ")"
             if p.get("deceased"):
                 label = label + "(殁)"
-                fill = "#E0E0E0"   # 淺灰
+                fill = "#E0E0E0"  # 淺灰
             else:
                 fill = GENDER_STYLE.get(p.get("gender") or "其他/不透漏",
                                         GENDER_STYLE["其他/不透漏"])["fillcolor"]
-            if p.get("is_me"):
-                label = "⭐ " + label
-
+            if p.get("is_me"): label = "⭐ " + label
             dot.node(pid, label=label, shape="box", style="rounded,filled",
                      color="#90A4AE", fillcolor=fill, penwidth="1.2")
 
