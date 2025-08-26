@@ -746,19 +746,20 @@ def advanced_builder():
         else:
             st.caption("尚無關係，請先新增配偶/另一半。")
 
-    # 批次兄弟姊妹（不使用 form；按鈕可按，點擊時驗證）
+    # 兄弟姊妹（批次）— 簡化版：整行按鈕、點擊時驗證
     with cD:
         st.markdown("**兄弟姊妹（批次）**")
         pmid = get_parent_marriage_of(pid)
-        if pmid:
+
+        if pmid is None:
+            st.caption("此成員目前**沒有已知的雙親關係**，因此無法判定兄弟姊妹。請先在左側加上父母。")
+        else:
             sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
             sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
+            confirm_sibs = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
 
-            cols1, cols2 = st.columns([1, 2])
-            with cols1:
-                confirm_sibs = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
-            with cols2:
-                click_add_sibs = st.button("👫 提交新增兄弟姊妹", key="btn_add_sibs_submit_{}".format(pid))
+            # 整行主要按鈕（不放在 columns 裡，避免被誤判為 disabled）
+            click_add_sibs = st.button("👫 提交新增兄弟姊妹", key="btn_add_sibs_submit_{}".format(pid))
 
             if click_add_sibs:
                 if not confirm_sibs:
@@ -774,10 +775,7 @@ def advanced_builder():
                         st.session_state.celebrate_ready = True
                         st.success("已新增兄弟姊妹")
                         st.rerun()
-        else:
-            st.caption("此成員尚無已知父母，請先新增父母後再新增兄弟姊妹。")
 
-    st.markdown("---")
 
     marriages = st.session_state.tree["marriages"]
     child_types = st.session_state.tree["child_types"]
