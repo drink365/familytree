@@ -3,6 +3,38 @@
 import streamlit as st
 import matplotlib.pyplot as plt
 
+import os
+from matplotlib import font_manager, rcParams
+
+def _setup_zh_font():
+    candidates = [
+        "./NotoSansTC-Regular.ttf",
+        "./NotoSansCJKtc-Regular.otf",
+        "./TaipeiSansTCBeta-Regular.ttf",
+        "./TaipeiSansTCBeta-Regular.otf",
+    ]
+    chosen = None
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                font_manager.fontManager.addfont(p)
+                # 通用字體名稱（對應 Noto/Taipei Sans）
+                rcParams['font.family'] = 'sans-serif'
+                rcParams['font.sans-serif'] = ['Noto Sans TC', 'Taipei Sans TC Beta', 'Microsoft JhengHei', 'PingFang TC', 'Heiti TC']
+                rcParams['axes.unicode_minus'] = False
+                chosen = p
+                break
+            except Exception:
+                pass
+    # 即使沒有找到，也避免負號變成方塊
+    rcParams['axes.unicode_minus'] = False
+    return chosen is not None
+
+_has_font = _setup_zh_font()
+if not _has_font:
+    st.caption("提示：若圖表中文字出現方塊/亂碼，請把 **NotoSansTC-Regular.ttf** 放在專案根目錄後重新載入。")
+
+
 st.set_page_config(page_title="💧 缺口與保單模擬 | 影響力傳承平台", page_icon="💧", layout="centered")
 st.title("💧 流動性缺口與保單策略模擬")
 
@@ -71,10 +103,14 @@ st.write("**補齊缺口後的剩餘**：", format_currency(plan["surplus_after_
 fig1, ax1 = plt.subplots()
 labels = ["不用保單", "加上保單"]
 values = [max(0, need - available), max(0, need - (available + target_cover))]
-ax1.bar(labels, values)
-ax1.set_ylabel("剩餘缺口（TWD）")
-ax1.set_title("保單介入前後的缺口對比")
-st.pyplot(fig1)
+
+if sum(values) == 0:
+    st.info("目前沒有流動性缺口，圖表略過。")
+else:
+    ax1.bar(labels, values)
+    ax1.set_ylabel("剩餘缺口（TWD）")
+    ax1.set_title("保單介入前後的缺口對比")
+    st.pyplot(fig1)
 
 st.session_state["plan_data"] = dict(
     need=need, available=available, gap=gap, target_cover=target_cover,
