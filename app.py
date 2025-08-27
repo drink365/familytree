@@ -10,7 +10,7 @@ import pandas as pd
 # 基本設定
 # =========================
 st.set_page_config(
-    page_title="影響力傳承平台｜Octalysis 原型",
+    page_title="影響力傳承平台｜互動原型",
     page_icon="🌟",
     layout="wide",
 )
@@ -27,7 +27,7 @@ def month_end_2359():
 
 def init_state():
     ss = st.session_state
-    ss.setdefault("mission_ack", False)                 # 使命召喚
+    ss.setdefault("mission_ack", False)                 # 使命啟動
     ss.setdefault("profile_done", False)                # 基本資料
     ss.setdefault("assets_done", False)                 # 資產盤點
     ss.setdefault("plan_done", False)                   # 策略配置
@@ -104,7 +104,7 @@ def unlock_random_tip():
     return tip
 
 # =========================
-# 側邊欄：進度與徽章＆協作
+# 側邊欄：進度、徽章、協作
 # =========================
 with st.sidebar:
     st.markdown("## 🧭 目前進度")
@@ -127,22 +127,22 @@ with st.sidebar:
 # =========================
 # 頁面標頭
 # =========================
-st.title("🌟 影響力傳承平台｜Octalysis Gamification 原型")
+st.title("🌟 影響力傳承平台｜互動原型")
 st.caption("以『準備與從容』為精神，讓家族影響力得以溫暖延續。")
 
 tabs = st.tabs([
-    "1 使命召喚",         # Epic Meaning & Calling
-    "2 進步與成就",       # Development & Accomplishment
-    "3 創意沙盒",         # Empowerment of Creativity & Feedback
-    "4 擁有與版本",       # Ownership & Possession
-    "5 協作與關係",       # Social Influence & Relatedness
-    "6 稀缺與急迫",       # Scarcity & Impatience
-    "7 驚喜與好奇",       # Unpredictability & Curiosity
-    "8 風險與避免",       # Loss & Avoidance
+    "1 使命啟動",
+    "2 進度與成就",
+    "3 策略沙盒",
+    "4 專屬與版本",
+    "5 協作與關係",
+    "6 限時與名額",
+    "7 測驗與知識卡",
+    "8 風險對比",
 ])
 
 # =========================
-# 1. 使命召喚（Epic Meaning）
+# 1. 使命啟動
 # =========================
 with tabs[0]:
     section_title("📜", "家族使命與起心動念")
@@ -154,11 +154,9 @@ with tabs[0]:
 
     colA, colB = st.columns([3,2])
     with colA:
-        st.markdown(
-            "> （品牌短片位置）此處可放 15–30 秒使命影片或動態 Banner，傳遞「準備與從容」精神。"
-        )
-        st.video("https://www.youtube.com/watch?v=dQw4w9WgXcQ", disabled=True)
-        st.caption("示意：影片已停用播放，避免干擾。上線時可放品牌短片。")
+        # 可直接播放，若不想自動載入，可移除或改成圖片/連結
+        st.video("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        st.caption("上線時可換成品牌短片或動態 Banner。")
     with colB:
         st.info("任務卡｜今天目標：完成『家族資料 + 資產盤點 + 初版策略』，解鎖「家族建築師」徽章。")
         guidance_note("點選上方分頁依序完成互動。")
@@ -169,10 +167,10 @@ with tabs[0]:
         st.success("任務已啟動，獲得徽章：使命啟動者！")
 
 # =========================
-# 2. 進步與成就（Development & Accomplishment）
+# 2. 進度與成就
 # =========================
 with tabs[1]:
-    section_title("🧱", "基本資料與資產盤點（進度與成就）")
+    section_title("🧱", "基本資料與資產盤點")
     st.write("完成以下步驟可提升完成度並解鎖徽章。")
 
     st.subheader("Step 1｜建立家族識別")
@@ -211,10 +209,10 @@ with tabs[1]:
         st.write("徽章：", ", ".join(sorted(list(st.session_state.badges))) if st.session_state.badges else "尚無")
 
 # =========================
-# 3. 創意沙盒（Empowerment of Creativity & Feedback）
+# 3. 策略沙盒
 # =========================
 with tabs[2]:
-    section_title("🧪", "策略沙盒（拖拉比例 / 即時回饋）")
+    section_title("🧪", "策略配置（拖拉比例 / 即時回饋）")
     st.write("自由調整分配比例，系統即時回饋稅務與流動性（示意模型）。")
 
     colL, colR = st.columns([3,2])
@@ -244,11 +242,12 @@ with tabs[2]:
         total_asset = sum(st.session_state.assets.values())
         st.subheader("即時回饋（示意）")
         if total_asset <= 0:
-            st.info("請先於『進步與成就』完成資產盤點。")
+            st.info("請先於『進度與成就』完成資產盤點。")
         else:
             plan = st.session_state.plan
             base_rate = st.session_state.risk_rate_with_plan
-            effective_rate = max(0.05, base_rate - (plan["慈善信託"]/100)*0.03)  # 慈善提高稅務效率（示意）
+            # 慈善信託比例越高，稅務效率越佳（示意）
+            effective_rate = max(0.05, base_rate - (plan["慈善信託"]/100)*0.03)
             est_tax = int(total_asset * 10_000 * effective_rate)  # 萬元→元
             cash_liq = int(total_asset * 10_000 * (
                 plan["留現金緊急金"]/100 + plan["保單留配偶"]/100*0.8
@@ -259,7 +258,7 @@ with tabs[2]:
             guidance_note("可增加『保單留配偶』或『留現金緊急金』比例以強化流動性。")
 
 # =========================
-# 4. 擁有與版本（Ownership & Possession）
+# 4. 專屬與版本
 # =========================
 with tabs[3]:
     section_title("📁", "我的專屬藍圖（版本管理 / 下載示意）")
@@ -307,7 +306,7 @@ with tabs[3]:
             st.dataframe(df, use_container_width=True)
 
 # =========================
-# 5. 協作與關係（Social Influence & Relatedness）
+# 5. 協作與關係
 # =========================
 with tabs[4]:
     section_title("👥", "家族共建與顧問協作（示意）")
@@ -324,7 +323,7 @@ with tabs[4]:
     add_badge("協作啟動者")
 
 # =========================
-# 6. 稀缺與急迫（Scarcity & Impatience）
+# 6. 限時與名額
 # =========================
 with tabs[5]:
     section_title("⏳", "限時挑戰與預約名額")
@@ -355,7 +354,7 @@ with tabs[5]:
         guidance_note("活動、名額、倒數能有效提升行動率，但要避免造成過度焦慮感。")
 
 # =========================
-# 7. 驚喜與好奇（Unpredictability & Curiosity）
+# 7. 測驗與知識卡
 # =========================
 with tabs[6]:
     section_title("🎁", "小測驗 & 驚喜知識卡")
@@ -386,13 +385,13 @@ with tabs[6]:
             chip(t)
 
 # =========================
-# 8. 風險與避免（Loss & Avoidance）
+# 8. 風險對比
 # =========================
 with tabs[7]:
-    section_title("⚖️", "未規劃 vs 已規劃｜風險對比（示意）")
+    section_title("⚖️", "未規劃 vs 已規劃｜稅負對比（示意）")
     total_asset = sum(st.session_state.assets.values())
     if total_asset <= 0:
-        st.info("請先完成『進步與成就』分頁的資產盤點。")
+        st.info("請先完成『進度與成就』分頁的資產盤點。")
     else:
         tax_no  = int(total_asset * 10_000 * st.session_state.risk_rate_no_plan)
         tax_yes = int(total_asset * 10_000 * st.session_state.risk_rate_with_plan)
@@ -412,4 +411,4 @@ with tabs[7]:
 # 頁尾說明
 # =========================
 st.divider()
-st.caption("《影響力》傳承策略平台｜永傳家族辦公室｜此頁為 Octalysis gamification 原型示意，非真實稅務建議。")
+st.caption("《影響力》傳承策略平台｜永傳家族辦公室｜此頁為互動原型示意，非真實稅務建議。")
