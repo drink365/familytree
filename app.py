@@ -384,8 +384,8 @@ def block_header():
         confirm_reset = st.checkbox("我確定要清空", key="confirm_reset")
         if st.button("🗑 清空全部", key="btn_reset", disabled=not confirm_reset):
             st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
-            st.session_state.confirm_reset = False
             st.toast("已清空。", icon="🗑")
+            st.rerun()
     with c3:
         st.markdown("**快速切換模式**")
         mode = st.radio("資料來源", ["空白", "示範"], horizontal=True, key="mode_select")
