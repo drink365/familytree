@@ -81,15 +81,17 @@ with colR:
         st.code(render_ascii_tree())
 
     with st.expander("👪 工程檢視：成員清單（僅工程人員使用）", expanded=False):
-    data = [{"ID": m["id"], "姓名": m["name"], "性別": m["gender"], "出生": m["birth"], "過世": m["death"], "備註": m["note"]} for m in member_list()]
+        data = [{"ID": m["id"], "姓名": m["name"], "性別": m["gender"], "出生": m["birth"], "過世": m["death"], "備註": m["note"]} for m in member_list()]
         st.dataframe(data, use_container_width=True)
 
+
     with st.expander("🧬 工程檢視：關係清單（僅工程人員使用）", expanded=False):
-    rels = relation_list()
-    if rels:
+        rels = relation_list()
+        if rels:
             st.table([{"ID":r["id"], "父母ID":r["src"], "子女ID":r["dst"], "型別":r["type"]} for r in rels])
-    else:
-        st.caption("尚無關係")
+        else:
+            st.caption("尚無關係")
+
 
 st.divider()
 st.subheader("故事與事件（可選）")
@@ -162,6 +164,11 @@ from pyvis.network import Network
 import streamlit.components.v1 as components
 import tempfile, os, uuid
 
+# ==== 圖形家族樹（夫妻合併節點） ====
+from pyvis.network import Network
+import streamlit.components.v1 as components
+import tempfile, os, uuid
+
 with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True):
     def build_graph_html():
         members = member_list(); rels = relation_list()
@@ -219,18 +226,15 @@ with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True)
 
     try:
         html_path = build_graph_html()
-        
-with open(html_path, "r", encoding="utf-8") as f:
+        with open(html_path, "r", encoding="utf-8") as f:
             raw = f.read()
             # Auto-fit on load + center canvas via CSS
             raw = raw.replace("new vis.Network(container, data, options);",
-                              "var network = new vis.Network(container, data, options);
-network.once('afterDrawing', function(){ network.fit({animation:false}); });")
+                              "var network = new vis.Network(container, data, options);\nnetwork.once('afterDrawing', function(){ network.fit({animation:false}); });")
             # widen & center the container
             raw = raw.replace("#mynetwork {", "#mynetwork { margin: 0 auto;")
             components.html(raw, height=660, scrolling=True)
     except Exception as e:
         st.error(f"圖形家族樹建立失敗：{e}")
-
 with st.expander("提示"):
     guidance_note("先把成員與直系關係補齊，之後再補配偶與旁系。完成 5 位成員即可達成里程碑『家族樹築者』。")
