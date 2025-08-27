@@ -8,6 +8,7 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.lib.utils import ImageReader  # 用來讀原始尺寸
 
 st.set_page_config(page_title="📄 提案下載 | 影響力傳承平台", page_icon="📄", layout="centered")
 st.title("📄 一頁式提案下載")
@@ -40,6 +41,24 @@ try:
 except Exception as e:
     st.caption(f"字型註冊失敗（改用預設字型）：{e}")
 
+def _logo_image_preserve_ratio(path, max_w_mm=40, max_h_mm=16):
+    """讀取圖片原始尺寸，按比例縮放至不超過 max_w x max_h 的盒子。"""
+    try:
+        img_reader = ImageReader(path)
+        iw, ih = img_reader.getSize()  # 像素
+        # 轉換到 mm 單位的比例（ReportLab 直接用「點」，但比例計算不受單位影響）
+        max_w = max_w_mm * mm
+        max_h = max_h_mm * mm
+        scale = min(max_w / iw, max_h / ih)
+        draw_w = iw * scale
+        draw_h = ih * scale
+        img = RLImage(path)
+        img.drawWidth = draw_w
+        img.drawHeight = draw_h
+        return img
+    except Exception:
+        return None
+
 def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan) -> bytes:
     buf = io.BytesIO()
     doc = SimpleDocTemplate(
@@ -52,25 +71,22 @@ def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan) -> bytes:
     for name in ["Title", "Heading1", "Heading2", "Heading3", "BodyText", "Normal"]:
         if name in styles:
             styles[name].fontName = DEFAULT_FONT
-    # 更精細的 Heading2
     styles.add(ParagraphStyle(name="H2TC", parent=styles["Heading2"], fontName=DEFAULT_FONT, spaceBefore=8, spaceAfter=4))
 
     elems = []
 
-    # ---- 標題 + 右上角 LOGO ----
+    # ---- 標題 + 右上角 LOGO（等比例縮放）----
     title_para = Paragraph(f"傳承規劃建議（摘要）｜{client_name}", styles["Title"])
     logo_path = "logo.png"
-    if os.path.exists(logo_path):
-        try:
-            logo_img = RLImage(logo_path, width=38*mm, height=14*mm)  # 視實際比例可調
-            header = Table([[title_para, logo_img]], colWidths=[130*mm, 40*mm])
-            header.setStyle(TableStyle([
-                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                ("ALIGN", (1,0), (1,0), "RIGHT"),
-            ]))
-            elems += [header, Spacer(1, 6)]
-        except Exception:
-            elems += [title_para, Spacer(1, 6)]
+    logo_img = _logo_image_preserve_ratio(logo_path, max_w_mm=40, max_h_mm=16) if os.path.exists(logo_path) else None
+
+    if logo_img:
+        header = Table([[title_para, logo_img]], colWidths=[130*mm, 40*mm])
+        header.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (1,0), (1,0), "RIGHT"),
+        ]))
+        elems += [header, Spacer(1, 6)]
     else:
         elems += [title_para, Spacer(1, 6)]
 
