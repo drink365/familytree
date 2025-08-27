@@ -37,9 +37,7 @@ else:
     st.metric("估算可動用現金（元）", f"{est['cash_liq']:,}")
     gap = max(0, est["est_tax"] - est["cash_liq"])
     st.metric("流動性缺口（元）", f"{gap:,}")
-    plausible_event("Gap Calculated", {
-        "gap": gap, "assets_total": est["total_asset"] * 10_000, "plan_charity_pct": est["plan_charity_pct"]
-    })
+    plausible_event("Gap Calculated", {"gap": gap, "assets_total": est["total_asset"] * 10_000, "plan_charity_pct": est["plan_charity_pct"]})
     maybe_fire_clarity_moment()
 
 with st.expander("提示"):

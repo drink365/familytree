@@ -1,8 +1,7 @@
 
 # -*- coding: utf-8 -*-
 import streamlit as st
-from app_core import (init_session_defaults, render_sidebar, section_title, guidance_note,
-                      badge_add, unlock_random_tip)
+from app_core import (init_session_defaults, render_sidebar, section_title, guidance_note, badge_add, unlock_random_tip)
 
 init_session_defaults(); render_sidebar()
 st.title("知識補給")
@@ -24,11 +23,6 @@ if ok:
         else: st.caption("（你已解鎖所有知識卡！）")
     else:
         st.warning(f"目前答對 {correct}/3 題，再試試！")
-
-if st.session_state.get("tips_unlocked"):
-    section_title("📚", "已解鎖知識卡")
-    for t in st.session_state.tips_unlocked:
-        st.markdown(f"- {t}")
 
 with st.expander("提示"):
     guidance_note("知識卡用來降低焦慮、建立共同語言，不用一次把所有東西都學完。")

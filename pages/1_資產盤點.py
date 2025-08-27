@@ -8,19 +8,17 @@ init_session_defaults(); render_sidebar()
 st.title("資產盤點")
 
 section_title("🧱", "建立家族識別")
-fam = st.text_input("家族名稱（用於封面與報告）", value=st.session_state.family_name, placeholder="例如：黃氏家族")
-colA, colB = st.columns([1,1])
-with colA:
-    if st.button("儲存家族識別", key="btn_profile"):
-        name = (fam or "").strip()
-        st.session_state.family_name = name
-        family_name_set(name)
-        st.session_state.profile_done = bool(name)
-        if name:
-            badge_add("家族識別完成")
-            st.success("已儲存。徽章：家族識別完成")
-        else:
-            st.warning("請輸入家族名稱後再儲存。")
+fam = st.text_input("家族名稱（用於報告標題與快照）", value=st.session_state.family_name, placeholder="例如：黃氏家族")
+if st.button("儲存家族識別", key="btn_profile"):
+    name = (fam or "").strip()
+    st.session_state.family_name = name
+    family_name_set(name)
+    st.session_state.profile_done = bool(name)
+    if name:
+        badge_add("家族識別完成")
+        st.success("已儲存。徽章：家族識別完成")
+    else:
+        st.warning("請輸入家族名稱後再儲存。")
 
 st.divider()
 section_title("📦", "輸入資產結構（萬元）")
