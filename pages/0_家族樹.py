@@ -164,13 +164,7 @@ with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True)
         net.barnes_hut(gravity=-25000, central_gravity=0.25, spring_length=220, spring_strength=0.005, damping=0.9)
 
         # Hierarchical-ish layout settings
-        net.set_options("""
-        const options = {
-          layout: { hierarchical: { enabled: true, direction: 'UD', sortMethod: 'directed', nodeSpacing: 180, treeSpacing: 220 } },
-          edges: { smooth: { type: 'cubicBezier' } },
-          physics: { enabled: false }
-        }
-        """)
+        net.set_options('{"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":180,"treeSpacing":220}},"edges":{"smooth":{"type":"cubicBezier"}},"physics":{"enabled":false}}')
 
         # Nodes
         for m in members:
