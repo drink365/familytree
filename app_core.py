@@ -336,3 +336,48 @@ def render_ascii_tree():
             lines += walk(kid, prefix + branch).split("\\n")
         return "\\n".join(lines)
     return "\\n\\n".join([walk(r) for r in roots(members, rels)])
+
+# ---------- Import / Reset ----------
+def reset_user_data():
+    if is_view_mode(): return
+    c = CONN.cursor()
+    for t in ["members","relations","events","roles","shares","assets","plans","versions","badges"]:
+        try:
+            c.execute(f"DELETE FROM {t} WHERE user_id=?", (USER_ID,))
+        except Exception:
+            pass
+    CONN.commit()
+
+def import_family_from_json(obj: dict):
+    """Import persons + marriages schema into current workspace."""
+    if is_view_mode(): return False, "唯讀模式"
+    try:
+        persons = obj.get("persons", {})
+        marriages = obj.get("marriages", {})
+        child_types = obj.get("child_types", {})
+        reset_user_data()
+        idmap = {}
+        # Insert persons
+        for pid, p in persons.items():
+            nm = p.get("name", "").strip()
+            gender = p.get("gender", "")
+            birth = str(p.get("year") or "")  # 放在 '出生' 欄
+            death = "" if not p.get("deceased") else ""  # 若需可填死亡日期
+            note = p.get("note","")
+            mid = member_add(nm, gender, birth, death, note)
+            idmap[pid] = mid
+            if p.get("is_me") and not st.session_state.get("family_name"):
+                family_name_set(f"{nm}家族")
+        # Insert marriages -> spouse + parent-child
+        for mid, m in marriages.items():
+            s1 = idmap.get(m.get("spouse1")); s2 = idmap.get(m.get("spouse2"))
+            if s1 and s2:
+                relation_add(s1, s2, "spouse")
+                relation_add(s2, s1, "spouse")
+            for ch_pid in m.get("children", []):
+                cid = idmap.get(ch_pid)
+                if cid and s1: relation_add(s1, cid, "parent")
+                if cid and s2: relation_add(s2, cid, "parent")
+        return True, f"已匯入 {len(persons)} 位成員、{len(marriages)} 組家庭。"
+    except Exception as e:
+        return False, f"匯入失敗：{e}"

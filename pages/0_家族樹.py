@@ -8,6 +8,38 @@ from app_core import (init_session_defaults, render_sidebar, section_title, guid
 init_session_defaults(); render_sidebar()
 st.title("家族樹")
 
+st.caption("可上傳 JSON 匯入整個家族樹（persons/marriages 格式）。")
+
+
+
+import json
+from app_core import import_family_from_json, reset_user_data
+
+with st.expander("🛠️ 匯入JSON", expanded=False):
+    up = st.file_uploader("上傳 family_tree.json", type=["json"])
+    colx, coly = st.columns([1,1])
+    with colx:
+        if st.button("匯入上傳檔"):
+            if not up:
+                st.warning("請先選擇 JSON 檔。")
+            else:
+                try:
+                    obj = json.loads(up.getvalue().decode("utf-8"))
+                    ok, msg = import_family_from_json(obj)
+                    st.success(msg) if ok else st.error(msg)
+                except Exception as e:
+                    st.error(f"解析失敗：{e}")
+    with coly:
+        if st.button("載入內建示例"):
+            try:
+                demo_path = "/mnt/data/family_tree.json"
+                with open(demo_path, "r", encoding="utf-8") as f:
+                    obj = json.load(f)
+                ok, msg = import_family_from_json(obj)
+                st.success(msg) if ok else st.error(msg)
+            except Exception as e:
+                st.error(f"示例無法讀取：{e}")
+
 colL, colR = st.columns([2,3])
 
 with colL:
