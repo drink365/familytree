@@ -1,12 +1,34 @@
-
 # -*- coding: utf-8 -*-
 import streamlit as st
-from utils.calculators import quick_preparedness_score, format_currency
 
 st.set_page_config(page_title="🚦 快篩 | 影響力傳承平台", page_icon="🚦", layout="centered")
 
 st.title("🚦 傳承風險快篩（3 分鐘）")
 st.caption("回答以下問題，立即看見傳承準備度與可能的流動性缺口指標。")
+
+def quick_preparedness_score(scan):
+    score = 100
+    flags = []
+    estate = max(1, int(scan.get("estate_total", 0)))
+    liquid = int(scan.get("liquid", 0))
+    liquid_ratio = liquid / estate
+    if liquid_ratio < 0.10:
+        score -= 20; flags.append("流動性比例偏低（<10%），遇遺產稅可能需賣資產。")
+    elif liquid_ratio < 0.20:
+        score -= 10; flags.append("流動性比例較低（<20%）。")
+    if scan.get("cross_border") == "是":
+        score -= 10; flags.append("存在跨境資產/家人，需另行檢視法稅合規與受益人居住地。")
+    marital = scan.get("marital")
+    if marital in ["離婚/分居", "再婚/有前任"]:
+        score -= 10; flags.append("婚姻結構較複雜，建議儘早訂定遺囑/信託避免爭議。")
+    if scan.get("has_will") in ["沒有", "有（但未更新）"]:
+        score -= 10; flags.append("沒有有效遺囑或未更新。")
+    if scan.get("has_trust") in ["沒有", "規劃中"]:
+        score -= 10; flags.append("尚未建立信託/保單信託。")
+    existing_ins = int(scan.get("existing_insurance", 0))
+    if existing_ins < estate * 0.05:
+        score -= 10; flags.append("既有保額偏低，恐不足以應付稅務與現金流衝擊。")
+    return max(0, min(100, score)), flags
 
 with st.form("scan"):
     c1, c2 = st.columns(2)
@@ -44,17 +66,15 @@ if submitted:
     )
     st.session_state["scan"] = scan
     score, flags = quick_preparedness_score(scan)
-
+    st.session_state["scan_score"] = score
     st.success("✅ 快篩完成")
     st.metric("傳承準備度分數", f"{score}/100")
     if flags:
         st.markdown("**主要風險提示**：")
         for f in flags:
             st.write("• " + f)
-
     st.info("下一步：前往「💧 缺口與保單模擬」，調整年期/幣別，拿到第一版保單草案。")
-    st.page_link("02_GapPlanner.py", label="➡️ 前往缺口與保單模擬")
-
+    st.page_link("pages/02_GapPlanner.py", label="➡️ 前往缺口與保單模擬")
 else:
     st.info("請完成上方問卷並提交。若已做過，可直接到下一步。")
-    st.page_link("02_GapPlanner.py", label="➡️ 我已做過，直接前往")
+    st.page_link("pages/02_GapPlanner.py", label="➡️ 我已做過，直接前往")
