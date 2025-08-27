@@ -35,7 +35,7 @@ def _page_if_exists(path: str, label: str, icon: str | None = None):
 def sidebar_brand():
     with st.sidebar:
         if Path(BRAND["logo"]).exists():
-            st.image(BRAND["logo"], use_container_width=True)  # 更新這裡
+            st.image(BRAND["logo"], use_container_width=True)  # 避免 use_column_width 警告
         st.markdown(
             f"**{BRAND['name']}**  \n"
             f"<small style='color:{BRAND['text_muted']}'>{BRAND['tagline']}</small>",
@@ -45,7 +45,7 @@ def sidebar_brand():
         st.markdown("**快速導覽**")
         _page_if_exists("app.py", "🏠 首頁")
         _page_if_exists("pages/01_QuickScan.py", "🚦 快篩")
-        _page_if_exists("pages/02_GapPlanner.py", "💧 缺口模擬")
+        _page_if_exists("pages/02_GapPlanner.py", "📊 缺口模擬")        # ← 已改成 📊
         _page_if_exists("pages/03_Proposal.py", "📄 一頁式提案")
         _page_if_exists("pages/90_About.py", "🏢 關於我們 / 聯絡")
         _page_if_exists("pages/91_Privacy.py", "🔒 隱私與免責")
@@ -54,7 +54,7 @@ def brand_hero(title:str, subtitle:str=""):
     col1, col2 = st.columns([1,4])
     with col1:
         if Path(BRAND['logo']).exists():
-            st.image(BRAND['logo'], use_container_width=True)  # 這裡也改
+            st.image(BRAND['logo'], use_container_width=True)
     with col2:
         st.markdown(f"### {title}")
         if subtitle:
