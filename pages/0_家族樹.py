@@ -1,11 +1,13 @@
 
 # -*- coding: utf-8 -*-
 import streamlit as st
+import os
 from app_core import (init_session_defaults, render_sidebar, section_title, guidance_note, badge_add, is_view_mode,
                       member_add, member_list, member_delete, relation_add, relation_list, relation_delete, render_ascii_tree,
                       event_add, event_list, role_add, role_list)
 
 init_session_defaults(); render_sidebar()
+SHOW_ENGINEERING = False  # 僅供工程除錯用，預設不顯示
 st.title("家族樹")
 
 st.caption("可上傳 JSON 匯入整個家族樹（persons/marriages 格式）。")
@@ -26,7 +28,13 @@ with st.expander("🛠️ 管理員｜匯入 JSON（一般用戶可忽略）", e
                 try:
                     obj = json.loads(up.getvalue().decode("utf-8"))
                     ok, msg = import_family_from_json(obj)
-                    st.success(msg) if ok else st.error(msg)
+                    (
+                (
+                st.success(msg)
+                if ok
+                else st.error(msg)
+            )
+            )
                 except Exception as e:
                     st.error(f"解析失敗：{e}")
     with coly:
@@ -36,7 +44,13 @@ with st.expander("🛠️ 管理員｜匯入 JSON（一般用戶可忽略）", e
                 with open(demo_path, "r", encoding="utf-8") as f:
                     obj = json.load(f)
                 ok, msg = import_family_from_json(obj)
-                st.success(msg) if ok else st.error(msg)
+                (
+                (
+                st.success(msg)
+                if ok
+                else st.error(msg)
+            )
+            )
             except Exception as e:
                 st.error(f"示例無法讀取：{e}")
 
@@ -77,20 +91,23 @@ with colL:
             st.success(f"已建立關係：{p} → {c}")
 
 with colR:
-    with st.expander("🌳 工程檢視：ASCII 樹（僅工程人員使用）", expanded=False):
-        st.code(render_ascii_tree())
+    if SHOW_ENGINEERING:
+        with st.expander("🌳 工程檢視：ASCII 樹（僅工程人員使用）", expanded=False):
+            st.code(render_ascii_tree())
 
-    with st.expander("👪 工程檢視：成員清單（僅工程人員使用）", expanded=False):
-        data = [{"ID": m["id"], "姓名": m["name"], "性別": m["gender"], "出生": m["birth"], "過世": m["death"], "備註": m["note"]} for m in member_list()]
-        st.dataframe(data, use_container_width=True)
+    if SHOW_ENGINEERING:
+        with st.expander("👪 工程檢視：成員清單（僅工程人員使用）", expanded=False):
+            data = [{"ID": m["id"], "姓名": m["name"], "性別": m["gender"], "出生": m["birth"], "過世": m["death"], "備註": m["note"]} for m in member_list()]
+            st.dataframe(data, use_container_width=True)
 
 
-    with st.expander("🧬 工程檢視：關係清單（僅工程人員使用）", expanded=False):
-        rels = relation_list()
+    if SHOW_ENGINEERING:
+        with st.expander("🧬 工程檢視：關係清單（僅工程人員使用）", expanded=False):
+            rels = relation_list()
         if rels:
-            st.table([{"ID":r["id"], "父母ID":r["src"], "子女ID":r["dst"], "型別":r["type"]} for r in rels])
+                st.table([{"ID":r["id"], "父母ID":r["src"], "子女ID":r["dst"], "型別":r["type"]} for r in rels])
         else:
-            st.caption("尚無關係")
+                st.caption("尚無關係")
 
 
 st.divider()
