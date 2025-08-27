@@ -2,11 +2,19 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import sqlite3, os, json, uuid
-from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
+from datetime import datetime, timedelta, timezone
 
 # ---------- Timezone ----------
 TZ = timezone(timedelta(hours=8))  # Asia/Taipei
+
+# --- 低遊戲化開關 ---
+GAMIFY = {
+    'show_progress': True,
+    'show_milestones': True,   # 前端呈現為「里程碑」
+    'show_tips': False,        # 預設關閉解鎖機制
+    'show_slots': True         # 顯示諮詢名額
+}
 
 # ---------- Paths & DB ----------
 ROOT = os.path.dirname(__file__)
@@ -37,7 +45,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, created_at TEXT)""")
     cur.execute("""CREATE TABLE IF NOT EXISTS meta(
         key TEXT PRIMARY KEY, value TEXT)""")
-    # Family-tree related
+    # Family tree
     cur.execute("""CREATE TABLE IF NOT EXISTS members(
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, name TEXT, gender TEXT,
         birth TEXT, death TEXT, note TEXT, created_at TEXT)""")
@@ -58,20 +66,19 @@ def init_db():
 
 CONN = init_db()
 
-# ---------- Meta (global) ----------
+# ---------- Meta & consult slots ----------
 def meta_get(key, default=None):
     c = CONN.cursor(); c.execute("SELECT value FROM meta WHERE key=?", (key,))
     row = c.fetchone(); return (json.loads(row[0]) if row else default)
 
 def meta_set(key, value):
-    c = CONN.cursor(); c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (key, json.dumps(value)))
-    CONN.commit()
+    c = CONN.cursor(); c.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (key, json.dumps(value))); CONN.commit()
 
 def setup_monthly_challenge():
     now = datetime.now(TZ)
     deadline = meta_get("consult_deadline")
     if deadline: deadline = datetime.fromisoformat(deadline)
-    if not deadline or now > deadline:
+    if (not deadline) or now > deadline:
         first_of_next = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
         last = first_of_next - timedelta(seconds=1)
         last = last.replace(hour=23, minute=59, second=59, microsecond=0)
@@ -92,7 +99,7 @@ def consult_decrement():
     if left <= 0: return False
     meta_set("consult_slots_left", left - 1); return True
 
-# ---------- User workspace ----------
+# ---------- User workspace / query params ----------
 def get_qs():
     try: return dict(st.query_params)
     except Exception: return st.experimental_get_query_params()
@@ -107,6 +114,7 @@ def get_or_create_user_id() -> str:
     incoming = qs.get("user"); incoming = (incoming[0] if isinstance(incoming, list) and incoming else incoming)
     if incoming:
         st.session_state["user_id"] = incoming; st.session_state["mode"] = mode; return incoming
+    import uuid
     uid = "u_" + str(uuid.uuid4())[:8]
     st.session_state["user_id"] = uid; st.session_state["mode"] = mode
     qs["user"] = uid; set_qs(qs); return uid
@@ -114,11 +122,10 @@ def get_or_create_user_id() -> str:
 USER_ID = get_or_create_user_id()
 def is_view_mode() -> bool: return st.session_state.get("mode") == "view"
 
-# ---------- Defaults ----------
+# ---------- Defaults & core CRUD ----------
 DEFAULT_ASSETS = {"公司股權":0,"不動產":0,"金融資產":0,"保單":0,"海外資產":0,"其他":0}
 DEFAULT_PLAN   = {"股權給下一代":40,"保單留配偶":30,"慈善信託":10,"留現金緊急金":20}
 
-# ---------- CRUD (core) ----------
 def user_get():
     c = CONN.cursor(); c.execute("SELECT id,family_name,created_at FROM users WHERE id=?", (USER_ID,)); return c.fetchone()
 def user_create_if_missing():
@@ -222,22 +229,25 @@ def role_list():
     rows = c.fetchall()
     return [{"id":r[0],"member_id":r[1],"role_type":r[2],"note":r[3] or ""} for r in rows]
 
-# ---------- Analytics (Plausible optional) ----------
+# ---------- Analytics ----------
 def inject_analytics():
     try:
         domain = st.secrets["PLAUSIBLE_DOMAIN"]
         import streamlit.components.v1 as components
         components.html(f'<script defer data-domain="{domain}" src="https://plausible.io/js/script.js"></script>', height=0)
-    except Exception: pass
+    except Exception:
+        pass
+
 def plausible_event(name: str, props: Optional[dict] = None):
     try:
         import json as _json
         import streamlit.components.v1 as components
         payload = _json.dumps(props or {})
         components.html(f'<script>window.plausible && window.plausible({_json.dumps(name)}, {{props: {payload}}});</script>', height=0)
-    except Exception: pass
+    except Exception:
+        pass
 
-# ---------- Clarity computation ----------
+# ---------- Clarity (gap) ----------
 def current_gap_estimate():
     assets = st.session_state.get("assets", DEFAULT_ASSETS.copy())
     total_asset = sum(assets.values())
@@ -292,15 +302,17 @@ def init_session_defaults():
 def render_sidebar():
     with st.sidebar:
         st.markdown("## 🧭 目前進度")
-        prog = progress_score(); st.progress(prog, text=f"完成度 {prog}%")
-        st.caption("完成各區塊互動以提升完成度。")
-        st.markdown("## 🏅 徽章")
-        got = badges_list()
-        if not got: st.caption("尚未解鎖徽章。")
-        else:
-            for b in got: chip(f"🏅 {b}")
+        if GAMIFY.get('show_progress', True):
+            prog = progress_score(); st.progress(prog, text=f"完成度 {prog}%")
+            st.caption("完成各區塊互動以提升完成度。")
+        if GAMIFY.get('show_milestones', True):
+            st.markdown("## 🏁 里程碑")
+            got = badges_list()
+            if not got: st.caption("尚未解鎖里程碑。")
+            else:
+                for b in got: chip(f"🏁 {b}")
         st.divider(); st.markdown("**邀請家族成員共建**")
-        base = ""; st.code(f\"{base}?user={USER_ID}\"); st.caption("唯讀：加上 `&mode=view`。")
+        st.code(f\"?user={USER_ID}\"); st.caption("唯讀：加上 `&mode=view`。")
 
 # --- Family tree rendering (ASCII) ---
 def _idx_members(members): return {m["id"]: m for m in members}
@@ -309,13 +321,11 @@ def _children_map(members, relations):
     for r in relations:
         if r["type"] == "parent": ch[r["src"]].append(r["dst"])
     return ch
-def _parents_of(mid, relations): return [r["src"] for r in relations if r["type"]=="parent" and r["dst"]==mid]
 def roots(members, relations):
     mids = {m["id"] for m in members}; non_roots = {r["dst"] for r in relations if r["type"]=="parent"}
     return sorted(list(mids - non_roots))
 def render_ascii_tree():
-    from app_core import relation_list, member_list as _ml
-    members = _ml(); rels = relation_list()
+    members = member_list(); rels = relation_list()
     if not members: return "（尚無成員）"
     idx = _idx_members(members); ch = _children_map(members, rels)
     def walk(node, prefix=""):
