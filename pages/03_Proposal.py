@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import io, os
 import streamlit as st
@@ -13,8 +14,8 @@ st.title("📄 一頁式提案下載")
 def format_currency(x: int) -> str:
     return "NT$ {:,}".format(int(x))
 
-scan = st.session_state.get("scan")
-plan = st.session_state.get("plan")
+scan = st.session_state.get("scan_data")
+plan = st.session_state.get("plan_data")
 
 if not scan:
     st.warning("尚未完成快篩。請先到「🚦 傳承風險快篩」。")
@@ -34,29 +35,20 @@ def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan) -> bytes:
     styles = getSampleStyleSheet()
     elems = []
 
-    # ===== Header：標題 + 右上角 Logo（若存在） =====
     title_para = Paragraph("傳承規劃建議（摘要）｜{}".format(client_name), styles["Title"])
-    logo_path = "logo.png"  # 放在專案根目錄
+    logo_path = "logo.png"
     if os.path.exists(logo_path):
         try:
-            logo_img = RLImage(logo_path, width=38*mm, height=14*mm)  # 依實際 logo 比例可調
-            # 兩欄：左標題、右 Logo（靠右）
-            header = Table(
-                [[title_para, logo_img]],
-                colWidths=[130*mm, 40*mm]
-            )
-            header.setStyle(TableStyle([
-                ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                ("ALIGN", (1,0), (1,0), "RIGHT"),
-            ]))
+            logo_img = RLImage(logo_path, width=38*mm, height=14*mm)
+            header = Table([[title_para, logo_img]], colWidths=[130*mm, 40*mm])
+            header.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                                        ("ALIGN", (1,0), (1,0), "RIGHT"),]))
             elems += [header, Spacer(1, 6)]
         except Exception:
-            # 若插入失敗則退回單純標題
             elems += [title_para, Spacer(1, 6)]
     else:
         elems += [title_para, Spacer(1, 6)]
 
-    # ===== 摘要區 =====
     summary = [
         ["傳承準備度", "{} / 100".format(st.session_state.get("scan_score","—"))],
         ["預估遺產稅額", format_currency(plan["tax"])],
@@ -74,7 +66,6 @@ def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan) -> bytes:
     ]))
     elems += [t1, Spacer(1, 8)]
 
-    # ===== 建議方案 =====
     advice = [
         ["建議保單保額", format_currency(plan["target_cover"])],
         ["估算年繳保費", format_currency(plan["annual_premium"])],
@@ -90,16 +81,14 @@ def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan) -> bytes:
     ]))
     elems += [Paragraph("保單策略（以流動性為核心）", styles["Heading2"]), t2, Spacer(1, 8)]
 
-    # ===== 下一步 =====
-    bullets = """
-    <bullet>①</bullet> 彙整資產清單（我們提供模板），建立資產—法律—稅務對照表；
-    <br/><bullet>②</bullet> 召開家族會議，討論公平機制與受益人安排；
-    <br/><bullet>③</bullet> 優先啟動「流動性保額」，在完整規劃期間也能確保風險已被承接。
-    """
+    bullets_text = (
+        "1) 彙整資產清單（我們提供模板），建立資產—法律—稅務對照表；"
+        "<br/>2) 召開家族會議，討論公平機制與受益人安排；"
+        "<br/>3) 優先啟動「流動性保額」，在完整規劃期間也能確保風險已被承接。"
+    )
     elems += [Paragraph("建議下一步（兩週內）", styles["Heading2"]),
-              Paragraph(bullets, styles["BodyText"]), Spacer(1, 10)]
+              Paragraph(bullets_text, styles["BodyText"]), Spacer(1, 10)]
 
-    # ===== 備註與署名 =====
     elems += [Paragraph("備註", styles["Heading2"]), Paragraph(notes, styles["BodyText"]), Spacer(1, 6)]
     elems += [Paragraph(advisor, styles["Normal"])]
 

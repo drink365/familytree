@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 import matplotlib.pyplot as plt
@@ -24,7 +25,7 @@ def plan_with_insurance(need: int, available: int, cover: int, pay_years: int, p
 def format_currency(x: int) -> str:
     return "NT$ {:,}".format(int(x))
 
-scan = st.session_state.get("scan")
+scan = st.session_state.get("scan_data")
 if not scan:
     st.warning("尚未完成快篩。請先到「🚦 傳承風險快篩」。")
     st.page_link("pages/01_QuickScan.py", label="➡️ 前往快篩")
@@ -50,7 +51,7 @@ st.metric("初估流動性需求（含雜費 1%）", format_currency(need))
 
 available = scan["liquid"] + scan["existing_insurance"]
 gap = max(0, need - available)
-st.metric("初估流動性缺口", format_currency(gap))
+st.metric("初估缺口", format_currency(gap))
 
 st.markdown("---")
 st.markdown("#### 保單策略模擬")
@@ -75,7 +76,7 @@ ax1.set_ylabel("剩餘缺口（TWD）")
 ax1.set_title("保單介入前後的缺口對比")
 st.pyplot(fig1)
 
-st.session_state["plan"] = dict(
+st.session_state["plan_data"] = dict(
     need=need, available=available, gap=gap, target_cover=target_cover,
     pay_years=pay_years, annual_premium=plan["annual_premium"],
     surplus_after_cover=plan["surplus_after_cover"],

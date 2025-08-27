@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st
 
@@ -30,33 +31,33 @@ def quick_preparedness_score(scan):
         score -= 10; flags.append("既有保額偏低，恐不足以應付稅務與現金流衝擊。")
     return max(0, min(100, score)), flags
 
-with st.form("scan"):
+with st.form("scan_form"):
     c1, c2 = st.columns(2)
-    residence = c1.selectbox("主要稅務地/居住地", ["台灣", "大陸/中國", "美國", "其他"], index=0)
-    cross_border = c2.selectbox("是否有跨境資產/家人", ["否", "是"], index=0)
+    residence = c1.selectbox("主要稅務地/居住地", ["台灣", "大陸/中國", "美國", "其他"], index=0, key="residence")
+    cross_border = c2.selectbox("是否有跨境資產/家人", ["否", "是"], index=0, key="cross_border")
 
     c3, c4 = st.columns(2)
-    marital = c3.selectbox("婚姻狀態", ["未婚", "已婚", "離婚/分居", "再婚/有前任"], index=1)
-    heirs_n = c4.number_input("潛在繼承/受贈人數（含子女、父母、配偶）", min_value=0, max_value=20, value=3, step=1)
+    marital = c3.selectbox("婚姻狀態", ["未婚", "已婚", "離婚/分居", "再婚/有前任"], index=1, key="marital")
+    heirs_n = c4.number_input("潛在繼承/受贈人數（含子女、父母、配偶）", min_value=0, max_value=20, value=3, step=1, key="heirs_n")
 
     st.markdown("#### 主要資產概況（粗略估算即可）")
     c5, c6 = st.columns(2)
-    estate_total = c5.number_input("資產總額（TWD）", min_value=0, value=150_000_000, step=1_000_000)
-    liquid = c6.number_input("可動用流動資產（現金/定存/投資）（TWD）", min_value=0, value=20_000_000, step=1_000_000)
+    estate_total = c5.number_input("資產總額（TWD）", min_value=0, value=150_000_000, step=1_000_000, key="estate_total")
+    liquid = c6.number_input("可動用流動資產（現金/定存/投資）（TWD）", min_value=0, value=20_000_000, step=1_000_000, key="liquid")
 
     c7, c8 = st.columns(2)
-    realty = c7.number_input("不動產（TWD）", min_value=0, value=70_000_000, step=1_000_000)
-    equity = c8.number_input("公司股權（TWD）", min_value=0, value=40_000_000, step=1_000_000)
+    realty = c7.number_input("不動產（TWD）", min_value=0, value=70_000_000, step=1_000_000, key="realty")
+    equity = c8.number_input("公司股權（TWD）", min_value=0, value=40_000_000, step=1_000_000, key="equity")
 
     c9, c10 = st.columns(2)
-    debts = c9.number_input("負債（TWD）", min_value=0, value=10_000_000, step=1_000_000)
-    existing_insurance = c10.number_input("既有壽險保額（可用於稅務/現金流）（TWD）", min_value=0, value=15_000_000, step=1_000_000)
+    debts = c9.number_input("負債（TWD）", min_value=0, value=10_000_000, step=1_000_000, key="debts")
+    existing_insurance = c10.number_input("既有壽險保額（可用於稅務/現金流）（TWD）", min_value=0, value=15_000_000, step=1_000_000, key="existing_insurance")
 
     c11, c12 = st.columns(2)
-    has_will = c11.selectbox("是否已有遺囑", ["沒有", "有（但未更新）", "有（最新）"], index=0)
-    has_trust = c12.selectbox("是否已有信託/保單信託", ["沒有", "規劃中", "已建立"], index=0)
+    has_will = c11.selectbox("是否已有遺囑", ["沒有", "有（但未更新）", "有（最新）"], index=0, key="has_will")
+    has_trust = c12.selectbox("是否已有信託/保單信託", ["沒有", "規劃中"], index=0, key="has_trust")
 
-    submitted = st.form_submit_button("計算準備度與風險")
+    submitted = st.form_submit_button("計算準備度與風險", use_container_width=True)
 
 if submitted:
     scan = dict(
@@ -64,7 +65,7 @@ if submitted:
         estate_total=estate_total, liquid=liquid, realty=realty, equity=equity,
         debts=debts, existing_insurance=existing_insurance, has_will=has_will, has_trust=has_trust
     )
-    st.session_state["scan"] = scan
+    st.session_state["scan_data"] = scan
     score, flags = quick_preparedness_score(scan)
     st.session_state["scan_score"] = score
     st.success("✅ 快篩完成")
