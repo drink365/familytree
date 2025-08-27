@@ -1,111 +1,29 @@
-# 🌳 家族樹小幫手｜低調好玩版 (Mini MVP)
 
-用最少的欄位，最快畫出家族樹。**不需帳號、不碰資料庫、隱私優先**。完成 3～4 個小任務就能看到結果，過程有低調的進度提示。
+# 影響力傳承平台｜互動原型（Clarity-Focused）
 
----
+**一句話目的**：把不確定，變成清晰的下一步。
 
-## ✨ 特色 Highlights
-- **超簡單**：只填名稱、性別（出生年選填），3～4 步完成。
-- **即時視覺化**：以 Graphviz 自動排版，支援垂直/水平切換。
-- **隱私先行**：資料僅暫存在會話記憶體，**不寫入資料庫**，下載/離開頁面即清空。
-- **一鍵示範**：先載入「示範家族」觀察成品，再開始自己的資料。
-- **匯入/匯出**：可下載 JSON、上傳還原，便於顧問陪同或不同裝置接續。
+- ✅ 多頁架構（Streamlit `pages/`）
+- ✅ SQLite 持久化（users/assets/plan/versions/badges/bookings/meta）
+- ✅ 可分享連結：`?user=<token>`；唯讀模式：`?mode=view`
+- ✅ 全站共享的「本月諮詢名額」與月度重置
+- ✅ 事件追蹤（Plausible 可選，未設定也可執行）
+- ✅ 清晰時刻（Clarity Moment）偵測：完成度≥60% + 計出缺口 + 快照/預約/下載其一
 
----
-
-## 🚀 快速開始 Quickstart
-
-### 1) 系統需求
-- Python 3.9+
-- 作業系統需安裝 Graphviz（非 Python 套件）
-
-### 2) 安裝相依套件
+## 本地執行
 ```bash
 pip install -r requirements.txt
+streamlit run app.py
 ```
-> `requirements.txt` 內容：
-> ```
-> streamlit>=1.36
-> graphviz>=0.20.3
-> ```
+> 首次啟動會在 `data/legacy.db` 建立資料庫。
 
-### 3) 安裝系統版 Graphviz
-- **macOS**：`brew install graphviz`
-- **Ubuntu/Debian**：`sudo apt-get install graphviz`
-- **Windows**：以 Chocolatey `choco install graphviz` 或至官網安裝
+## 參數
+- `?user=<token>`：指定工作區（分享此連結給家族成員即共編）
+- `?mode=view`：唯讀模式（關閉所有寫入與預約行為）
 
-### 4) 啟動應用
-```bash
-streamlit run family_tree_app.py
+## 事件追蹤（選配）
+在 Streamlit Secrets 設定：
+```toml
+PLAUSIBLE_DOMAIN="yourdomain.com"
 ```
-
----
-
-## 🕹 使用方式 How to Use
-
-1. 左側側欄可先按 **「✨ 載入示範家族」** 看效果。
-2. 依序完成：**Step 1『我』→ Step 2 父母 → Step 3 配偶 → Step 4 子女**。
-3. 於 **「🖼 家族圖」** 分頁查看自動產生的家族樹，側欄可切換水平/垂直排列。
-4. 在 **「📋 資料表」** 可檢視成員名冊與關係。
-5. 在 **「📦 匯入/匯出」** 可下載 JSON 或上傳還原。
-
-### 🧹 如何清除「示範家族」並開始輸入個人資料？
-- 進入 **「📦 匯入/匯出」** 分頁，按下 **「🗑 清空全部（不會刪本機檔案）」**。  
-- 清空後，回到 **Step 1** 重新建立『我』，即可開始輸入真實資料。
-
-> 小提醒：清空只影響目前瀏覽會話；若您重新整理或另開無痕視窗，也會是乾淨的狀態。
-
----
-
-## ☁️ 部署到 Streamlit Cloud（可選）
-1. 將此專案推到 GitHub。
-2. 在 repo 根目錄新增 `packages.txt`：
-   ```
-   graphviz
-   ```
-3. 在 Streamlit Cloud 建立 App，選擇主程式 `family_tree_app.py`。
-4. Deploy 後即可使用示範與匯入/匯出功能。
-
----
-
-## 🧩 結構 & 檔案
-- `family_tree_app.py`：主程式（含表單、圖形、匯入/匯出與進度）
-- `requirements.txt`：Python 套件相依
-- `packages.txt`（部署用，選擇性）：系統層安裝 Graphviz
-
----
-
-## ❓ 常見問題 FAQ
-
-**Q1. 畫面是空白沒圖？**  
-- 請先確認系統是否安裝 **Graphviz**（見上方安裝指引）。  
-- 或確認已建立『我』與至少一個關係（父母/配偶/子女）。
-
-**Q2. 我要如何完全不留資料？**  
-- 本工具不寫入資料庫；資料只在您的瀏覽器會話中短暫存在。
-- 下載報告、按 **清空**、或離開頁面後，會話資料即被丟棄。
-
-**Q3. 可以先用示範再換成真實資料嗎？**  
-- 可以。用完示範後，去 **「📦 匯入/匯出」** 點 **清空**，再回 **Step 1** 重新建立即可。
-
----
-
-## 🔒 隱私 & 專業聲明
-- **隱私**：輸入資料僅用於本次即時計算，不寫入資料庫、不作行銷再利用。下載或離開頁面即清空。若您選擇預約諮詢，僅保留聯絡方式以提供服務。
-- **專業**：本工具提供一般性示意，非個別法律/稅務意見；正式方案需由律師、會計師與顧問團隊審閱。
-
----
-
-## 🗺 Roadmap（可選擇性擴充）
-- 一頁式 PDF 下載（家族圖 + 重要摘要）
-- 顧問陪跑模式（多人協作輸入）
-- 權限與版本比對（草稿/定稿）
-- 與其他模組串接：資產六大類盤點、遺產/贈與稅試算、提案比較
-
----
-
-## 🙏 致謝
-- [Streamlit](https://streamlit.io/)
-- [Graphviz](https://graphviz.org/)
-
-> © 2025 Grace Family Office — Internal Demo Only.
+即可送出自訂事件：`Gap Calculated` / `Saved Snapshot` / `Booked Consult` / `Downloaded Report` / `Clarity Moment`
