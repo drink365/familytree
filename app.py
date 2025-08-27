@@ -19,12 +19,12 @@ with col1:
         st.button("建立家族樹 ▶️", use_container_width=True)
 with col2:
     if hasattr(st, "page_link"):
-        st.page_link("pages/1_資產盤點.py", label="開始 30 分鐘初診斷 ▶️")
+        st.page_link("pages/2_資產盤點.py", label="開始 30 分鐘初診斷 ▶️")
     else:
         st.button("開始 30 分鐘初診斷 ▶️", use_container_width=True)
 with col3:
     if hasattr(st, "page_link"):
-        st.page_link("pages/4_家族共編.py", label="邀請家人一起評估")
+        st.page_link("pages/5_家族共編.py", label="邀請家人一起評估")
     else:
         st.button("邀請家人一起評估", use_container_width=True)
 
