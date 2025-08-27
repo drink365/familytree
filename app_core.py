@@ -3,7 +3,7 @@
 import streamlit as st
 import sqlite3, os, json, uuid
 from datetime import datetime, timedelta, timezone
-from typing import Dict
+from typing import Dict, Optional
 
 # ---------- Timezone ----------
 TZ = timezone(timedelta(hours=8))  # Asia/Taipei
@@ -229,7 +229,7 @@ def inject_analytics():
         import streamlit.components.v1 as components
         components.html(f'<script defer data-domain="{domain}" src="https://plausible.io/js/script.js"></script>', height=0)
     except Exception: pass
-def plausible_event(name: str, props: dict | None = None):
+def plausible_event(name: str, props: Optional[dict] = None):
     try:
         import json as _json
         import streamlit.components.v1 as components
