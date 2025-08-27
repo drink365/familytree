@@ -15,7 +15,7 @@ st.caption("可上傳 JSON 匯入整個家族樹（persons/marriages 格式）�
 import json
 from app_core import import_family_from_json, reset_user_data
 
-with st.expander("🛠️ 匯入JSON", expanded=False):
+with st.expander("🛠️ 管理員｜匯入 JSON（一般用戶可忽略）", expanded=False):
     up = st.file_uploader("上傳 family_tree.json", type=["json"])
     colx, coly = st.columns([1,1])
     with colx:
@@ -32,7 +32,7 @@ with st.expander("🛠️ 匯入JSON", expanded=False):
     with coly:
         if st.button("載入內建示例"):
             try:
-                demo_path = "/mnt/data/family_tree.json"
+                demo_path = os.path.join(os.path.dirname(__file__), "..", "assets", "sample_family_tree.json")
                 with open(demo_path, "r", encoding="utf-8") as f:
                     obj = json.load(f)
                 ok, msg = import_family_from_json(obj)
@@ -77,17 +77,17 @@ with colL:
             st.success(f"已建立關係：{p} → {c}")
 
 with colR:
-    section_title("🌳", "樹狀檢視（縮排示意）")
-    st.code(render_ascii_tree())
+    with st.expander("🌳 工程檢視：ASCII 樹（僅工程人員使用）", expanded=False):
+        st.code(render_ascii_tree())
 
-    section_title("👪", "成員清單")
+    with st.expander("👪 工程檢視：成員清單（僅工程人員使用）", expanded=False):
     data = [{"ID": m["id"], "姓名": m["name"], "性別": m["gender"], "出生": m["birth"], "過世": m["death"], "備註": m["note"]} for m in member_list()]
-    st.dataframe(data, use_container_width=True)
+        st.dataframe(data, use_container_width=True)
 
-    section_title("🧬", "關係清單")
+    with st.expander("🧬 工程檢視：關係清單（僅工程人員使用）", expanded=False):
     rels = relation_list()
     if rels:
-        st.table([{"ID":r["id"], "父母ID":r["src"], "子女ID":r["dst"], "型別":r["type"]} for r in rels])
+            st.table([{"ID":r["id"], "父母ID":r["src"], "子女ID":r["dst"], "型別":r["type"]} for r in rels])
     else:
         st.caption("尚無關係")
 
@@ -181,7 +181,7 @@ with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True)
 
         # 2) 初始化圖並套用階層式版面
         net = Network(height="640px", width="100%", directed=True, notebook=False)
-        net.set_options('{"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":180,"treeSpacing":220}},"edges":{"smooth":{"type":"cubicBezier"}},"physics":{"enabled":false}}')
+        net.set_options('{"interaction":{"navigationButtons":true,"keyboard":true},"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":200,"treeSpacing":260}},"edges":{"smooth":{"type":"cubicBezier"}},"physics":{"enabled":false}}')
 
         # 3) 節點：夫妻合併節點 + 單身節點
         for a, b in sorted(spouse_pairs):
@@ -219,8 +219,16 @@ with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True)
 
     try:
         html_path = build_graph_html()
-        with open(html_path, "r", encoding="utf-8") as f:
-            components.html(f.read(), height=660, scrolling=True)
+        
+with open(html_path, "r", encoding="utf-8") as f:
+            raw = f.read()
+            # Auto-fit on load + center canvas via CSS
+            raw = raw.replace("new vis.Network(container, data, options);",
+                              "var network = new vis.Network(container, data, options);
+network.once('afterDrawing', function(){ network.fit({animation:false}); });")
+            # widen & center the container
+            raw = raw.replace("#mynetwork {", "#mynetwork { margin: 0 auto;")
+            components.html(raw, height=660, scrolling=True)
     except Exception as e:
         st.error(f"圖形家族樹建立失敗：{e}")
 
