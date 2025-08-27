@@ -27,3 +27,9 @@ streamlit run app.py
 PLAUSIBLE_DOMAIN="yourdomain.com"
 ```
 即可送出自訂事件：`Gap Calculated` / `Saved Snapshot` / `Booked Consult` / `Downloaded Report` / `Clarity Moment`
+
+
+## 報告輸出
+- 內部版（完整數字）：HTML 與原生 PDF
+- 分享版（去識別化摘要）：HTML 與原生 PDF
+> PDF 需安裝 `reportlab`（已包含於 requirements.txt）。
