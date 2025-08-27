@@ -312,7 +312,7 @@ def render_sidebar():
             else:
                 for b in got: chip(f"🏁 {b}")
         st.divider(); st.markdown("**邀請家族成員共建**")
-        st.code(f\"?user={USER_ID}\"); st.caption("唯讀：加上 `&mode=view`。")
+        st.code(f"?user={USER_ID}"); st.caption("唯讀：加上 `&mode=view`。")
 
 # --- Family tree rendering (ASCII) ---
 def _idx_members(members): return {m["id"]: m for m in members}
