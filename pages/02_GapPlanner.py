@@ -1,11 +1,15 @@
-
 # -*- coding: utf-8 -*-
 import streamlit as st
+from utils.branding import set_page, sidebar_brand, brand_hero, footer
 import matplotlib.pyplot as plt
-
 import os
 from matplotlib import font_manager, rcParams
 
+set_page("📊 缺口與保單模擬 | 影響力傳承平台", layout="centered")   # ← 已改成 📊
+sidebar_brand()
+brand_hero("📊 流動性缺口與保單策略模擬")                     # ← 已改成 📊
+
+# 中文字型（圖表）
 def _setup_zh_font():
     candidates = [
         "./NotoSansTC-Regular.ttf",
@@ -13,30 +17,21 @@ def _setup_zh_font():
         "./TaipeiSansTCBeta-Regular.ttf",
         "./TaipeiSansTCBeta-Regular.otf",
     ]
-    chosen = None
     for p in candidates:
         if os.path.exists(p):
             try:
                 font_manager.fontManager.addfont(p)
-                # 通用字體名稱（對應 Noto/Taipei Sans）
                 rcParams['font.family'] = 'sans-serif'
                 rcParams['font.sans-serif'] = ['Noto Sans TC', 'Taipei Sans TC Beta', 'Microsoft JhengHei', 'PingFang TC', 'Heiti TC']
                 rcParams['axes.unicode_minus'] = False
-                chosen = p
-                break
+                return True
             except Exception:
                 pass
-    # 即使沒有找到，也避免負號變成方塊
     rcParams['axes.unicode_minus'] = False
-    return chosen is not None
+    return False
 
-_has_font = _setup_zh_font()
-if not _has_font:
+if not _setup_zh_font():
     st.caption("提示：若圖表中文字出現方塊/亂碼，請把 **NotoSansTC-Regular.ttf** 放在專案根目錄後重新載入。")
-
-
-st.set_page_config(page_title="💧 缺口與保單模擬 | 影響力傳承平台", page_icon="💧", layout="centered")
-st.title("💧 流動性缺口與保單策略模擬")
 
 def taiwan_estate_tax(taxable_amount: int) -> int:
     x = int(max(0, taxable_amount))
@@ -93,31 +88,4 @@ target_cover = c5.number_input("新保單目標保額", min_value=0, value=int(g
 pay_years = c6.selectbox("繳費年期", [1, 3, 5, 6, 7, 10], index=3)
 
 c7, c8 = st.columns(2)
-assumed_IRR = c7.slider("保單內含報酬率假設（僅估年繳）", min_value=0.0, max_value=6.0, value=2.5, step=0.1)
-premium_ratio = c8.slider("年繳 / 保額 比例（粗估）", min_value=1.0, max_value=20.0, value=10.0, step=0.5)
-
-plan = plan_with_insurance(need=need, available=available, cover=target_cover, pay_years=pay_years, premium_ratio=premium_ratio)
-st.write("**估算年繳保費**：", format_currency(plan["annual_premium"]))
-st.write("**補齊缺口後的剩餘**：", format_currency(plan["surplus_after_cover"]))
-
-fig1, ax1 = plt.subplots()
-labels = ["不用保單", "加上保單"]
-values = [max(0, need - available), max(0, need - (available + target_cover))]
-
-if sum(values) == 0:
-    st.info("目前沒有流動性缺口，圖表略過。")
-else:
-    ax1.bar(labels, values)
-    ax1.set_ylabel("剩餘缺口（TWD）")
-    ax1.set_title("保單介入前後的缺口對比")
-    st.pyplot(fig1)
-
-st.session_state["plan_data"] = dict(
-    need=need, available=available, gap=gap, target_cover=target_cover,
-    pay_years=pay_years, annual_premium=plan["annual_premium"],
-    surplus_after_cover=plan["surplus_after_cover"],
-    tax=tax, deductions=deductions, taxable_base=taxable_base
-)
-
-st.info("下一步：下載一頁式提案，帶回家與家人討論。")
-st.page_link("pages/03_Proposal.py", label="➡️ 下載一頁式提案")
+assumed_IRR = c_
