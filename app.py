@@ -17,7 +17,7 @@ c1, c2, c3 = st.columns(3)
 with c1:
     st.page_link("pages/01_QuickScan.py", label="🚦 開始快篩（3 分鐘）", icon="🚦")
 with c2:
-    st.page_link("pages/02_GapPlanner.py", label="💧 缺口與保單模擬", icon="💧")
+    st.page_link("pages/02_GapPlanner.py", label="📊 缺口與保單模擬", icon="📊")
 with c3:
     st.page_link("pages/03_Proposal.py", label="📄 下載一頁式提案", icon="📄")
 
