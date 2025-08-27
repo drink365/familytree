@@ -156,38 +156,63 @@ from pyvis.network import Network
 import tempfile, os, uuid
 import streamlit.components.v1 as components
 
+
+# ==== 圖形家族樹（夫妻合併節點） ====
+from pyvis.network import Network
+import streamlit.components.v1 as components
+import tempfile, os, uuid
+
 with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True):
     def build_graph_html():
         members = member_list(); rels = relation_list()
         id2name = {m["id"]: m["name"] for m in members}
 
-        net = Network(height="640px", width="100%", directed=True, notebook=False)
-        net.barnes_hut(gravity=-25000, central_gravity=0.25, spring_length=220, spring_strength=0.005, damping=0.9)
-
-        # Hierarchical-ish layout settings
-        net.set_options('{"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":180,"treeSpacing":220}},"edges":{"smooth":{"type":"cubicBezier"}},"physics":{"enabled":false}}')
-
-        # Nodes
-        for m in members:
-            label = id2name[m["id"]]
-            net.add_node(m["id"], label=label, title=label, shape="box", borderWidth=1)
-
-        # Spouse edges (dashed, undirected feel; avoid duplicates)
-        seen = set()
+        # 1) 建立唯一的配偶組合 & 映射：人 -> 夫妻節點
+        spouse_pairs = set()
         for r in rels:
             if r["type"] == "spouse":
                 a, b = r["src"], r["dst"]
-                key = tuple(sorted([a,b]))
-                if key in seen: continue
-                seen.add(key)
-                net.add_edge(a, b, dashes=True, color="#94a3b8")
+                spouse_pairs.add(tuple(sorted((a, b))))
+        person_to_couple = {}
+        for a, b in spouse_pairs:
+            cid = f"c_{a}_{b}"
+            person_to_couple[a] = cid
+            person_to_couple[b] = cid
 
-        # Parent -> Child edges
+        # 2) 初始化圖並套用階層式版面
+        net = Network(height="640px", width="100%", directed=True, notebook=False)
+        net.set_options('{"layout":{"hierarchical":{"enabled":true,"direction":"UD","sortMethod":"directed","nodeSpacing":180,"treeSpacing":220}},"edges":{"smooth":{"type":"cubicBezier"}},"physics":{"enabled":false}}')
+
+        # 3) 節點：夫妻合併節點 + 單身節點
+        for a, b in sorted(spouse_pairs):
+            cid = person_to_couple[a]
+            label = f"{id2name.get(a,'?')} ━ {id2name.get(b,'?')}"
+            net.add_node(cid, label=label, title=label, shape="box", borderWidth=1)
+
+        singles = [m["id"] for m in members if m["id"] not in person_to_couple]
+        for pid in singles:
+            nid = f"p_{pid}"
+            label = id2name.get(pid, "?")
+            net.add_node(nid, label=label, title=label, shape="ellipse", borderWidth=1)
+
+        # 4) 邊：父母 -> 子女（父母以夫妻節點為主；子女若已婚指向其夫妻節點，否則指向個人）
+        def node_of_person(pid:int)->str:
+            return person_to_couple.get(pid, f"p_{pid}")
+
+        seen_edges = set()
         for r in rels:
             if r["type"] == "parent":
-                net.add_edge(r["src"], r["dst"], arrows="to")
+                parent_node = node_of_person(r["src"])
+                child_node  = node_of_person(r["dst"])
+                if parent_node == child_node:  # 避免自迴圈（極端案例）
+                    continue
+                key = (parent_node, child_node)
+                if key in seen_edges: 
+                    continue
+                seen_edges.add(key)
+                net.add_edge(parent_node, child_node, arrows="to")
 
-        # Export HTML
+        # 5) 匯出 HTML（使用臨時路徑）
         tmp = os.path.join(tempfile.gettempdir(), f"family_graph_{uuid.uuid4().hex}.html")
         net.save_graph(tmp)
         return tmp
