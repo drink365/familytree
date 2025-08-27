@@ -153,6 +153,7 @@ with colB:
 
 # ==== 圖形家族樹（互動） ====
 from pyvis.network import Network
+import tempfile, os, uuid
 import streamlit.components.v1 as components
 
 with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True):
@@ -187,7 +188,7 @@ with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True)
                 net.add_edge(r["src"], r["dst"], arrows="to")
 
         # Export HTML
-        tmp = "/mnt/data/family_graph.html"
+        tmp = os.path.join(tempfile.gettempdir(), f"family_graph_{uuid.uuid4().hex}.html")
         net.save_graph(tmp)
         return tmp
 
