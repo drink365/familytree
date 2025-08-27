@@ -27,21 +27,28 @@ BRAND = {
 def set_page(title: str, icon: str | None = None, layout: str = "wide"):
     st.set_page_config(page_title=title, page_icon=(icon or BRAND["favicon"]), layout=layout)
 
+def _page_if_exists(path: str, label: str, icon: str | None = None):
+    """只有當檔案存在於專案中時才建立 page_link，避免 StreamlitPageNotFoundError。"""
+    if Path(path).exists():
+        st.page_link(path, label=label, icon=icon)
+
 def sidebar_brand():
     with st.sidebar:
         if Path(BRAND["logo"]).exists():
             st.image(BRAND["logo"], use_column_width=True)
-        st.markdown(f"**{BRAND['name']}**  \n"
-                    f"<small style='color:{BRAND['text_muted']}'>{BRAND['tagline']}</small>",
-                    unsafe_allow_html=True)
+        st.markdown(
+            f"**{BRAND['name']}**  \n"
+            f"<small style='color:{BRAND['text_muted']}'>{BRAND['tagline']}</small>",
+            unsafe_allow_html=True
+        )
         st.divider()
         st.markdown("**快速導覽**")
-        st.page_link("app.py", label="🏠 首頁")
-        st.page_link("pages/01_QuickScan.py", label="🚦 快篩")
-        st.page_link("pages/02_GapPlanner.py", label="💧 缺口模擬")
-        st.page_link("pages/03_Proposal.py", label="📄 一頁式提案")
-        st.page_link("pages/90_About.py", label="🏢 關於我們 / 聯絡")
-        st.page_link("pages/91_Privacy.py", label="🔒 隱私與免責")
+        _page_if_exists("app.py", "🏠 首頁", None)
+        _page_if_exists("pages/01_QuickScan.py", "🚦 快篩", None)
+        _page_if_exists("pages/02_GapPlanner.py", "💧 缺口模擬", None)
+        _page_if_exists("pages/03_Proposal.py", "📄 一頁式提案", None)
+        _page_if_exists("pages/90_About.py", "🏢 關於我們 / 聯絡", None)
+        _page_if_exists("pages/91_Privacy.py", "🔒 隱私與免責", None)
 
 def brand_hero(title:str, subtitle:str=""):
     col1, col2 = st.columns([1,4])
