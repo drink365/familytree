@@ -150,5 +150,59 @@ with colB:
         for s in mapping.get(last['type'], ["整理文件與下一步會議"]):
             st.markdown(f"- {s}")
 
+
+# ==== 圖形家族樹（互動） ====
+from pyvis.network import Network
+import streamlit.components.v1 as components
+
+with st.expander("🕸️ 圖形家族樹（可拖曳/縮放）", expanded=True):
+    def build_graph_html():
+        members = member_list(); rels = relation_list()
+        id2name = {m["id"]: m["name"] for m in members}
+
+        net = Network(height="640px", width="100%", directed=True, notebook=False)
+        net.barnes_hut(gravity=-25000, central_gravity=0.25, spring_length=220, spring_strength=0.005, damping=0.9)
+
+        # Hierarchical-ish layout settings
+        net.set_options("""
+        const options = {
+          layout: { hierarchical: { enabled: true, direction: 'UD', sortMethod: 'directed', nodeSpacing: 180, treeSpacing: 220 } },
+          edges: { smooth: { type: 'cubicBezier' } },
+          physics: { enabled: false }
+        }
+        """)
+
+        # Nodes
+        for m in members:
+            label = id2name[m["id"]]
+            net.add_node(m["id"], label=label, title=label, shape="box", borderWidth=1)
+
+        # Spouse edges (dashed, undirected feel; avoid duplicates)
+        seen = set()
+        for r in rels:
+            if r["type"] == "spouse":
+                a, b = r["src"], r["dst"]
+                key = tuple(sorted([a,b]))
+                if key in seen: continue
+                seen.add(key)
+                net.add_edge(a, b, dashes=True, color="#94a3b8")
+
+        # Parent -> Child edges
+        for r in rels:
+            if r["type"] == "parent":
+                net.add_edge(r["src"], r["dst"], arrows="to")
+
+        # Export HTML
+        tmp = "/mnt/data/family_graph.html"
+        net.save_graph(tmp)
+        return tmp
+
+    try:
+        html_path = build_graph_html()
+        with open(html_path, "r", encoding="utf-8") as f:
+            components.html(f.read(), height=660, scrolling=True)
+    except Exception as e:
+        st.error(f"圖形家族樹建立失敗：{e}")
+
 with st.expander("提示"):
     guidance_note("先把成員與直系關係補齊，之後再補配偶與旁系。完成 5 位成員即可達成里程碑『家族樹築者』。")
