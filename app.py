@@ -1,7 +1,7 @@
 # app.py
 # -*- coding: utf-8 -*-
 import streamlit as st
-import uuid
+import uuid, os, json, sqlite3
 from datetime import datetime, timedelta, timezone
 import random
 import pandas as pd
@@ -10,57 +10,303 @@ import pandas as pd
 # 基本設定
 # =========================
 st.set_page_config(
-    page_title="影響力傳承平台｜互動原型",
+    page_title="影響力傳承平台｜互動原型（MVP）",
     page_icon="🌟",
     layout="wide",
 )
 TZ = timezone(timedelta(hours=8))  # 台灣時區（UTC+8）
 
-# =========================
-# 初始化 Session State
-# =========================
-def month_end_2359():
-    today = datetime.now(TZ)
-    first_of_next = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
-    last_of_this = first_of_next - timedelta(seconds=1)
-    return last_of_this.replace(hour=23, minute=59, second=59, microsecond=0)
+def inject_analytics():
+    # 可選：在 secrets 設定 PLAUSIBLE_DOMAIN="gracefo.com"（或你的網域）
+    try:
+        domain = st.secrets["PLAUSIBLE_DOMAIN"]
+        import streamlit.components.v1 as components
+        components.html(
+            f"""<script defer data-domain="{domain}" src="https://plausible.io/js/script.js"></script>""",
+            height=0,
+        )
+    except Exception:
+        pass
 
+inject_analytics()
+
+# =========================
+# DB 初始化
+# =========================
+DB_DIR = "data"
+DB_PATH = os.path.join(DB_DIR, "legacy.db")
+os.makedirs(DB_DIR, exist_ok=True)
+
+def db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+def init_db():
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE IF NOT EXISTS users(
+        id TEXT PRIMARY KEY,
+        family_name TEXT,
+        created_at TEXT
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS assets(
+        user_id TEXT PRIMARY KEY,
+        json TEXT,
+        updated_at TEXT
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS plans(
+        user_id TEXT PRIMARY KEY,
+        json TEXT,
+        updated_at TEXT
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS versions(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        family_name TEXT,
+        assets_json TEXT,
+        plan_json TEXT,
+        created_at TEXT
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS badges(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        name TEXT,
+        created_at TEXT
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS bookings(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id TEXT,
+        created_at TEXT
+    )""")
+    cur.execute("""CREATE TABLE IF NOT EXISTS meta(
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )""")
+    conn.commit()
+    return conn
+
+CONN = init_db()
+
+def meta_get(key, default=None):
+    cur = CONN.cursor()
+    cur.execute("SELECT value FROM meta WHERE key=?", (key,))
+    row = cur.fetchone()
+    return (json.loads(row[0]) if row else default)
+
+def meta_set(key, value):
+    cur = CONN.cursor()
+    cur.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (key, json.dumps(value)))
+    CONN.commit()
+
+# 設定共享名額與截止（每月 10 名）
+def setup_monthly_challenge():
+    now = datetime.now(TZ)
+    deadline = meta_get("consult_deadline")
+    if deadline:
+        deadline = datetime.fromisoformat(deadline)
+    if not deadline or now > deadline:
+        # 設定本月截止為當月最後一日 23:59
+        first_of_next = (now.replace(day=1) + timedelta(days=32)).replace(day=1)
+        last_of_this = first_of_next - timedelta(seconds=1)
+        last_of_this = last_of_this.replace(hour=23, minute=59, second=59, microsecond=0)
+        meta_set("consult_deadline", last_of_this.isoformat())
+        meta_set("consult_slots_total", 10)
+        meta_set("consult_slots_left", 10)
+
+setup_monthly_challenge()
+
+def consult_state():
+    return {
+        "deadline": datetime.fromisoformat(meta_get("consult_deadline")),
+        "slots_total": meta_get("consult_slots_total", 10),
+        "slots_left": meta_get("consult_slots_left", 10),
+    }
+
+def consult_decrement():
+    cur = CONN.cursor()
+    left = meta_get("consult_slots_left", 0)
+    if left <= 0:
+        return False
+    meta_set("consult_slots_left", left - 1)
+    return True
+
+# =========================
+# 使用者識別（?user=）
+# =========================
+def get_qs():
+    try:
+        return dict(st.query_params)
+    except Exception:
+        return st.experimental_get_query_params()
+
+def set_qs(params: dict):
+    try:
+        st.query_params.clear()
+        st.query_params.update(params)
+    except Exception:
+        st.experimental_set_query_params(**params)
+
+def get_or_create_user_id():
+    qs = get_qs()
+    incoming = qs.get("user")
+    if isinstance(incoming, list):  # 兼容舊版回傳型態
+        incoming = incoming[0] if incoming else None
+    if incoming:
+        st.session_state["user_id"] = incoming
+        return incoming
+    # 沒有就新建
+    uid = "u_" + str(uuid.uuid4())[:8]
+    st.session_state["user_id"] = uid
+    qs["user"] = uid
+    set_qs(qs)
+    return uid
+
+USER_ID = get_or_create_user_id()
+
+# =========================
+# 預設值
+# =========================
+DEFAULT_ASSETS = {"公司股權":0, "不動產":0, "金融資產":0, "保單":0, "海外資產":0, "其他":0}
+DEFAULT_PLAN = {"股權給下一代":40, "保單留配偶":30, "慈善信託":10, "留現金緊急金":20}
+
+# =========================
+# 使用者資料載入/儲存
+# =========================
+def user_get():
+    cur = CONN.cursor()
+    cur.execute("SELECT id,family_name,created_at FROM users WHERE id=?", (USER_ID,))
+    return cur.fetchone()
+
+def user_create_if_missing():
+    if not user_get():
+        cur = CONN.cursor()
+        cur.execute(
+            "INSERT INTO users(id,family_name,created_at) VALUES(?,?,?)",
+            (USER_ID, "", datetime.now(TZ).isoformat()),
+        )
+        CONN.commit()
+
+def family_name_get():
+    row = user_get()
+    return row[1] if row else ""
+
+def family_name_set(name: str):
+    cur = CONN.cursor()
+    cur.execute("UPDATE users SET family_name=? WHERE id=?", (name, USER_ID))
+    CONN.commit()
+
+def assets_get():
+    cur = CONN.cursor()
+    cur.execute("SELECT json FROM assets WHERE user_id=?", (USER_ID,))
+    row = cur.fetchone()
+    return (json.loads(row[0]) if row else DEFAULT_ASSETS.copy())
+
+def assets_set(data: dict):
+    cur = CONN.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO assets(user_id,json,updated_at) VALUES(?,?,?)",
+        (USER_ID, json.dumps(data), datetime.now(TZ).isoformat()),
+    )
+    CONN.commit()
+
+def plan_get():
+    cur = CONN.cursor()
+    cur.execute("SELECT json FROM plans WHERE user_id=?", (USER_ID,))
+    row = cur.fetchone()
+    return (json.loads(row[0]) if row else DEFAULT_PLAN.copy())
+
+def plan_set(data: dict):
+    cur = CONN.cursor()
+    cur.execute(
+        "INSERT OR REPLACE INTO plans(user_id,json,updated_at) VALUES(?,?,?)",
+        (USER_ID, json.dumps(data), datetime.now(TZ).isoformat()),
+    )
+    CONN.commit()
+
+def version_insert(family, assets, plan):
+    cur = CONN.cursor()
+    cur.execute(
+        "INSERT INTO versions(user_id,family_name,assets_json,plan_json,created_at) VALUES(?,?,?,?,?)",
+        (USER_ID, family, json.dumps(assets), json.dumps(plan), datetime.now(TZ).isoformat()),
+    )
+    CONN.commit()
+
+def versions_list():
+    cur = CONN.cursor()
+    cur.execute(
+        "SELECT family_name,assets_json,plan_json,created_at FROM versions WHERE user_id=? ORDER BY id DESC",
+        (USER_ID,),
+    )
+    rows = cur.fetchall()
+    out = []
+    for fam, aj, pj, ts in rows:
+        out.append({
+            "family": fam,
+            "assets": json.loads(aj),
+            "plan": json.loads(pj),
+            "time": datetime.fromisoformat(ts),
+        })
+    return out
+
+def badge_add(name: str):
+    # 檢查是否已有同名徽章
+    cur = CONN.cursor()
+    cur.execute("SELECT 1 FROM badges WHERE user_id=? AND name=?", (USER_ID, name))
+    if cur.fetchone():
+        return
+    cur.execute(
+        "INSERT INTO badges(user_id,name,created_at) VALUES(?,?,?)",
+        (USER_ID, name, datetime.now(TZ).isoformat()),
+    )
+    CONN.commit()
+
+def badges_list():
+    cur = CONN.cursor()
+    cur.execute("SELECT name FROM badges WHERE user_id=? ORDER BY id", (USER_ID,))
+    return [r[0] for r in cur.fetchall()]
+
+def booking_insert():
+    cur = CONN.cursor()
+    cur.execute(
+        "INSERT INTO bookings(user_id,created_at) VALUES(?,?)",
+        (USER_ID, datetime.now(TZ).isoformat()),
+    )
+    CONN.commit()
+
+# =========================
+# 初始化 Session State（混合 DB）
+# =========================
 def init_state():
+    user_create_if_missing()
     ss = st.session_state
-    ss.setdefault("mission_ack", False)                 # 使命啟動
-    ss.setdefault("profile_done", False)                # 基本資料
-    ss.setdefault("assets_done", False)                 # 資產盤點
-    ss.setdefault("plan_done", False)                   # 策略配置
-    ss.setdefault("quiz_done", False)                   # 小測驗
-    ss.setdefault("advisor_booked", False)              # 預約顧問
-    ss.setdefault("badges", set())                      # 徽章
-    ss.setdefault("versions", [])                       # 版本管理
-    ss.setdefault("invite_code", str(uuid.uuid4())[:8]) # 協作邀請碼
-    ss.setdefault("consult_slots_total", 10)            # 本月名額
-    ss.setdefault("consult_slots_left", 10)             # 剩餘名額
-    ss.setdefault("consult_deadline", month_end_2359()) # 截止時間
-    ss.setdefault("family_name", "")                    # 家族名稱
-    ss.setdefault("assets", {                           # 六大資產
-        "公司股權": 0, "不動產": 0, "金融資產": 0,
-        "保單": 0, "海外資產": 0, "其他": 0
-    })
-    ss.setdefault("plan", {                             # 分配比例（需=100）
-        "股權給下一代": 40, "保單留配偶": 30,
-        "慈善信託": 10, "留現金緊急金": 20
-    })
-    ss.setdefault("risk_rate_no_plan", 0.18)            # 未規劃稅負率（示意）
-    ss.setdefault("risk_rate_with_plan", 0.10)          # 已規劃稅負率（示意）
-    ss.setdefault("tips_unlocked", [])                  # 已解鎖知識卡
+    ss.setdefault("mission_ack", False)
+    ss.setdefault("profile_done", False)
+    ss.setdefault("assets_done", False)
+    ss.setdefault("plan_done", False)
+    ss.setdefault("quiz_done", False)
+    ss.setdefault("advisor_booked", False)
+    ss.setdefault("tips_unlocked", [])
+
+    # 從 DB 帶入
+    ss.setdefault("family_name", family_name_get())
+    ss.setdefault("assets", assets_get())
+    ss.setdefault("plan", plan_get())
+
+    # 稅率示意值（可調）
+    ss.setdefault("risk_rate_no_plan", 0.18)
+    ss.setdefault("risk_rate_with_plan", 0.10)
+
 init_state()
 
 # =========================
-# 工具函式
+# 工具與文案
 # =========================
 def human_time(dt: datetime):
     return dt.strftime("%Y-%m-%d %H:%M")
 
 def add_badge(name: str):
-    st.session_state.badges.add(name)
+    badge_add(name)
 
 def progress_score():
     checks = [
@@ -113,21 +359,22 @@ with st.sidebar:
     st.caption("完成各區塊互動以提升完成度。")
 
     st.markdown("## 🏅 徽章")
-    if not st.session_state.badges:
+    got_badges = badges_list()
+    if not got_badges:
         st.caption("尚未解鎖徽章，完成任務即可獲得獎章。")
     else:
-        for b in sorted(list(st.session_state.badges)):
+        for b in got_badges:
             chip(f"🏅 {b}")
 
     st.divider()
     st.markdown("**邀請家族成員共建（示意）**")
-    st.code(f"Invite Code: {st.session_state.invite_code}")
-    st.caption("分享此代碼讓家族成員加入協作。")
+    st.code(f"{st.get_option('server.baseUrlPath') or ''}?user={USER_ID}")
+    st.caption("將此連結分享給家族成員共同編輯。")
 
 # =========================
 # 頁面標頭
 # =========================
-st.title("🌟 影響力傳承平台｜互動原型")
+st.title("🌟 影響力傳承平台｜互動原型（MVP）")
 st.caption("以『準備與從容』為精神，讓家族影響力得以溫暖延續。")
 
 tabs = st.tabs([
@@ -151,10 +398,8 @@ with tabs[0]:
 本平台以家族傳承為核心，協助您用**可視化工具**整合 **法 / 稅 / 財**，
 把「用不完的錢如何安心交棒」說清楚、做踏實。
 """)
-
     colA, colB = st.columns([3,2])
     with colA:
-        # 可直接播放，若不想自動載入，可移除或改成圖片/連結
         st.video("https://www.youtube.com/watch?v=dQw4w9WgXcQ")
         st.caption("上線時可換成品牌短片或動態 Banner。")
     with colB:
@@ -176,9 +421,11 @@ with tabs[1]:
     st.subheader("Step 1｜建立家族識別")
     fam = st.text_input("家族名稱（用於封面與報告）", value=st.session_state.family_name, placeholder="例如：黃氏家族")
     if st.button("儲存家族識別", key="btn_profile"):
-        st.session_state.family_name = fam.strip()
-        st.session_state.profile_done = bool(st.session_state.family_name)
-        if st.session_state.profile_done:
+        name = (fam or "").strip()
+        st.session_state.family_name = name
+        family_name_set(name)
+        st.session_state.profile_done = bool(name)
+        if name:
             add_badge("家族識別完成")
             st.success("已儲存。徽章：家族識別完成")
         else:
@@ -198,6 +445,7 @@ with tabs[1]:
     if st.button("完成資產盤點 ✅", key="btn_assets"):
         total = sum(st.session_state.assets.values())
         if total > 0:
+            assets_set(st.session_state.assets)
             st.session_state.assets_done = True
             add_badge("家族建築師")
             st.success(f"已完成資產盤點（總額 {total:,} 萬元）。徽章：家族建築師")
@@ -206,7 +454,8 @@ with tabs[1]:
 
     with st.expander("查看我目前的完成度與徽章"):
         st.metric("目前完成度", f"{progress_score()}%")
-        st.write("徽章：", ", ".join(sorted(list(st.session_state.badges))) if st.session_state.badges else "尚無")
+        have = badges_list()
+        st.write("徽章：", ", ".join(have) if have else "尚無")
 
 # =========================
 # 3. 策略沙盒
@@ -234,6 +483,7 @@ with tabs[2]:
                     "慈善信託": p3,
                     "留現金緊急金": p4
                 })
+                plan_set(st.session_state.plan)
                 st.session_state.plan_done = True
                 add_badge("策略設計師")
                 st.success("已更新策略。徽章：策略設計師")
@@ -278,19 +528,14 @@ with tabs[3]:
         st.download_button("下載簡版報告（.txt）", report_txt, file_name="legacy_report.txt")
 
         if st.button("保存為新版本 💾", use_container_width=True):
-            snapshot = {
-                "time": datetime.now(TZ),
-                "family": st.session_state.family_name,
-                "assets": st.session_state.assets.copy(),
-                "plan": st.session_state.plan.copy()
-            }
-            st.session_state.versions.append(snapshot)
+            version_insert(st.session_state.family_name, st.session_state.assets, st.session_state.plan)
             add_badge("版本管理者")
-            st.success(f"已保存版本（{human_time(snapshot['time'])}）。徽章：版本管理者")
+            st.success("已保存版本。徽章：版本管理者")
 
     with colR:
         st.subheader("版本記錄")
-        if not st.session_state.versions:
+        vers = versions_list()
+        if not vers:
             st.caption("尚無版本記錄。完成前述步驟後，可在此保存版本。")
         else:
             data = [{
@@ -301,7 +546,7 @@ with tabs[3]:
                 "慈善信託%": v["plan"]["慈善信託"],
                 "留現金緊急金%": v["plan"]["留現金緊急金"],
                 "資產總額(萬)": sum(v["assets"].values())
-            } for v in st.session_state.versions]
+            } for v in vers]
             df = pd.DataFrame(data)
             st.dataframe(df, use_container_width=True)
 
@@ -310,10 +555,7 @@ with tabs[3]:
 # =========================
 with tabs[4]:
     section_title("👥", "家族共建與顧問協作（示意）")
-    st.write("透過邀請碼邀請家族成員加入協作，可在傳承地圖上留言、提議（示意聊天框）。")
-
-    st.code(f"Invite Code：{st.session_state.invite_code}")
-    st.caption("實作時可串接後端建立多使用者協作與權限。")
+    st.write("把上方側欄的專屬連結分享給家族成員，即可一人一連結共同編輯（示意設計，實務可加權限）。")
 
     with st.chat_message("user"):
         st.write("我覺得『慈善信託』比例可以再拉高一點，因為媽媽很在意回饋社會。")
@@ -323,28 +565,31 @@ with tabs[4]:
     add_badge("協作啟動者")
 
 # =========================
-# 6. 限時與名額
+# 6. 限時與名額（共享）
 # =========================
 with tabs[5]:
-    section_title("⏳", "限時挑戰與預約名額")
-    deadline = st.session_state.consult_deadline
+    section_title("⏳", "限時挑戰與預約名額（全站共享）")
+    cs = consult_state()
     now = datetime.now(TZ)
-    remain = max(0, int((deadline - now).total_seconds()))
+    remain = max(0, int((cs["deadline"] - now).total_seconds()))
 
     colL, colR = st.columns(2)
     with colL:
         st.subheader("🎯 本月挑戰")
         st.write("在**截止前**完成『資產盤點 + 策略初稿 + 版本保存』，可獲得 30 分鐘顧問諮詢。")
-        st.metric("剩餘名額", st.session_state.consult_slots_left)
-        st.metric("截止時間", human_time(deadline))
-        st.caption("名額與倒數為示意，可串接真實後台。")
+        st.metric("剩餘名額", cs["slots_left"])
+        st.metric("截止時間", human_time(cs["deadline"]))
+        st.caption("名額與倒數為全站共享（DB 中央管理）。")
 
-        if st.session_state.consult_slots_left > 0:
+        if cs["slots_left"] > 0:
             if st.button("我要預約諮詢 📅", use_container_width=True):
-                st.session_state.advisor_booked = True
-                st.session_state.consult_slots_left -= 1
-                add_badge("行動派")
-                st.success("已預約成功！徽章：行動派")
+                if consult_decrement():
+                    booking_insert()
+                    st.session_state.advisor_booked = True
+                    add_badge("行動派")
+                    st.success("已預約成功！徽章：行動派")
+                else:
+                    st.error("剛剛被搶走了，請稍後再試或下月再來～")
         else:
             st.error("本月名額已滿，請下月再試。")
 
