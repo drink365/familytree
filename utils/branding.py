@@ -6,9 +6,9 @@ from pathlib import Path
 BRAND = {
     "name": "永傳家族辦公室",
     "english": "Grace Family Office",
-    "tagline": "以流動性為核心的家族傳承規劃",
-    "logo": "logo.png",        # 內頁與側邊欄使用
-    "favicon": "logo2.png",     # 瀏覽器分頁圖示（你指定的 logo2.png）
+    "tagline": "以現金流為核心的家族傳承規劃",
+    "logo": "logo.png",
+    "favicon": "logo2.png",
     "primary": "#B21E2B",
     "text_muted": "#6B7280",
     "site": {
@@ -23,18 +23,14 @@ BRAND = {
     "cta": {"book": "預約一對一傳承健檢", "contact": "聯絡我們"}
 }
 
-# --- 共用元件 ---
 def set_page(title: str, icon: str | None = None, layout: str = "wide"):
     st.set_page_config(page_title=title, page_icon=(icon or BRAND["favicon"]), layout=layout)
 
 def _hide_streamlit_sidebar_nav():
-    """隱藏 Streamlit 自動產生的 pages 清單，只保留我們自訂的側邊欄內容。"""
     st.markdown(
         """
         <style>
-        /* 隱藏側邊欄內建的 pages 區塊 */
         section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] { display: none; }
-        /* 讓自訂內容更緊湊 */
         section[data-testid="stSidebar"] { padding-top: 1rem; }
         </style>
         """,
@@ -46,7 +42,7 @@ def _page_if_exists(path: str, label: str, icon: str | None = None):
         st.page_link(path, label=label, icon=icon)
 
 def sidebar_brand():
-    _hide_streamlit_sidebar_nav()  # ← 先把系統自動導航隱藏
+    _hide_streamlit_sidebar_nav()
     with st.sidebar:
         if Path(BRAND["logo"]).exists():
             st.image(BRAND["logo"], use_container_width=True)
@@ -61,6 +57,7 @@ def sidebar_brand():
         _page_if_exists("pages/01_QuickScan.py", "🚦 快篩")
         _page_if_exists("pages/02_GapPlanner.py", "📊 缺口模擬")
         _page_if_exists("pages/03_Proposal.py", "📄 一頁式提案")
+        _page_if_exists("pages/04_AssetPlanner.py", "🧭 資產配置策略")
         _page_if_exists("pages/90_About.py", "🏢 關於我們 / 聯絡")
         _page_if_exists("pages/91_Privacy.py", "🔒 隱私與免責")
 
