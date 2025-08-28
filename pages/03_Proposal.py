@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
+import numpy as np
 
 # ---------------- 基本設定 ----------------
 set_page("📄 一頁式提案 | 影響力傳承平台", layout="centered")
@@ -149,17 +150,19 @@ def setup_font_for_matplotlib():
                 pass
     plt.rcParams["axes.unicode_minus"] = False
 
-def draw_logo_keep_ratio(c: canvas.Canvas, img_path: str, x: float, y: float, target_w: float):
+def draw_logo_keep_ratio(c: canvas.Canvas, img_path: str, x: float, y: float, target_h: float):
+    """把 logo 放在 (x,y) 的上方，固定高度 target_h，以等比例縮放。"""
     try:
         img = ImageReader(img_path)
         iw, ih = img.getSize()
-        scale = target_w / float(iw)
-        w = target_w
-        h = ih * scale
+        scale = target_h / float(ih)
+        w = iw * scale
+        h = target_h
+        # y 是「上緣」座標，ReportLab 需要左下角，所以減去高度
         c.drawImage(img, x, y - h, width=w, height=h, preserveAspectRatio=True, mask='auto')
-        return h
+        return w, h
     except Exception:
-        return 0
+        return 0, 0
 
 def fig_to_imagereader(fig, dpi=160):
     buf = io.BytesIO()
@@ -168,7 +171,7 @@ def fig_to_imagereader(fig, dpi=160):
     buf.seek(0)
     return ImageReader(buf)
 
-# ---------------- 產生 PDF ----------------
+# ---------------- 產生 PDF（表格版） ----------------
 def build_pdf_bytes():
     font_name = register_font_for_pdf()
     setup_font_for_matplotlib()
@@ -176,49 +179,74 @@ def build_pdf_bytes():
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     W, H = A4
-    left = 18 * mm
-    right = W - 18 * mm
-    top = H - 18 * mm
-    cursor_y = top
+    margin = 16 * mm
+    left = margin
+    right = W - margin
+    top = H - margin
 
-    # Logo（等比）
-    logo_h = draw_logo_keep_ratio(c, "./logo.png", left, top - 8*mm, 38*mm)
+    # ====== 頁首：Logo + 標題（Logo 定位固定不飄） ======
+    # 固定高度 14mm，放左上角；再在其右側畫標題
+    logo_w, logo_h = draw_logo_keep_ratio(c, "./logo.png", left, top, target_h=14*mm)
+    title_x = left + (logo_w + 6*mm)
+    title_y = top - 2*mm
 
-    # Title
     c.setFont(font_name, 20)
-    c.drawString(left, cursor_y - (logo_h + 8*mm), "傳承規劃建議（摘要）")
-    cursor_y -= (logo_h + 16*mm)
-
-    # Tagline
+    c.drawString(title_x, title_y - 4*mm, "傳承規劃建議（摘要）")
     c.setFont(font_name, 11)
     c.setFillColorRGB(0.35, 0.35, 0.38)
-    c.drawString(left, cursor_y, "先補足現金，再設計穩定現金流")
+    c.drawString(title_x, title_y - 11*mm, "先補足現金，再設計穩定現金流")
     c.setFillColorRGB(0, 0, 0)
-    cursor_y -= 10*mm
 
-    # 表格
-    def row(label, value, dy=8*mm, big=False):
-        nonlocal cursor_y
-        c.setFont(font_name, 11)
-        c.drawString(left, cursor_y, label)
-        c.setFont(font_name, 16 if big else 13)
-        c.drawRightString(right, cursor_y, value)
-        cursor_y -= dy
+    cursor_y = top - (logo_h + 18*mm)
 
-    row("一次性現金需求（稅+雜費）", fmt(one_time_need), big=True)
-    row("可用現金 + 既有保單", fmt(available_cash))
-    row("一次性現金缺口", fmt(cash_gap))
-    cursor_y -= 3*mm
-    row("長期現金流（每年×年數）", f"{fmt(annual_cashflow)} × {years}")
-    row("折現率（估）", f"{discount_rate:.1f}%")
-    row("現金流現值（PV）", fmt(lt_pv))
-    cursor_y -= 3*mm
-    row("合併需求現值（一次性 + 現金流PV）", fmt(need_total), big=True)
-    row("建議保額（草案）", fmt(target_cover))
-    row("估算年繳保費", fmt(annual_premium))
+    # ====== 表格外框 ======
+    # 表格的列（左欄標題 / 右欄金額）
+    rows = [
+        ("一次性現金需求（稅+雜費）", fmt(one_time_need), True),
+        ("可用現金 + 既有保單",       fmt(available_cash), False),
+        ("一次性現金缺口",           fmt(cash_gap), False),
+        ("", "", False),  # 分隔線
+        (f"長期現金流（每年×年數）", f"{fmt(annual_cashflow)} × {years}", False),
+        ("折現率（估）",            f"{discount_rate:.1f}%", False),
+        ("現金流現值（PV）",        fmt(lt_pv), False),
+        ("", "", False),  # 分隔線
+        ("合併需求現值（一次性 + 現金流PV）", fmt(need_total), True),
+        ("建議保額（草案）",         fmt(target_cover), False),
+        ("估算年繳保費",             fmt(annual_premium), False),
+    ]
 
-    # 說明
-    cursor_y -= 8*mm
+    # 表格尺寸與欄寬
+    col1_w = 90 * mm
+    col2_w = (right - left) - col1_w
+    row_h  = 9 * mm
+    table_top = cursor_y
+    table_left = left
+
+    # 表格背景與邊框
+    c.setLineWidth(0.8)
+    c.rect(table_left, table_top - row_h*len(rows), col1_w + col2_w, row_h*len(rows), stroke=1, fill=0)
+
+    # 橫線
+    for i in range(1, len(rows)):
+        y = table_top - row_h * i
+        c.line(table_left, y, table_left + col1_w + col2_w, y)
+
+    # 直線（分欄）
+    c.line(table_left + col1_w, table_top, table_left + col1_w, table_top - row_h*len(rows))
+
+    # 逐列填入
+    for idx, (label, value, is_big) in enumerate(rows):
+        y = table_top - row_h * idx - 6*mm  # 內縮 3mm + 行高
+        if label:  # 分隔列 label 為空
+            c.setFont(font_name, 11)
+            c.drawString(table_left + 3*mm, y, label)
+        c.setFont(font_name, 16 if is_big else 13)
+        if value:
+            c.drawRightString(table_left + col1_w + col2_w - 3*mm, y, value)
+
+    cursor_y = table_top - row_h*len(rows) - 10*mm
+
+    # ====== 說明（bullet） ======
     c.setFont(font_name, 12)
     c.drawString(left, cursor_y, "重點與依據")
     cursor_y -= 6*mm
@@ -234,24 +262,22 @@ def build_pdf_bytes():
         c.drawString(left, cursor_y, sline)
         cursor_y -= 6*mm
 
-    # 底部品牌
+    # ====== 底部品牌 ======
     c.setFont(font_name, 9.5)
     c.setFillColorRGB(0.35, 0.35, 0.38)
-    c.drawString(left, 14*mm, f"Grace Huang | 永傳家族傳承練")
+    c.drawString(left, 14*mm, "Grace Huang | 永傳家族傳承練")
     c.drawRightString(right, 14*mm, f"{EMAIL}  |  {WEBSITE}")
     c.drawRightString(right, 9*mm, ADDRESS)
+    c.setFillColorRGB(0, 0, 0)
 
-    # ======= 附錄頁：資產配置藍圖（若有 strategy） =======
+    # ====== 附錄頁：資產配置藍圖（若有 strategy） ======
     if strategy:
         c.showPage()
-        cursor_y = top
-
         # 標題
         c.setFont(font_name, 18)
-        c.drawString(left, cursor_y - 5*mm, "附錄：資產配置藍圖（進階）")
-        cursor_y -= 14*mm
+        c.drawString(left, H - margin - 8*mm, "附錄：資產配置藍圖（進階）")
 
-        # 準備資料
+        # 取資料
         total_base = float(strategy.get("total_base", 0))
         cash = float(strategy.get("cash", 0))
         financials = float(strategy.get("financials", 0))
@@ -268,27 +294,24 @@ def build_pdf_bytes():
         tax_sens = float(strategy.get("tax_sens", 0.0))
         legal_complex = float(strategy.get("legal_complex", 0.0))
 
-        # --- 1. 現況資產分布 ---
+        # 1) 現況資產分布
         fig1, ax1 = plt.subplots()
         labels1 = ["現金/定存", "金融資產", "不動產", "企業股權", "海外資產"]
         values1 = [cash, financials, realty, equity, overseas]
         if sum(values1) > 0:
             ax1.pie(values1, labels=labels1, autopct=lambda p: f"{p:.1f}%" if p > 0 else "")
             ax1.set_title("資產結構（現況）")
-            img1 = fig_to_imagereader(fig1)
-            c.drawImage(img1, left, cursor_y - 70*mm, width=80*mm, height=70*mm, mask='auto')
+        img1 = fig_to_imagereader(fig1)
 
-        # --- 2. 風險雷達圖 ---
-        import numpy as np
+        # 2) 風險雷達
         metrics = ["流動性", "成長性", "稅務敏感", "法務複雜"]
         scores = [liq_score, grow_score, tax_sens, legal_complex]
         angles = np.linspace(0, 2*np.pi, len(metrics), endpoint=False).tolist()
         angles += angles[:1]
         scores_plot = scores + scores[:1]
-
         fig2 = plt.figure()
         ax2 = plt.subplot(111, polar=True)
-        ax2.set_theta_offset(np.pi / 2)
+        ax2.set_theta_offset(np.pi/2)
         ax2.set_theta_direction(-1)
         ax2.set_xticks(angles[:-1])
         ax2.set_xticklabels(metrics)
@@ -296,25 +319,26 @@ def build_pdf_bytes():
         ax2.fill(angles, scores_plot, alpha=0.1)
         ax2.set_ylim(0, 5)
         img2 = fig_to_imagereader(fig2)
-        c.drawImage(img2, left + 92*mm, cursor_y - 70*mm, width=80*mm, height=70*mm, mask='auto')
 
-        # --- 3. 建議配置 ---
+        # 3) 建議配置
         fig3, ax3 = plt.subplots()
         labels2 = ["保護（保單/信託/一次性）", "核心現金準備", "成長資產"]
         values2 = [protection_pct, cash_pct, growth_pct]
         if sum(values2) > 0:
             ax3.pie(values2, labels=labels2, autopct=lambda p: f"{p:.1f}%" if p > 0 else "")
             ax3.set_title("建議資產配置比例")
-            img3 = fig_to_imagereader(fig3)
-            c.drawImage(img3, left, cursor_y - 150*mm, width=172*mm, height=70*mm, mask='auto')
+        img3 = fig_to_imagereader(fig3)
 
-        # 附錄備註
+        # 佈局
+        c.drawImage(img1, left, 120*mm, width=85*mm, height=70*mm, mask='auto')
+        c.drawImage(img2, left + 95*mm, 120*mm, width=85*mm, height=70*mm, mask='auto')
+        c.drawImage(img3, left, 28*mm, width=180*mm, height=80*mm, mask='auto')
+
         c.setFont(font_name, 10.5)
         c.setFillColorRGB(0.35, 0.35, 0.38)
         c.drawString(left, 18*mm, "註：此附錄基於使用者在『資產配置策略』頁輸入之示意數據，僅供規劃溝通參考。")
         c.setFillColorRGB(0, 0, 0)
 
-    # 完成
     c.showPage()
     c.save()
     buf.seek(0)
@@ -323,7 +347,7 @@ def build_pdf_bytes():
 # 下載按鈕
 pdf_buf = build_pdf_bytes()
 st.download_button(
-    label="📥 下載一頁式提案（PDF）",
+    label="📥 下載一頁式提案（PDF，表格版）",
     data=pdf_buf,
     file_name="Proposal.pdf",
     mime="application/pdf",
