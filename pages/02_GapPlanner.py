@@ -63,11 +63,14 @@ def plan_with_insurance(one_time_need: int, available_cash: int, long_term_pv: i
         annual_premium=annual_premium
     )
 
-# --------- 大數字顯示：避免被「…」截斷（新增） ---------
+# --------- 大數字顯示：桌面不換行、窄螢幕逗號處可換行（更新） ---------
 def money_html(value: int) -> str:
-    """把金額在逗號處插入 <wbr> 允許換行，並套用自適應字級樣式。"""
+    """
+    大字金額：桌面一行顯示；當視窗寬度 < 600px 時才允許在逗號處換行。
+    透過 <span class='comma'> 包住逗號，再用 media query 控制換行。
+    """
     s = "NT$ {:,}".format(int(value))
-    s = s.replace(",", ",<wbr>")  # 可於逗號換行
+    s = s.replace(",", "<span class='comma'>,</span>")
     return f"<div class='money-figure'>{s}</div>"
 
 # 一次注入的全域樣式
@@ -79,9 +82,15 @@ st.markdown("""
   /* 自適應字級（避免過大被截斷）：24px～48px */
   font-size: clamp(24px, 4vw, 48px);
   letter-spacing: 0.5px;
-  word-break: normal;      /* 不在字中硬切 */
-  overflow-wrap: anywhere; /* 額外保險 */
+  white-space: nowrap;      /* 預設不換行（桌面） */
 }
+.money-figure .comma{ display:inline; } /* 桌面逗號照常顯示，不作斷行點 */
+
+@media (max-width: 600px) {
+  .money-figure{ white-space: normal; }     /* 小螢幕允許換行 */
+  .money-figure .comma{ display:inline-block; width:0; } /* 逗號位置可成為斷行點 */
+}
+
 .money-label{
   color: #6B7280; font-size: 14px; margin-bottom: 4px;
 }
@@ -106,7 +115,7 @@ if not scan:
 st.markdown("### A. 一次性現金缺口（已估算）")
 colA1, colA2, colA3 = st.columns(3)
 
-# 這裡改用 money_card，避免數字被截斷
+# 使用 money_card：桌面不換行、手機才換行
 with colA1:
     money_card("一次性現金需求", scan["one_time_need"])
 with colA2:
