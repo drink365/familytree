@@ -4,10 +4,11 @@ from utils.branding import set_page, sidebar_brand, brand_hero, footer
 import matplotlib.pyplot as plt
 import os
 from matplotlib import font_manager, rcParams
+from math import pow
 
 set_page("📊 缺口與保單模擬 | 影響力傳承平台", layout="centered")
 sidebar_brand()
-brand_hero("📊 流動性缺口與保單策略模擬")
+brand_hero("📊 一次性現金缺口 ＋ 長期現金流 模擬", "先補足現金，再設計穩定現金流")
 
 # 中文字型（圖表）
 def _setup_zh_font():
@@ -33,101 +34,133 @@ def _setup_zh_font():
 if not _setup_zh_font():
     st.caption("提示：若圖表中文字出現方塊/亂碼，請把 **NotoSansTC-Regular.ttf** 放在專案根目錄後重新載入。")
 
-# —— 核心試算函式 ——
-def taiwan_estate_tax(taxable_amount: int) -> int:
-    x = int(max(0, taxable_amount))
-    if x <= 56_210_000:
-        return int(x * 0.10)
-    elif x <= 112_420_000:
-        return int(x * 0.15 - 2_810_000)
-    else:
-        return int(x * 0.20 - 8_430_000)
-
-def liquidity_need_estimate(tax: int, fees_ratio: float = 0.01) -> int:
-    tax = int(max(0, tax))
-    fees = int(tax * max(0.0, fees_ratio))
-    return tax + fees
-
-def plan_with_insurance(need: int, available: int, cover: int, pay_years: int, premium_ratio: float):
-    need = int(max(0, need))
-    available = int(max(0, available))
-    cover = int(max(0, cover))
-    premium_ratio = max(1.0, float(premium_ratio))
-    pay_years = int(max(1, pay_years))
-    annual_premium = int(cover / premium_ratio / pay_years)
-    surplus_after_cover = int(available + cover - need)
-    return dict(annual_premium=annual_premium, surplus_after_cover=surplus_after_cover)
-
 def format_currency(x: int) -> str:
     return "NT$ {:,}".format(int(x))
 
-# —— 需要先完成快篩 ——
+def annuity_pv(annual: float, r: float, n: int) -> float:
+    """年金現值：annual × (1 - (1+r)^-n) / r；r=0 時回傳 annual × n"""
+    if n <= 0: return 0.0
+    if r <= 0: return annual * n
+    return annual * (1 - pow(1 + r, -n)) / r
+
+def plan_with_insurance(one_time_need: int, available_cash: int, long_term_pv: int,
+                        target_cover: int, pay_years: int, premium_ratio: float):
+    """
+    年繳估算：年繳 ≈ 保額 / 年繳係數 / 繳費年期
+    注意：此為粗估（無產品/費率），正式報價以商品條款為準。
+    """
+    need_total = max(0, int(one_time_need + long_term_pv))
+    after_cover_gap = max(0, need_total - (available_cash + target_cover))
+    annual_premium = int(target_cover / max(1.0, premium_ratio) / max(1, pay_years))
+    return dict(
+        need_total=need_total,
+        after_cover_gap=after_cover_gap,
+        annual_premium=annual_premium
+    )
+
+# 需要快篩資料
 scan = st.session_state.get("scan_data")
 if not scan:
-    st.warning("尚未完成快篩。請先到「🚦 傳承風險快篩」。")
+    st.warning("尚未完成快篩。請先到「🚦 3 分鐘快篩」。")
     st.page_link("pages/01_QuickScan.py", label="➡️ 前往快篩")
     st.stop()
 
-st.markdown("#### 依台灣稅制（10% / 15% / 20%）與標準扣除進行估算（僅供規劃參考）")
+# A. 一次性現金缺口（已由快篩算好）
+st.markdown("### A. 一次性現金缺口（已估算）")
+colA1, colA2, colA3 = st.columns(3)
+colA1.metric("一次性現金需求", format_currency(scan["one_time_need"]))
+colA2.metric("可用現金 + 既有保單", format_currency(scan["available_cash"]))
+colA3.metric("一次性現金缺口", format_currency(scan["cash_gap"]))
 
+st.divider()
+
+# B. 長期現金流規劃
+st.markdown("### B. 長期現金流（年金型給付）")
 c1, c2 = st.columns(2)
-funeral = c1.number_input("喪葬費用（上限 1,380,000）", min_value=0, max_value=5_000_000, value=1_380_000, step=10_000)
-supportees = c2.number_input("其他受扶養人數（每人 560,000）", min_value=0, max_value=10, value=0, step=1)
+annual_cashflow = c1.number_input("每年期望給付（TWD）", min_value=0, value=2_000_000, step=100_000)
+years = c2.number_input("給付年期（年）", min_value=0, max_value=60, value=10, step=1)
 
 c3, c4 = st.columns(2)
-spouse_deduction = c3.number_input("配偶扣除（預設 5,530,000）", min_value=0, max_value=10_000_000, value=5_530_000, step=10_000)
-basic_exempt = c4.number_input("基本免稅額（預設 13,330,000）", min_value=0, max_value=50_000_000, value=13_330_000, step=10_000)
+discount_rate_pct = c3.slider("折現率（估）%", min_value=0.0, max_value=8.0, value=2.0, step=0.1)
+funding_mode = c4.selectbox("資金來源策略", ["保單一次到位（保額扣抵）", "自有資金（不納入保額）"], index=0)
 
-taxable_base = max(0, scan["estate_total"] - scan["debts"])
-deductions = basic_exempt + spouse_deduction + funeral + supportees * 560_000
-tax = taiwan_estate_tax(max(0, taxable_base - deductions))
-st.metric("預估遺產稅額", format_currency(tax))
+r = discount_rate_pct / 100.0
+lt_total = int(annual_cashflow * years)
+lt_pv = int(annuity_pv(annual_cashflow, r, years))
 
-need = liquidity_need_estimate(tax=tax, fees_ratio=0.01)
-st.metric("初估流動性需求（含雜費 1%）", format_currency(need))
+st.write(f"• 長期現金流 **總額**：{format_currency(lt_total)}")
+st.write(f"• 以折現率 {discount_rate_pct:.1f}% 計算之 **現值**：{format_currency(lt_pv)}")
 
-available = scan["liquid"] + scan["existing_insurance"]
-gap = max(0, need - available)
-st.metric("初估缺口", format_currency(gap))
+# 決定是否將長期現金流現值納入保額目標
+include_pv_in_cover = (funding_mode == "保單一次到位（保額扣抵）")
+long_term_need_for_cover = lt_pv if include_pv_in_cover else 0
 
-st.markdown("---")
-st.markdown("#### 保單策略模擬")
+st.divider()
+st.markdown("### C. 保單策略模擬（合併一次性現金 + 長期現金流現值）")
 
 c5, c6 = st.columns(2)
-target_cover = c5.number_input("新保單目標保額", min_value=0, value=int(gap), step=1_000_000)
+suggested_cover = max(0, scan["cash_gap"] + long_term_need_for_cover)
+target_cover = c5.number_input("新保單目標保額", min_value=0, value=int(suggested_cover), step=1_000_000)
 pay_years = c6.selectbox("繳費年期", [1, 3, 5, 6, 7, 10], index=3)
 
 c7, c8 = st.columns(2)
-assumed_IRR = c7.slider("保單內含報酬率假設（僅估年繳）", min_value=0.0, max_value=6.0, value=2.5, step=0.1)  # 修正：c7
-premium_ratio = c8.slider("年繳 / 保額 比例（粗估）", min_value=1.0, max_value=20.0, value=10.0, step=0.5)
+premium_ratio = c7.slider("年繳 / 保額 比例（粗估年繳係數）", min_value=1.0, max_value=20.0, value=10.0, step=0.5)
+note = c8.caption("提示：正式年繳以商品與保費試算為準，本處僅粗估。")
 
 plan = plan_with_insurance(
-    need=need, available=available, cover=target_cover, pay_years=pay_years, premium_ratio=premium_ratio
+    one_time_need=scan["one_time_need"],
+    available_cash=scan["available_cash"],
+    long_term_pv=long_term_need_for_cover,
+    target_cover=target_cover,
+    pay_years=pay_years,
+    premium_ratio=premium_ratio
 )
+
+colR1, colR2 = st.columns(2)
+colR1.metric("合併需求現值（一次性 + 長期）", format_currency(plan["need_total"]))
+colR2.metric("補齊後剩餘缺口", format_currency(plan["after_cover_gap"]))
 st.write("**估算年繳保費**：", format_currency(plan["annual_premium"]))
-st.write("**補齊缺口後的剩餘**：", format_currency(plan["surplus_after_cover"]))
 
-# 視覺化：無缺口時跳出提示，不畫空圖
-fig1, ax1 = plt.subplots()
-labels = ["不用保單", "加上保單"]
-values = [max(0, need - available), max(0, need - (available + target_cover))]
+# 視覺化
+st.markdown("#### 視覺化：保單介入前後的『合併缺口』")
+fig, ax = plt.subplots()
+labels = ["介入前缺口", "介入後缺口"]
+before_gap = max(0, scan["one_time_need"] + long_term_need_for_cover - scan["available_cash"])
+after_gap = max(0, plan["after_cover_gap"])
+values = [before_gap, after_gap]
+
 if sum(values) == 0:
-    st.info("目前沒有流動性缺口，圖表略過。")
+    st.info("目前沒有合併缺口，圖表略過。")
 else:
-    ax1.bar(labels, values)
-    ax1.set_ylabel("剩餘缺口（TWD）")
-    ax1.set_title("保單介入前後的缺口對比")
-    st.pyplot(fig1)
+    ax.bar(labels, values)
+    ax.set_ylabel("合併缺口（TWD）")
+    ax.set_title("一次性現金 + 長期現金流（現值）")
+    st.pyplot(fig)
 
-# 供 03_Proposal 取用
+# 寫入 Session，供 PDF 使用
 st.session_state["plan_data"] = dict(
-    need=need, available=available, gap=gap, target_cover=target_cover,
-    pay_years=pay_years, annual_premium=plan["annual_premium"],
-    surplus_after_cover=plan["surplus_after_cover"],
-    tax=tax, deductions=deductions, taxable_base=taxable_base
+    # 來自快篩
+    tax=scan["tax"],
+    one_time_need=scan["one_time_need"],
+    available_cash=scan["available_cash"],
+    cash_gap=scan["cash_gap"],
+    # 長期現金流
+    annual_cashflow=annual_cashflow,
+    years=years,
+    discount_rate_pct=discount_rate_pct,
+    lt_total=lt_total,
+    lt_pv=lt_pv,
+    include_pv_in_cover=include_pv_in_cover,
+    lt_need_for_cover=long_term_need_for_cover,
+    # 保單策略
+    target_cover=target_cover,
+    pay_years=pay_years,
+    annual_premium=plan["annual_premium"],
+    need_total=plan["need_total"],
+    after_cover_gap=plan["after_cover_gap"],
 )
 
-st.info("下一步：下載一頁式提案，帶回家與家人討論。")
+st.info("下一步：產生一頁式報告，清楚呈現一次性現金與長期現金流的方案。")
 st.page_link("pages/03_Proposal.py", label="➡️ 下載一頁式提案")
 
 footer()
