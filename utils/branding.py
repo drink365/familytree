@@ -11,11 +11,9 @@ BRAND = {
     "primary": "#B21E2B",
     "text_muted": "#6B7280",
     "site": {
-        "email": "service@gracefamilyoffice.example",
-        "phone": "+886-2-1234-5678",
-        "line": "@gracefamily",
-        "address": "台北市信義區君悅大道 1 號 18 樓",
-        "website": "https://gracefamilyoffice.example"
+        "email": "123@gracefo.com",
+        "address": "台北市中山區南京東路二段101號9樓",
+        "website": "https://gracefo.com"
     },
     "legal": {
         "disclaimer": "本工具僅供教育與規劃參考，非法律與稅務意見；重要決策前請與您的專業顧問確認。",
