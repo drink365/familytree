@@ -2,12 +2,13 @@
 import streamlit as st
 from pathlib import Path
 
+# --- 品牌設定 ---
 BRAND = {
     "name": "永傳家族辦公室",
     "english": "Grace Family Office",
     "tagline": "以流動性為核心的家族傳承規劃",
-    "logo": "logo.png",      # 內頁、側邊欄的品牌 Logo
-    "favicon": "logo2.png",   # 這裡改成 logo2.png
+    "logo": "logo.png",        # 內頁與側邊欄使用
+    "favicon": "logo2.png",     # 瀏覽器分頁圖示（你指定的 logo2.png）
     "primary": "#B21E2B",
     "text_muted": "#6B7280",
     "site": {
@@ -22,18 +23,33 @@ BRAND = {
     "cta": {"book": "預約一對一傳承健檢", "contact": "聯絡我們"}
 }
 
+# --- 共用元件 ---
 def set_page(title: str, icon: str | None = None, layout: str = "wide"):
     st.set_page_config(page_title=title, page_icon=(icon or BRAND["favicon"]), layout=layout)
 
+def _hide_streamlit_sidebar_nav():
+    """隱藏 Streamlit 自動產生的 pages 清單，只保留我們自訂的側邊欄內容。"""
+    st.markdown(
+        """
+        <style>
+        /* 隱藏側邊欄內建的 pages 區塊 */
+        section[data-testid="stSidebar"] div[data-testid="stSidebarNav"] { display: none; }
+        /* 讓自訂內容更緊湊 */
+        section[data-testid="stSidebar"] { padding-top: 1rem; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 def _page_if_exists(path: str, label: str, icon: str | None = None):
-    """只有當檔案存在於專案中時才建立 page_link，避免 StreamlitPageNotFoundError。"""
     if Path(path).exists():
         st.page_link(path, label=label, icon=icon)
 
 def sidebar_brand():
+    _hide_streamlit_sidebar_nav()  # ← 先把系統自動導航隱藏
     with st.sidebar:
         if Path(BRAND["logo"]).exists():
-            st.image(BRAND["logo"], use_container_width=True)  # 避免 use_column_width 警告
+            st.image(BRAND["logo"], use_container_width=True)
         st.markdown(
             f"**{BRAND['name']}**  \n"
             f"<small style='color:{BRAND['text_muted']}'>{BRAND['tagline']}</small>",
@@ -43,20 +59,23 @@ def sidebar_brand():
         st.markdown("**快速導覽**")
         _page_if_exists("app.py", "🏠 首頁")
         _page_if_exists("pages/01_QuickScan.py", "🚦 快篩")
-        _page_if_exists("pages/02_GapPlanner.py", "📊 缺口模擬")        # ← 已改成 📊
+        _page_if_exists("pages/02_GapPlanner.py", "📊 缺口模擬")
         _page_if_exists("pages/03_Proposal.py", "📄 一頁式提案")
         _page_if_exists("pages/90_About.py", "🏢 關於我們 / 聯絡")
         _page_if_exists("pages/91_Privacy.py", "🔒 隱私與免責")
 
-def brand_hero(title:str, subtitle:str=""):
+def brand_hero(title: str, subtitle: str = ""):
     col1, col2 = st.columns([1,4])
     with col1:
-        if Path(BRAND['logo']).exists():
-            st.image(BRAND['logo'], use_container_width=True)
+        if Path(BRAND["logo"]).exists():
+            st.image(BRAND["logo"], use_container_width=True)
     with col2:
         st.markdown(f"### {title}")
         if subtitle:
-            st.markdown(f"<span style='color:{BRAND['text_muted']}'>{subtitle}</span>", unsafe_allow_html=True)
+            st.markdown(
+                f"<span style='color:{BRAND['text_muted']}'>{subtitle}</span>",
+                unsafe_allow_html=True
+            )
 
 def footer():
     st.markdown("---")
@@ -67,5 +86,6 @@ def footer():
         {BRAND['legal']['disclaimer']}<br/><br/>
         © {BRAND['name']} | {BRAND['english']}
         </div>
-        """, unsafe_allow_html=True
+        """,
+        unsafe_allow_html=True
     )
