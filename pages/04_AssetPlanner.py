@@ -87,9 +87,8 @@ def format_currency(x) -> str:
 scan = st.session_state.get("scan_data", {})
 plan = st.session_state.get("plan_data", {})
 
-default_estate = int(scan.get("estate_total", 150_000_000))
-default_liquid = int(scan.get("liquid", 20_000_000))
-default_existing_ins = int(scan.get("existing_insurance", 15_000_000))
+default_liquid = int(scan.get("liquid", 2_000_000))           # 與首頁一致
+default_existing_ins = int(scan.get("existing_insurance", 3_000_000))
 
 one_time_need = int(scan.get("one_time_need", 0))
 available_cash = int(scan.get("available_cash", default_liquid + default_existing_ins))
@@ -100,41 +99,38 @@ include_pv_in_cover = bool(plan.get("include_pv_in_cover", False))
 
 st.info("此模組將整合：一次性『現金』缺口 + 長期『現金流』現值（可選），並輸出整體資產配置建議。")
 
-# ---------------- 一、輸入資產結構 ----------------
+# ---------------- 一、輸入資產結構（方案 A：總額自動等於合計） ----------------
 st.markdown("### 一、輸入資產結構（粗略即可）")
 
 with st.form("asset_form"):
     c1, c2, c3 = st.columns(3)
-    estate_total = c1.number_input("資產總額", min_value=0, value=default_estate, step=1_000_000)
-    cash_holdings = c2.number_input("現金 / 定存", min_value=0, value=default_liquid, step=1_000_000)
-    financials = c3.number_input("金融資產（股票/基金/債券）", min_value=0, value=30_000_000, step=1_000_000)
+    cash_holdings = c1.number_input("現金 / 定存", min_value=0, value=default_liquid, step=1_000_000)
+    financials   = c2.number_input("金融資產（股票/基金/債券）", min_value=0, value=30_000_000, step=1_000_000)
+    realty       = c3.number_input("不動產", min_value=0, value=70_000_000, step=1_000_000)
 
     c4, c5, c6 = st.columns(3)
-    realty = c4.number_input("不動產", min_value=0, value=70_000_000, step=1_000_000)
-    equity = c5.number_input("企業股權", min_value=0, value=40_000_000, step=1_000_000)
-    overseas = c6.number_input("海外資產", min_value=0, value=10_000_000, step=1_000_000)
+    equity      = c4.number_input("企業股權", min_value=0, value=40_000_000, step=1_000_000)
+    overseas    = c5.number_input("海外資產", min_value=0, value=10_000_000, step=1_000_000)
+    existing_insurance = c6.number_input("既有壽險保額（可用於現金/稅務）", min_value=0, value=default_existing_ins, step=1_000_000)
 
     c7, c8 = st.columns(2)
-    existing_insurance = c7.number_input("既有壽險保額（可用於現金/稅務）", min_value=0, value=default_existing_ins, step=1_000_000)
-    include_lt = c8.selectbox("將長期現金流『現值』納入保額規劃？", ["否（自有資金）", "是（保單一次到位）"],
+    include_lt = c7.selectbox("將長期現金流『現值』納入保額規劃？", ["否（自有資金）", "是（保單一次到位）"],
                               index=1 if include_pv_in_cover else 0)
-
     submitted = st.form_submit_button("生成策略建議", use_container_width=True)
 
 if not submitted:
     st.stop()
 
+# 直接以各項合計作為資產總額（不再獨立輸入）
 assets_sum = cash_holdings + financials + realty + equity + overseas
-total_base = assets_sum if assets_sum != estate_total else estate_total
-
-if assets_sum != estate_total:
-    st.warning(f"各項合計 {format_currency(assets_sum)} 與『資產總額』 {format_currency(estate_total)} 不一致，將以合計值計算。")
+total_base = assets_sum
+st.caption(f"資產各項合計：**{format_currency(total_base)}**（自動作為資產總額）")
 
 # ---------------- 二、風險評分 ----------------
-liq_weights = {"cash": 5, "fin": 4, "realty": 1, "equity": 1, "overseas": 2}
+liq_weights  = {"cash": 5, "fin": 4, "realty": 1, "equity": 1, "overseas": 2}
 grow_weights = {"cash": 1, "fin": 4, "realty": 3, "equity": 5, "overseas": 4}
-tax_weights = {"cash": 1, "fin": 2, "realty": 3, "equity": 4, "overseas": 4}
-legal_weights = {"cash": 1, "fin": 2, "realty": 3, "equity": 4, "overseas": 4}
+tax_weights  = {"cash": 1, "fin": 2, "realty": 3, "equity": 4, "overseas": 4}
+legal_weights= {"cash": 1, "fin": 2, "realty": 3, "equity": 4, "overseas": 4}
 
 def weighted_score(weights):
     if total_base == 0: return 0
@@ -146,16 +142,16 @@ def weighted_score(weights):
         weights["overseas"] * overseas
     ) / total_base
 
-liq_score = weighted_score(liq_weights)
-grow_score = weighted_score(grow_weights)
-tax_sens = weighted_score(tax_weights)
+liq_score     = weighted_score(liq_weights)
+grow_score    = weighted_score(grow_weights)
+tax_sens      = weighted_score(tax_weights)
 legal_complex = weighted_score(legal_weights)
 
 # ---------------- 三、建議保護/現金/成長比例 ----------------
 lt_need_for_cover = lt_pv if include_lt == "是（保單一次到位）" else 0
 protection_amount = max(0, cash_gap + lt_need_for_cover)
 
-equity_share = equity / total_base if total_base else 0
+equity_share = 0 if total_base == 0 else (equity / total_base)
 extra_for_business = 0
 if equity_share >= 0.5:
     extra_for_business = int(0.05 * total_base)
@@ -164,7 +160,7 @@ if equity_share >= 0.5:
 cash_reserve_pct = 0.10 if liq_score < 3 else 0.05
 target_cash_reserve = int(cash_reserve_pct * total_base)
 
-protection_pct = protection_amount / total_base if total_base else 0
+protection_pct = (protection_amount / total_base) if total_base else 0
 protection_pct = clamp(protection_pct, 0.10, 0.35) if total_base > 0 else 0
 cash_pct = clamp(target_cash_reserve / total_base if total_base else 0, 0.05, 0.15)
 growth_pct = max(0.0, 1.0 - protection_pct - cash_pct)
@@ -177,7 +173,7 @@ values1 = [cash_holdings, financials, realty, equity, overseas]
 if sum(values1) == 0:
     st.info("尚未輸入資產數字，略過分布圖。")
 else:
-    ax1.pie(values1, labels=labels1, autopct=lambda p: f"{p:.1f}%" if p > 0 else "")
+    ax1.pie(values1, labels=labels1, autopct=lambda p: f\"{p:.1f}%\" if p > 0 else \"\")
     ax1.set_title("資產結構（現況）")
     st.pyplot(fig1)
 
@@ -209,15 +205,15 @@ values2 = [protection_pct, cash_pct, growth_pct]
 if sum(values2) == 0:
     st.info("無法生成配置建議（基數為 0）。")
 else:
-    ax3.pie(values2, labels=labels2, autopct=lambda p: f"{p:.1f}%" if p > 0 else "")
+    ax3.pie(values2, labels=labels2, autopct=lambda p: f\"{p:.1f}%\" if p > 0 else \"\")
     ax3.set_title("建議資產配置比例")
     st.pyplot(fig3)
 
-# ---------------- 金額摘要（用統一樣式顯示） ----------------
+# ---------------- 金額摘要（一致樣式） ----------------
 st.markdown("#### 建議配置明細（以金額表示）")
 protect_amt = int(protection_pct * total_base)
-cash_amt = int(cash_pct * total_base)
-growth_amt = max(0, total_base - protect_amt - cash_amt)
+cash_amt    = int(cash_pct * total_base)
+growth_amt  = max(0, total_base - protect_amt - cash_amt)
 
 cA, cB, cC = st.columns(3)
 with cA:
@@ -226,6 +222,8 @@ with cB:
     money_card("核心現金準備", cash_amt, size="md")
 with cC:
     money_card("成長資產", growth_amt, size="md")
+
+st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
 
 # ---------------- 說明/依據 ----------------
 st.markdown("**說明與依據**：")
@@ -263,7 +261,6 @@ strategy = dict(
 )
 st.session_state["asset_strategy"] = strategy
 
-st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
 st.markdown("**摘要**")
 st.write(f"• 一次性現金缺口：{format_currency(cash_gap)}")
 st.write(f"• 長期現金流現值（是否納入保額）：{format_currency(lt_pv)}（{'是' if strategy['include_lt_pv'] else '否'}）")
