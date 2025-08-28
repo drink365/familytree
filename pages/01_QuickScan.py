@@ -18,20 +18,20 @@ def money_html(value: int, size: str = "md") -> str:
     cls = "money-figure-sm" if size == "sm" else "money-figure-md"
     return f"<div class='{cls}'>{s}</div>"
 
-# 一次注入的全域樣式（與 02_GapPlanner.py 一致）
+# 全域樣式，與 02_GapPlanner.py 一致
 st.markdown("""
 <style>
 .money-figure-md{
   font-weight: 800;
   line-height: 1.25;
-  font-size: clamp(18px, 1.8vw, 22px); /* 一般大小再大一點 */
+  font-size: clamp(18px, 1.8vw, 22px);
   letter-spacing: 0.3px;
   white-space: nowrap;
 }
 .money-figure-sm{
   font-weight: 700;
   line-height: 1.25;
-  font-size: clamp(16px, 1.6vw, 20px); /* 稍小，用於摘要數字 */
+  font-size: clamp(16px, 1.6vw, 20px);
   letter-spacing: 0.2px;
   white-space: nowrap;
 }
@@ -49,7 +49,7 @@ def money_card(label: str, value: int, size: str = "md"):
         unsafe_allow_html=True
     )
 
-# ---------------- 稅額公式（與先前一致） ----------------
+# ---------------- 稅額公式 ----------------
 def taiwan_estate_tax(taxable_amount: int) -> int:
     x = int(max(0, taxable_amount))
     if x <= 56_210_000: 
@@ -66,8 +66,9 @@ with st.form("scan_form"):
     debts = c2.number_input("負債總額 (TWD)", min_value=0, value=10_000_000, step=1_000_000)
 
     c3, c4 = st.columns(2)
-    liquid = c3.number_input("可動用流動資產 (TWD)", min_value=0, value=20_000_000, step=1_000_000)
-    existing_insurance = c4.number_input("既有壽險保額 (TWD)", min_value=0, value=15_000_000, step=1_000_000)
+    # 更新預設值：2,000,000 與 3,000,000
+    liquid = c3.number_input("可動用流動資產 (TWD)", min_value=0, value=2_000_000, step=1_000_000)
+    existing_insurance = c4.number_input("既有壽險保額 (TWD)", min_value=0, value=3_000_000, step=1_000_000)
 
     st.markdown("#### 扣除額（簡化參數，可依需要調整）")
     c5, c6 = st.columns(2)
@@ -99,7 +100,7 @@ if submitted:
     with colA3:
         money_card("一次性現金缺口", cash_gap, size="md")
 
-    # 寫入 Session，供下一步使用（名稱與 02/03 頁一致）
+    # 寫入 Session，供下一步使用
     st.session_state["scan_data"] = dict(
         estate_total=estate_total, debts=debts, liquid=liquid, existing_insurance=existing_insurance,
         basic_exempt=basic_exempt, spouse_deduction=spouse_deduction,
