@@ -173,7 +173,7 @@ values1 = [cash_holdings, financials, realty, equity, overseas]
 if sum(values1) == 0:
     st.info("尚未輸入資產數字，略過分布圖。")
 else:
-    ax1.pie(values1, labels=labels1, autopct=lambda p: f\"{p:.1f}%\" if p > 0 else \"\")
+    ax1.pie(values1, labels=labels1, autopct=lambda p: f"{p:.1f}%" if p > 0 else "")
     ax1.set_title("資產結構（現況）")
     st.pyplot(fig1)
 
@@ -205,7 +205,7 @@ values2 = [protection_pct, cash_pct, growth_pct]
 if sum(values2) == 0:
     st.info("無法生成配置建議（基數為 0）。")
 else:
-    ax3.pie(values2, labels=labels2, autopct=lambda p: f\"{p:.1f}%\" if p > 0 else \"\")
+    ax3.pie(values2, labels=labels2, autopct=lambda p: f"{p:.1f}%" if p > 0 else "")
     ax3.set_title("建議資產配置比例")
     st.pyplot(fig3)
 
