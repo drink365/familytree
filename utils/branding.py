@@ -6,8 +6,8 @@ BRAND = {
     "name": "永傳家族辦公室",
     "english": "Grace Family Office",
     "tagline": "以流動性為核心的家族傳承規劃",
-    "logo": "logo.png",
-    "favicon": "logo.png",
+    "logo": "logo.png",      # 內頁、側邊欄的品牌 Logo
+    "favicon": "logo2.png",   # 這裡改成 logo2.png
     "primary": "#B21E2B",
     "text_muted": "#6B7280",
     "site": {
