@@ -1,10 +1,11 @@
-
 # -*- coding: utf-8 -*-
 import streamlit as st
+from utils.branding import set_page, sidebar_brand, brand_hero, footer
 
-st.set_page_config(page_title="🚦 快篩 | 影響力傳承平台", page_icon="🚦", layout="centered")
+set_page("🚦 快篩 | 影響力傳承平台", layout="centered")
+sidebar_brand()
+brand_hero("傳承風險快篩（3 分鐘）")
 
-st.title("🚦 傳承風險快篩（3 分鐘）")
 st.caption("回答以下問題，立即看見傳承準備度與可能的流動性缺口指標。")
 
 def quick_preparedness_score(scan):
@@ -55,7 +56,7 @@ with st.form("scan_form"):
 
     c11, c12 = st.columns(2)
     has_will = c11.selectbox("是否已有遺囑", ["沒有", "有（但未更新）", "有（最新）"], index=0, key="has_will")
-    has_trust = c12.selectbox("是否已有信託/保單信託", ["沒有", "規劃中"], index=0, key="has_trust")
+    has_trust = c12.selectbox("是否已有信託/保單信託", ["沒有", "規劃中", "已建立"], index=0, key="has_trust")
 
     submitted = st.form_submit_button("計算準備度與風險", use_container_width=True)
 
@@ -74,8 +75,5 @@ if submitted:
         st.markdown("**主要風險提示**：")
         for f in flags:
             st.write("• " + f)
-    st.info("下一步：前往「💧 缺口與保單模擬」，調整年期/幣別，拿到第一版保單草案。")
-    st.page_link("pages/02_GapPlanner.py", label="➡️ 前往缺口與保單模擬")
-else:
-    st.info("請完成上方問卷並提交。若已做過，可直接到下一步。")
-    st.page_link("pages/02_GapPlanner.py", label="➡️ 我已做過，直接前往")
+    st.info("下一步：前往「📊 缺口與保單模擬」，調整年期/幣別，拿到第一版保單草案。")  # ← 已改成 📊
+    st.page_link("pages/02_GapPlanner.p
