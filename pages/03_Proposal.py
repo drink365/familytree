@@ -78,14 +78,26 @@ def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan, asset_stra
 
     # ---- 標題 + 右上角 LOGO（等比例縮放）----
     title_para = Paragraph(f"傳承規劃建議（摘要）｜{client_name}", styles["Title"])
+    tagline_para = Paragraph(BRAND["tagline"], ParagraphStyle(
+        name="Tagline",
+        parent=styles["Normal"],
+        fontName=DEFAULT_FONT,
+        fontSize=10,
+        textColor=colors.HexColor(BRAND.get("text_muted", "#6B7280")),
+        spaceBefore=2, spaceAfter=6
+    ))
     logo = _logo_image_preserve_ratio("logo.png", max_w_mm=40, max_h_mm=16) if os.path.exists("logo.png") else None
+
     if logo:
-        header = Table([[title_para, logo]], colWidths=[130*mm, 40*mm])
-        header.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-                                    ("ALIGN", (1,0), (1,0), "RIGHT")]))
-        elems += [header, Spacer(1, 6)]
+        header = Table([[title_para, logo], [tagline_para, None]], colWidths=[130*mm, 40*mm])
+        header.setStyle(TableStyle([
+            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+            ("ALIGN", (1,0), (1,0), "RIGHT"),
+            ("SPAN", (1,1), (1,1)),  # 讓右下空格不影響布局
+        ]))
+        elems += [header, Spacer(1, 4)]
     else:
-        elems += [title_para, Spacer(1, 6)]
+        elems += [title_para, tagline_para, Spacer(1, 4)]
 
     # ===================== A. 一次性現金需求 =====================
     elems += [Paragraph("A. 一次性現金需求", styles["H2TC"])]
