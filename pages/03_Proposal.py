@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import io, os
 import streamlit as st
+from utils.branding import set_page, sidebar_brand, brand_hero, footer, BRAND
 from reportlab.lib.pagesizes import A4
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
@@ -8,15 +9,15 @@ from reportlab.lib import colors
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.lib.utils import ImageReader  # 用來讀原始尺寸
+from reportlab.lib.utils import ImageReader
 
-st.set_page_config(page_title="📄 提案下載 | 影響力傳承平台", page_icon="📄", layout="centered")
-st.title("📄 一頁式提案下載")
+set_page("📄 提案下載 | 影響力傳承平台", layout="centered")
+sidebar_brand()
+brand_hero("一頁式提案下載")
 
 def format_currency(x: int) -> str:
     return "NT$ {:,}".format(int(x))
 
-# ---- 讀取前序頁面的資料 ----
 scan = st.session_state.get("scan_data")
 plan = st.session_state.get("plan_data")
 
@@ -25,16 +26,15 @@ if not scan:
     st.page_link("pages/01_QuickScan.py", label="➡️ 前往快篩")
     st.stop()
 if not plan:
-    st.warning("尚未完成缺口模擬。請先到「💧 缺口與保單模擬」。")
+    st.warning("尚未完成缺口模擬。請先到「📊 缺口與保單模擬」。")
     st.page_link("pages/02_GapPlanner.py", label="➡️ 前往模擬")
     st.stop()
 
-# ---- 註冊中文字型（使用專案根目錄的 NotoSansTC-Regular.ttf）----
+# ---- 註冊中文字型（使用根目錄的 NotoSansTC-Regular.ttf）----
 DEFAULT_FONT = "Helvetica"
 try:
-    font_path = "NotoSansTC-Regular.ttf"  # 你已放在專案根目錄
-    if os.path.exists(font_path):
-        pdfmetrics.registerFont(TTFont("NotoSansTC", font_path))
+    if os.path.exists("NotoSansTC-Regular.ttf"):
+        pdfmetrics.registerFont(TTFont("NotoSansTC", "NotoSansTC-Regular.ttf"))
         DEFAULT_FONT = "NotoSansTC"
     else:
         st.caption("提示：未找到 NotoSansTC-Regular.ttf，PDF 將以預設英文字型輸出。")
@@ -44,17 +44,14 @@ except Exception as e:
 def _logo_image_preserve_ratio(path, max_w_mm=40, max_h_mm=16):
     """讀取圖片原始尺寸，按比例縮放至不超過 max_w x max_h 的盒子。"""
     try:
-        img_reader = ImageReader(path)
-        iw, ih = img_reader.getSize()  # 像素
-        # 轉換到 mm 單位的比例（ReportLab 直接用「點」，但比例計算不受單位影響）
+        ir = ImageReader(path)
+        iw, ih = ir.getSize()
         max_w = max_w_mm * mm
         max_h = max_h_mm * mm
         scale = min(max_w / iw, max_h / ih)
-        draw_w = iw * scale
-        draw_h = ih * scale
         img = RLImage(path)
-        img.drawWidth = draw_w
-        img.drawHeight = draw_h
+        img.drawWidth = iw * scale
+        img.drawHeight = ih * scale
         return img
     except Exception:
         return None
@@ -77,15 +74,11 @@ def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan) -> bytes:
 
     # ---- 標題 + 右上角 LOGO（等比例縮放）----
     title_para = Paragraph(f"傳承規劃建議（摘要）｜{client_name}", styles["Title"])
-    logo_path = "logo.png"
-    logo_img = _logo_image_preserve_ratio(logo_path, max_w_mm=40, max_h_mm=16) if os.path.exists(logo_path) else None
-
-    if logo_img:
-        header = Table([[title_para, logo_img]], colWidths=[130*mm, 40*mm])
-        header.setStyle(TableStyle([
-            ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
-            ("ALIGN", (1,0), (1,0), "RIGHT"),
-        ]))
+    logo = _logo_image_preserve_ratio("logo.png", max_w_mm=40, max_h_mm=16) if os.path.exists("logo.png") else None
+    if logo:
+        header = Table([[title_para, logo]], colWidths=[130*mm, 40*mm])
+        header.setStyle(TableStyle([("VALIGN", (0,0), (-1,-1), "MIDDLE"),
+                                    ("ALIGN", (1,0), (1,0), "RIGHT")]))
         elems += [header, Spacer(1, 6)]
     else:
         elems += [title_para, Spacer(1, 6)]
@@ -144,7 +137,15 @@ def build_proposal_pdf_bytes(client_name, advisor, notes, scan, plan) -> bytes:
 
     # ---- 備註與署名 ----
     elems += [Paragraph("備註", styles["H2TC"]), Paragraph(notes, styles["BodyText"]), Spacer(1, 6)]
-    elems += [Paragraph(advisor, styles["Normal"])]
+    elems += [Paragraph(advisor, styles["Normal"]), Spacer(1, 8)]
+
+    # ---- 聯絡資訊（與網站一致，僅三項）----
+    contact_html = (
+        f"官方網站：{BRAND['site']['website']}"
+        f"<br/>Email：{BRAND['site']['email']}"
+        f"<br/>地址：{BRAND['site']['address']}"
+    )
+    elems += [Paragraph("聯絡資訊", styles["H2TC"]), Paragraph(contact_html, styles["BodyText"])]
 
     doc.build(elems)
     buf.seek(0)
@@ -170,3 +171,5 @@ st.write("• 初估缺口：{}".format(format_currency(plan["gap"])))
 st.write("• 建議新保單：保額 {}；年繳 {}；年期 {} 年".format(
     format_currency(plan["target_cover"]), format_currency(plan["annual_premium"]), plan["pay_years"]
 ))
+
+footer()
