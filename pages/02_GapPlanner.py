@@ -2,6 +2,7 @@
 import streamlit as st
 from utils.branding import set_page, sidebar_brand, brand_hero, footer
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 from matplotlib import font_manager, rcParams
 from math import pow
@@ -114,7 +115,6 @@ if not scan:
 st.markdown("### A. 一次性現金缺口（已估算）")
 colA1, colA2, colA3 = st.columns(3)
 
-# 使用一般大小或略大一號的數字
 with colA1:
     money_card("一次性現金需求", scan["one_time_need"], size="md")
 with colA2:
@@ -168,7 +168,7 @@ plan = plan_with_insurance(
     premium_ratio=premium_ratio
 )
 
-# 將下方兩個數字改為「小字」樣式，避免太大
+# 下方兩個數字採「小字」樣式
 colR1, colR2 = st.columns(2)
 with colR1:
     money_card("合併需求現值（一次性 + 長期）", plan["need_total"], size="sm")
@@ -176,21 +176,29 @@ with colR2:
     money_card("補齊後剩餘缺口", plan["after_cover_gap"], size="sm")
 st.write("估算年繳保費：", format_currency(plan["annual_premium"]))
 
-# ---------------- 視覺化 ----------------
-st.markdown("#### 視覺化：保單介入前後的『合併缺口』")
-fig, ax = plt.subplots()
-labels = ["介入前缺口", "介入後缺口"]
-before_gap = max(0, scan["one_time_need"] + long_term_need_for_cover - scan["available_cash"])
-after_gap = max(0, plan["after_cover_gap"])
-values = [before_gap, after_gap]
+# ---------------- 年度現金流分布（替代視覺化） ----------------
+st.markdown("#### 年度現金流分布（示意）")
+if years > 0 and annual_cashflow > 0:
+    years_range = np.arange(1, years + 1)
+    needs = np.array([annual_cashflow] * years)
 
-if sum(values) == 0:
-    st.info("目前沒有合併缺口，圖表略過。")
-else:
-    ax.bar(labels, values)
-    ax.set_ylabel("合併缺口（TWD）")
-    ax.set_title("一次性現金 + 長期現金流（現值）")
+    if include_pv_in_cover:
+        source_label = "保單預期給付（目標）"
+        source = np.array([annual_cashflow] * years)
+    else:
+        source_label = "自有資金/投資收益（假設）"
+        source = np.array([annual_cashflow] * years)  # 若未納入保額，示意由自有資金供應
+
+    fig, ax = plt.subplots()
+    ax.plot(years_range, needs, label="年度現金需求", marker="o")
+    ax.plot(years_range, source, label=source_label, marker="s")
+    ax.set_xlabel("年份")
+    ax.set_ylabel("金額（TWD）")
+    ax.set_title("年度現金需求與資金來源")
+    ax.legend()
     st.pyplot(fig)
+else:
+    st.info("請設定『每年期望給付』與『給付年期』以顯示年度現金流分布。")
 
 # ---------------- 寫入 Session（供 PDF 使用） ----------------
 st.session_state["plan_data"] = dict(
