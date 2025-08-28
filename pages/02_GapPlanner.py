@@ -63,44 +63,43 @@ def plan_with_insurance(one_time_need: int, available_cash: int, long_term_pv: i
         annual_premium=annual_premium
     )
 
-# --------- 大數字顯示：桌面不換行、窄螢幕逗號處可換行（更新） ---------
-def money_html(value: int) -> str:
+# --------- 金額展示（一般大小或略大一號，無換行） ---------
+def money_html(value: int, size: str = "md") -> str:
     """
-    大字金額：桌面一行顯示；當視窗寬度 < 600px 時才允許在逗號處換行。
-    透過 <span class='comma'> 包住逗號，再用 media query 控制換行。
+    size: 'sm'（小）/ 'md'（中，略大一號）
     """
     s = "NT$ {:,}".format(int(value))
-    s = s.replace(",", "<span class='comma'>,</span>")
-    return f"<div class='money-figure'>{s}</div>"
+    cls = "money-figure-sm" if size == "sm" else "money-figure-md"
+    return f"<div class='{cls}'>{s}</div>"
 
-# 一次注入的全域樣式
+# 一次注入的全域樣式（桌面與手機都維持單行，不做逗號換行）
 st.markdown("""
 <style>
-.money-figure{
+.money-figure-md{
   font-weight: 800;
-  line-height: 1.1;
-  /* 自適應字級（避免過大被截斷）：24px～48px */
-  font-size: clamp(24px, 4vw, 48px);
-  letter-spacing: 0.5px;
-  white-space: nowrap;      /* 預設不換行（桌面） */
+  line-height: 1.25;
+  font-size: clamp(18px, 1.8vw, 22px); /* 一般大小再大一點 */
+  letter-spacing: 0.3px;
+  white-space: nowrap;
 }
-.money-figure .comma{ display:inline; } /* 桌面逗號照常顯示，不作斷行點 */
-
-@media (max-width: 600px) {
-  .money-figure{ white-space: normal; }     /* 小螢幕允許換行 */
-  .money-figure .comma{ display:inline-block; width:0; } /* 逗號位置可成為斷行點 */
+.money-figure-sm{
+  font-weight: 700;
+  line-height: 1.25;
+  font-size: clamp(16px, 1.6vw, 20px); /* 稍小，用於摘要數字 */
+  letter-spacing: 0.2px;
+  white-space: nowrap;
 }
-
 .money-label{
   color: #6B7280; font-size: 14px; margin-bottom: 4px;
 }
 .money-card{ display:flex; flex-direction:column; gap:4px; }
+.hr-soft{ border:none; border-top:1px solid #E5E7EB; margin: 24px 0; }
 </style>
 """, unsafe_allow_html=True)
 
-def money_card(label: str, value: int):
+def money_card(label: str, value: int, size: str = "md"):
     st.markdown(
-        f"<div class='money-card'><div class='money-label'>{label}</div>{money_html(value)}</div>",
+        f"<div class='money-card'><div class='money-label'>{label}</div>{money_html(value, size=size)}</div>",
         unsafe_allow_html=True
     )
 
@@ -115,15 +114,15 @@ if not scan:
 st.markdown("### A. 一次性現金缺口（已估算）")
 colA1, colA2, colA3 = st.columns(3)
 
-# 使用 money_card：桌面不換行、手機才換行
+# 使用一般大小或略大一號的數字
 with colA1:
-    money_card("一次性現金需求", scan["one_time_need"])
+    money_card("一次性現金需求", scan["one_time_need"], size="md")
 with colA2:
-    money_card("可用現金 + 既有保單", scan["available_cash"])
+    money_card("可用現金 + 既有保單", scan["available_cash"], size="md")
 with colA3:
-    money_card("一次性現金缺口", scan["cash_gap"])
+    money_card("一次性現金缺口", scan["cash_gap"], size="md")
 
-st.divider()
+st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
 
 # ---------------- B. 長期現金流（年金型給付） ----------------
 st.markdown("### B. 長期現金流（年金型給付）")
@@ -146,7 +145,7 @@ st.write(f"• 以折現率 {discount_rate_pct:.1f}% 計算之 **現值**：{for
 include_pv_in_cover = (funding_mode == "保單一次到位（保額扣抵）")
 long_term_need_for_cover = lt_pv if include_pv_in_cover else 0
 
-st.divider()
+st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
 
 # ---------------- C. 保單策略模擬 ----------------
 st.markdown("### C. 保單策略模擬（合併一次性現金 + 長期現金流現值）")
@@ -169,10 +168,13 @@ plan = plan_with_insurance(
     premium_ratio=premium_ratio
 )
 
+# 將下方兩個數字改為「小字」樣式，避免太大
 colR1, colR2 = st.columns(2)
-colR1.metric("合併需求現值（一次性 + 長期）", format_currency(plan["need_total"]))
-colR2.metric("補齊後剩餘缺口", format_currency(plan["after_cover_gap"]))
-st.write("**估算年繳保費**：", format_currency(plan["annual_premium"]))
+with colR1:
+    money_card("合併需求現值（一次性 + 長期）", plan["need_total"], size="sm")
+with colR2:
+    money_card("補齊後剩餘缺口", plan["after_cover_gap"], size="sm")
+st.write("估算年繳保費：", format_currency(plan["annual_premium"]))
 
 # ---------------- 視覺化 ----------------
 st.markdown("#### 視覺化：保單介入前後的『合併缺口』")
