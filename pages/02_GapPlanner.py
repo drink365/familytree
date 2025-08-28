@@ -6,11 +6,12 @@ import os
 from matplotlib import font_manager, rcParams
 from math import pow
 
+# ---------------- 基本設定 ----------------
 set_page("📊 缺口與保單模擬 | 影響力傳承平台", layout="centered")
 sidebar_brand()
 brand_hero("📊 一次性現金缺口 ＋ 長期現金流 模擬", "先補足現金，再設計穩定現金流")
 
-# 中文字型（圖表）
+# ---------------- 圖表中文字型 ----------------
 def _setup_zh_font():
     candidates = [
         "./NotoSansTC-Regular.ttf",
@@ -23,7 +24,10 @@ def _setup_zh_font():
             try:
                 font_manager.fontManager.addfont(p)
                 rcParams['font.family'] = 'sans-serif'
-                rcParams['font.sans-serif'] = ['Noto Sans TC', 'Taipei Sans TC Beta', 'Microsoft JhengHei', 'PingFang TC', 'Heiti TC']
+                rcParams['font.sans-serif'] = [
+                    'Noto Sans TC', 'Taipei Sans TC Beta',
+                    'Microsoft JhengHei', 'PingFang TC', 'Heiti TC'
+                ]
                 rcParams['axes.unicode_minus'] = False
                 return True
             except Exception:
@@ -34,6 +38,7 @@ def _setup_zh_font():
 if not _setup_zh_font():
     st.caption("提示：若圖表中文字出現方塊/亂碼，請把 **NotoSansTC-Regular.ttf** 放在專案根目錄後重新載入。")
 
+# ---------------- 通用工具 ----------------
 def format_currency(x: int) -> str:
     return "NT$ {:,}".format(int(x))
 
@@ -58,23 +63,60 @@ def plan_with_insurance(one_time_need: int, available_cash: int, long_term_pv: i
         annual_premium=annual_premium
     )
 
-# 需要快篩資料
+# --------- 大數字顯示：避免被「…」截斷（新增） ---------
+def money_html(value: int) -> str:
+    """把金額在逗號處插入 <wbr> 允許換行，並套用自適應字級樣式。"""
+    s = "NT$ {:,}".format(int(value))
+    s = s.replace(",", ",<wbr>")  # 可於逗號換行
+    return f"<div class='money-figure'>{s}</div>"
+
+# 一次注入的全域樣式
+st.markdown("""
+<style>
+.money-figure{
+  font-weight: 800;
+  line-height: 1.1;
+  /* 自適應字級（避免過大被截斷）：24px～48px */
+  font-size: clamp(24px, 4vw, 48px);
+  letter-spacing: 0.5px;
+  word-break: normal;      /* 不在字中硬切 */
+  overflow-wrap: anywhere; /* 額外保險 */
+}
+.money-label{
+  color: #6B7280; font-size: 14px; margin-bottom: 4px;
+}
+.money-card{ display:flex; flex-direction:column; gap:4px; }
+</style>
+""", unsafe_allow_html=True)
+
+def money_card(label: str, value: int):
+    st.markdown(
+        f"<div class='money-card'><div class='money-label'>{label}</div>{money_html(value)}</div>",
+        unsafe_allow_html=True
+    )
+
+# ---------------- 需要快篩資料 ----------------
 scan = st.session_state.get("scan_data")
 if not scan:
     st.warning("尚未完成快篩。請先到「🚦 3 分鐘快篩」。")
     st.page_link("pages/01_QuickScan.py", label="➡️ 前往快篩")
     st.stop()
 
-# A. 一次性現金缺口（已由快篩算好）
+# ---------------- A. 一次性現金缺口（已估算） ----------------
 st.markdown("### A. 一次性現金缺口（已估算）")
 colA1, colA2, colA3 = st.columns(3)
-colA1.metric("一次性現金需求", format_currency(scan["one_time_need"]))
-colA2.metric("可用現金 + 既有保單", format_currency(scan["available_cash"]))
-colA3.metric("一次性現金缺口", format_currency(scan["cash_gap"]))
+
+# 這裡改用 money_card，避免數字被截斷
+with colA1:
+    money_card("一次性現金需求", scan["one_time_need"])
+with colA2:
+    money_card("可用現金 + 既有保單", scan["available_cash"])
+with colA3:
+    money_card("一次性現金缺口", scan["cash_gap"])
 
 st.divider()
 
-# B. 長期現金流規劃
+# ---------------- B. 長期現金流（年金型給付） ----------------
 st.markdown("### B. 長期現金流（年金型給付）")
 c1, c2 = st.columns(2)
 annual_cashflow = c1.number_input("每年期望給付（TWD）", min_value=0, value=2_000_000, step=100_000)
@@ -96,6 +138,8 @@ include_pv_in_cover = (funding_mode == "保單一次到位（保額扣抵）")
 long_term_need_for_cover = lt_pv if include_pv_in_cover else 0
 
 st.divider()
+
+# ---------------- C. 保單策略模擬 ----------------
 st.markdown("### C. 保單策略模擬（合併一次性現金 + 長期現金流現值）")
 
 c5, c6 = st.columns(2)
@@ -105,7 +149,7 @@ pay_years = c6.selectbox("繳費年期", [1, 3, 5, 6, 7, 10], index=3)
 
 c7, c8 = st.columns(2)
 premium_ratio = c7.slider("年繳 / 保額 比例（粗估年繳係數）", min_value=1.0, max_value=20.0, value=10.0, step=0.5)
-note = c8.caption("提示：正式年繳以商品與保費試算為準，本處僅粗估。")
+c8.caption("提示：正式年繳以商品與保費試算為準，本處僅粗估。")
 
 plan = plan_with_insurance(
     one_time_need=scan["one_time_need"],
@@ -121,7 +165,7 @@ colR1.metric("合併需求現值（一次性 + 長期）", format_currency(plan[
 colR2.metric("補齊後剩餘缺口", format_currency(plan["after_cover_gap"]))
 st.write("**估算年繳保費**：", format_currency(plan["annual_premium"]))
 
-# 視覺化
+# ---------------- 視覺化 ----------------
 st.markdown("#### 視覺化：保單介入前後的『合併缺口』")
 fig, ax = plt.subplots()
 labels = ["介入前缺口", "介入後缺口"]
@@ -137,7 +181,7 @@ else:
     ax.set_title("一次性現金 + 長期現金流（現值）")
     st.pyplot(fig)
 
-# 寫入 Session，供 PDF 使用
+# ---------------- 寫入 Session（供 PDF 使用） ----------------
 st.session_state["plan_data"] = dict(
     # 來自快篩
     tax=scan["tax"],
