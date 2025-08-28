@@ -38,7 +38,7 @@ def _setup_zh_font():
 if not _setup_zh_font():
     st.caption("提示：若圖表中文字出現方塊/亂碼，請把 **NotoSansTC-Regular.ttf** 放在專案根目錄後重新載入。")
 
-# ---------------- 金額樣式（與 01/02 頁一致） ----------------
+# ---------------- 金額與文字樣式（與 01/02 頁一致 + bullet-text） ----------------
 def money_html(value: int, size: str = "md") -> str:
     s = "NT$ {:,}".format(int(value))
     cls = "money-figure-sm" if size == "sm" else "money-figure-md"
@@ -65,6 +65,14 @@ st.markdown("""
 }
 .money-card{ display:flex; flex-direction:column; gap:4px; }
 .hr-soft{ border:none; border-top:1px solid #E5E7EB; margin: 24px 0; }
+
+/* 統一「說明與依據」的段落字型與大小 */
+.bullet-text{
+  font-size: 16px;
+  color: #374151;           /* Gray-700 */
+  line-height: 1.7;
+  font-family: "Noto Sans TC","Microsoft JhengHei",sans-serif;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -225,8 +233,8 @@ with cC:
 
 st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
 
-# ---------------- 說明/依據 ----------------
-st.markdown("**說明與依據**：")
+# ---------------- 說明/依據（統一字體大小） ----------------
+st.markdown("**說明與依據：**")
 bullets = []
 if cash_gap > 0:
     bullets.append(f"• 一次性『現金』缺口 {format_currency(cash_gap)} 以保單或等值現金鎖定，避免被迫賣資產。")
@@ -242,7 +250,9 @@ if cash_reserve_pct == 0.10:
     bullets.append("• 整體流動性偏低，核心現金準備提高到 **10%**，確保家庭/企業現金部位。")
 else:
     bullets.append("• 流動性尚可，核心現金準備維持 **5%**。")
-st.write("\n".join(bullets))
+
+# 用自訂樣式一次輸出，確保字體/大小一致
+st.markdown("<div class='bullet-text'>" + "<br/>".join(bullets) + "</div>", unsafe_allow_html=True)
 
 # ---------------- 保存到 Session（供 PDF/匯出） ----------------
 strategy = dict(
