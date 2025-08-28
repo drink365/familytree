@@ -2,78 +2,65 @@
 import streamlit as st
 from utils.branding import set_page, sidebar_brand, brand_hero, footer
 
-set_page("🚦 快篩 | 影響力傳承平台", layout="centered")
+set_page("🚦 3 分鐘快篩 | 影響力傳承平台", layout="centered")
 sidebar_brand()
-brand_hero("傳承風險快篩（3 分鐘）")
+brand_hero("3 分鐘傳承快篩", "先解決一次性現金缺口，避免被迫賣資產")
 
-st.caption("回答以下問題，立即看見傳承準備度與可能的流動性缺口指標。")
-
-def quick_preparedness_score(scan):
-    score = 100
-    flags = []
-    estate = max(1, int(scan.get("estate_total", 0)))
-    liquid = int(scan.get("liquid", 0))
-    liquid_ratio = liquid / estate
-    if liquid_ratio < 0.10:
-        score -= 20; flags.append("流動性比例偏低（<10%），遇遺產稅可能需賣資產。")
-    elif liquid_ratio < 0.20:
-        score -= 10; flags.append("流動性比例較低（<20%）。")
-    if scan.get("cross_border") == "是":
-        score -= 10; flags.append("存在跨境資產/家人，需另行檢視法稅合規與受益人居住地。")
-    marital = scan.get("marital")
-    if marital in ["離婚/分居", "再婚/有前任"]:
-        score -= 10; flags.append("婚姻結構較複雜，建議儘早訂定遺囑/信託避免爭議。")
-    if scan.get("has_will") in ["沒有", "有（但未更新）"]:
-        score -= 10; flags.append("沒有有效遺囑或未更新。")
-    if scan.get("has_trust") in ["沒有", "規劃中"]:
-        score -= 10; flags.append("尚未建立信託/保單信託。")
-    existing_ins = int(scan.get("existing_insurance", 0))
-    if existing_ins < estate * 0.05:
-        score -= 10; flags.append("既有保額偏低，恐不足以應付稅務與現金流衝擊。")
-    return max(0, min(100, score)), flags
+st.caption("輸入資產、負債與保單資訊，系統將估算遺產稅與一次性現金缺口（含 1% 雜費）。")
 
 with st.form("scan_form"):
     c1, c2 = st.columns(2)
-    residence = c1.selectbox("主要稅務地/居住地", ["台灣", "大陸/中國", "美國", "其他"], index=0, key="residence")
-    cross_border = c2.selectbox("是否有跨境資產/家人", ["否", "是"], index=0, key="cross_border")
+    estate_total = c1.number_input("資產總額 (TWD)", min_value=0, value=150_000_000, step=1_000_000)
+    debts = c2.number_input("負債總額 (TWD)", min_value=0, value=10_000_000, step=1_000_000)
 
     c3, c4 = st.columns(2)
-    marital = c3.selectbox("婚姻狀態", ["未婚", "已婚", "離婚/分居", "再婚/有前任"], index=1, key="marital")
-    heirs_n = c4.number_input("潛在繼承/受贈人數（含子女、父母、配偶）", min_value=0, max_value=20, value=3, step=1, key="heirs_n")
+    liquid = c3.number_input("可動用流動資產 (TWD)", min_value=0, value=20_000_000, step=1_000_000)
+    existing_insurance = c4.number_input("既有壽險保額 (TWD)", min_value=0, value=15_000_000, step=1_000_000)
 
-    st.markdown("#### 主要資產概況（粗略估算即可）")
+    # 允許調整扣除額（保留簡化，必要時可細分）
+    st.markdown("#### 扣除額（簡化參數，可依需要調整）")
     c5, c6 = st.columns(2)
-    estate_total = c5.number_input("資產總額（TWD）", min_value=0, value=150_000_000, step=1_000_000, key="estate_total")
-    liquid = c6.number_input("可動用流動資產（現金/定存/投資）（TWD）", min_value=0, value=20_000_000, step=1_000_000, key="liquid")
+    basic_exempt = c5.number_input("基本免稅額", min_value=0, value=13_330_000, step=10_000)
+    spouse_deduction = c6.number_input("配偶扣除", min_value=0, value=5_530_000, step=10_000)
 
     c7, c8 = st.columns(2)
-    realty = c7.number_input("不動產（TWD）", min_value=0, value=70_000_000, step=1_000_000, key="realty")
-    equity = c8.number_input("公司股權（TWD）", min_value=0, value=40_000_000, step=1_000_000, key="equity")
+    funeral = c7.number_input("喪葬費用（上限 1,380,000）", min_value=0, value=1_380_000, step=10_000)
+    supportees = c8.number_input("其他受扶養人數（每人 560,000）", min_value=0, max_value=10, value=0, step=1)
 
-    c9, c10 = st.columns(2)
-    debts = c9.number_input("負債（TWD）", min_value=0, value=10_000_000, step=1_000_000, key="debts")
-    existing_insurance = c10.number_input("既有壽險保額（可用於稅務/現金流）（TWD）", min_value=0, value=15_000_000, step=1_000_000, key="existing_insurance")
+    submitted = st.form_submit_button("計算一次性現金缺口", use_container_width=True)
 
-    c11, c12 = st.columns(2)
-    has_will = c11.selectbox("是否已有遺囑", ["沒有", "有（但未更新）", "有（最新）"], index=0, key="has_will")
-    has_trust = c12.selectbox("是否已有信託/保單信託", ["沒有", "規劃中", "已建立"], index=0, key="has_trust")
-
-    submitted = st.form_submit_button("計算準備度與風險", use_container_width=True)
+def taiwan_estate_tax(taxable_amount: int) -> int:
+    x = int(max(0, taxable_amount))
+    if x <= 56_210_000: return int(x * 0.10)
+    elif x <= 112_420_000: return int(x * 0.15 - 2_810_000)
+    else: return int(x * 0.20 - 8_430_000)
 
 if submitted:
-    scan = dict(
-        residence=residence, cross_border=cross_border, marital=marital, heirs_n=heirs_n,
-        estate_total=estate_total, liquid=liquid, realty=realty, equity=equity,
-        debts=debts, existing_insurance=existing_insurance, has_will=has_will, has_trust=has_trust
+    taxable_base = max(0, estate_total - debts)
+    deductions = basic_exempt + spouse_deduction + funeral + supportees * 560_000
+    tax = taiwan_estate_tax(max(0, taxable_base - deductions))
+    one_time_need = tax + int(tax * 0.01)  # 1% 雜費
+    available_cash = liquid + existing_insurance
+    cash_gap = max(0, one_time_need - available_cash)
+
+    st.success("快篩完成！")
+    st.metric("一次性現金需求（稅 + 雜費）", f"NT$ {one_time_need:,}")
+    st.metric("可用現金 + 既有保單", f"NT$ {available_cash:,}")
+    st.metric("一次性現金缺口", f"NT$ {cash_gap:,}")
+
+    # 寫入 Session，供下一步使用
+    st.session_state["scan_data"] = dict(
+        estate_total=estate_total, debts=debts, liquid=liquid, existing_insurance=existing_insurance,
+        basic_exempt=basic_exempt, spouse_deduction=spouse_deduction,
+        funeral=funeral, supportees=supportees,
+        taxable_base=taxable_base, deductions=deductions,
+        tax=tax, one_time_need=one_time_need, available_cash=available_cash, cash_gap=cash_gap
     )
-    st.session_state["scan_data"] = scan
-    score, flags = quick_preparedness_score(scan)
-    st.session_state["scan_score"] = score
-    st.success("✅ 快篩完成")
-    st.metric("傳承準備度分數", f"{score}/100")
-    if flags:
-        st.markdown("**主要風險提示**：")
-        for f in flags:
-            st.write("• " + f)
-    st.info("下一步：前往「📊 缺口與保單模擬」，調整年期/幣別，拿到第一版保單草案。")  # ← 已改成 📊
-    st.page_link("pages/02_GapPlanner.p
+
+    st.info("下一步：前往「📊 缺口與保單模擬」，將一次性現金與長期現金流一起規劃。")
+    st.page_link("pages/02_GapPlanner.py", label="➡️ 前往缺口與保單模擬")
+
+else:
+    st.info("請輸入數據並提交，系統將自動計算一次性現金缺口。")
+
+footer()
