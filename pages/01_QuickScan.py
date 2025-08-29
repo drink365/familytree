@@ -1,119 +1,100 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
+import matplotlib.pyplot as plt
+
 from utils.branding import set_page, sidebar_brand, brand_hero, footer
 
-# ---------------- 基本設定 ----------------
-set_page("🚦 3 分鐘快篩 | 影響力傳承平台", layout="centered")
+set_page("🚦 快篩（3 分鐘） | 影響力傳承平台", layout="centered")
 sidebar_brand()
-brand_hero("3 分鐘傳承快篩", "先解決一次性現金缺口，避免被迫賣資產")
 
-st.caption("輸入資產、負債與保單資訊，系統將估算遺產稅與一次性現金缺口（含 1% 雜費）。")
+brand_hero(
+    "快篩：先看一次性『現金』缺口",
+    "輸入 3 個數字，立刻看懂是否需要保單/信託先把現金鎖定。"
+)
 
-# --------- 金額展示（一般大小或略大一號，無換行） ---------
-def money_html(value: int, size: str = "md") -> str:
-    """
-    size: 'sm'（小）/ 'md'（中，略大一號）
-    """
-    s = "NT$ {:,}".format(int(value))
-    cls = "money-figure-sm" if size == "sm" else "money-figure-md"
-    return f"<div class='{cls}'>{s}</div>"
-
-# 全域樣式，與 02_GapPlanner.py 一致
+# ===== 視覺樣式：一致的小而清楚 =====
 st.markdown("""
 <style>
-.money-figure-md{
-  font-weight: 800;
-  line-height: 1.25;
+.money-figure{
+  font-weight: 800; line-height: 1.25;
   font-size: clamp(18px, 1.8vw, 22px);
-  letter-spacing: 0.3px;
-  white-space: nowrap;
+  letter-spacing: 0.3px; white-space: nowrap;
 }
-.money-figure-sm{
-  font-weight: 700;
-  line-height: 1.25;
-  font-size: clamp(16px, 1.6vw, 20px);
-  letter-spacing: 0.2px;
-  white-space: nowrap;
-}
-.money-label{
-  color: #6B7280; font-size: 14px; margin-bottom: 4px;
-}
+.money-label{ color:#6B7280; font-size:14px; margin-bottom:4px; }
 .money-card{ display:flex; flex-direction:column; gap:4px; }
-.hr-soft{ border:none; border-top:1px solid #E5E7EB; margin: 24px 0; }
+.hr-soft{ border:none; border-top:1px solid #E5E7EB; margin: 18px 0; }
 </style>
 """, unsafe_allow_html=True)
 
-def money_card(label: str, value: int, size: str = "md"):
+def money_card(label: str, value: int):
     st.markdown(
-        f"<div class='money-card'><div class='money-label'>{label}</div>{money_html(value, size=size)}</div>",
+        f"<div class='money-card'><div class='money-label'>{label}</div>"
+        f"<div class='money-figure'>NT$ {int(value):,}</div></div>",
         unsafe_allow_html=True
     )
 
-# ---------------- 稅額公式 ----------------
-def taiwan_estate_tax(taxable_amount: int) -> int:
-    x = int(max(0, taxable_amount))
-    if x <= 56_210_000: 
-        return int(x * 0.10)
-    elif x <= 112_420_000: 
-        return int(x * 0.15 - 2_810_000)
-    else: 
-        return int(x * 0.20 - 8_430_000)
+# ===== 表單：3 個輸入就好 =====
+with st.form("quickscan"):
+    c1, c2, c3 = st.columns(3)
+    need_once = c1.number_input("一次性現金需求（稅+雜費）", min_value=0, value=12_000_000, step=500_000)
+    cash_now  = c2.number_input("可用現金（含存款/可動用）", min_value=0, value=2_000_000, step=500_000)
+    life_cov  = c3.number_input("既有壽險保額（可用於現金/稅務）", min_value=0, value=3_000_000, step=500_000)
+    go = st.form_submit_button("看結果", use_container_width=True)
 
-# ---------------- 表單輸入 ----------------
-with st.form("scan_form"):
-    c1, c2 = st.columns(2)
-    estate_total = c1.number_input("資產總額 (TWD)", min_value=0, value=150_000_000, step=1_000_000)
-    debts = c2.number_input("負債總額 (TWD)", min_value=0, value=10_000_000, step=1_000_000)
+if not go:
+    st.stop()
 
-    c3, c4 = st.columns(2)
-    # 更新預設值：2,000,000 與 3,000,000
-    liquid = c3.number_input("可動用流動資產 (TWD)", min_value=0, value=2_000_000, step=1_000_000)
-    existing_insurance = c4.number_input("既有壽險保額 (TWD)", min_value=0, value=3_000_000, step=1_000_000)
+available = cash_now + life_cov
+gap = max(0, need_once - available)
 
-    st.markdown("#### 扣除額（簡化參數，可依需要調整）")
-    c5, c6 = st.columns(2)
-    basic_exempt = c5.number_input("基本免稅額", min_value=0, value=13_330_000, step=10_000)
-    spouse_deduction = c6.number_input("配偶扣除", min_value=0, value=5_530_000, step=10_000)
+st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
 
-    c7, c8 = st.columns(2)
-    funeral = c7.number_input("喪葬費用（上限 1,380,000）", min_value=0, value=1_380_000, step=10_000)
-    supportees = c8.number_input("其他受扶養人數（每人 560,000）", min_value=0, max_value=10, value=0, step=1)
+# ===== 結果卡：三個數字，一眼懂 =====
+cA, cB, cC = st.columns(3)
+with cA: money_card("一次性現金需求", need_once)
+with cB: money_card("可用現金（含既有保單）", available)
+with cC: money_card("缺口", gap)
 
-    submitted = st.form_submit_button("計算一次性現金缺口", use_container_width=True)
+# ===== 小圖：Need vs Available vs Gap =====
+fig, ax = plt.subplots()
+labels = ["需求", "可用", "缺口"]
+values = [need_once, available, gap]
+bars = ax.bar(labels, values)
+ax.set_title("一次性現金：需求 vs 可用 vs 缺口")
+for b in bars:
+    ax.text(b.get_x()+b.get_width()/2, b.get_height(), f"{int(b.get_height()):,}",
+            ha='center', va='bottom', fontsize=9)
+st.pyplot(fig, use_container_width=True)
 
-# ---------------- 計算與輸出 ----------------
-if submitted:
-    taxable_base = max(0, estate_total - debts)
-    deductions = basic_exempt + spouse_deduction + funeral + supportees * 560_000
-    tax = taiwan_estate_tax(max(0, taxable_base - deductions))
+st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
 
-    one_time_need = tax + int(tax * 0.01)  # 1% 雜費
-    available_cash = liquid + existing_insurance
-    cash_gap = max(0, one_time_need - available_cash)
-
-    st.success("快篩完成！")
-    colA1, colA2, colA3 = st.columns(3)
-    with colA1:
-        money_card("一次性現金需求（稅 + 雜費）", one_time_need, size="md")
-    with colA2:
-        money_card("可用現金 + 既有保單", available_cash, size="md")
-    with colA3:
-        money_card("一次性現金缺口", cash_gap, size="md")
-
-    # 寫入 Session，供下一步使用
-    st.session_state["scan_data"] = dict(
-        estate_total=estate_total, debts=debts, liquid=liquid, existing_insurance=existing_insurance,
-        basic_exempt=basic_exempt, spouse_deduction=spouse_deduction,
-        funeral=funeral, supportees=supportees,
-        taxable_base=taxable_base, deductions=deductions,
-        tax=tax, one_time_need=one_time_need, available_cash=available_cash, cash_gap=cash_gap
+# ===== 行動建議（溫暖、人話） =====
+if gap > 0:
+    st.success(
+        "結論：你有一次性現金缺口，需要先用**保單/信託/等值現金**把這個缺口鎖定，"
+        "避免臨到交棒時被迫賣資產。下一步：把**長期現金流**也納入，估算合併需求與建議保額。"
+    )
+else:
+    st.info(
+        "結論：一次性現金缺口為 **0**。仍建議檢視長期現金流與法稅不確定性，"
+        "維持基本保障並安排核心現金。"
     )
 
-    st.markdown("<hr class='hr-soft'/>", unsafe_allow_html=True)
-    st.info("下一步：前往「📊 缺口與保單模擬」，把一次性現金與長期現金流一起規劃。")
-    st.page_link("pages/02_GapPlanner.py", label="➡️ 前往缺口與保單模擬")
+# 將結果存入 Session，供 02/03/04 頁接續使用
+st.session_state["scan_data"] = dict(
+    one_time_need=int(need_once),
+    available_cash=int(available),
+    cash_gap=int(gap),
+    liquid=int(cash_now),
+    existing_insurance=int(life_cov),
+    tax=int(need_once)  # 保留欄位名稱相容（若你把稅額單獨拆分，可再調）
+)
 
-else:
-    st.info("請輸入數據並提交，系統將自動計算一次性現金缺口。")
+# 下一步 CTA（只有一個）
+st.markdown("### 下一步")
+st.page_link("pages/02_GapPlanner.py", label="📊 納入長期『現金流』，估算保額與年繳", use_container_width=True)
+
+# 可直接去下載提案（給熟客/回訪用）
+st.page_link("pages/03_Proposal.py", label="🧾 直接下載一頁式提案（草案）", use_container_width=True)
 
 footer()
