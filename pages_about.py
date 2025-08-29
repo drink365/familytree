@@ -10,6 +10,9 @@ import random
 def render():
     st.subheader("🤝 關於我們 / 聯絡")
 
+    def _arm_lock():
+        st.session_state.lock_until = time.time() + FRONTEND_LOCK_SECONDS
+
     # 初始化 session_state
     if "lock_until" not in st.session_state:
         st.session_state.lock_until = 0
@@ -39,7 +42,7 @@ def render():
         # 前端鎖定按鈕
         locked = time.time() < st.session_state.lock_until
         btn_label = "已送出，請稍候…" if locked else "送出需求"
-        submitted = st.form_submit_button(btn_label, disabled=locked)
+        submitted = st.form_submit_button(btn_label, disabled=locked, on_click=_arm_lock, disabled=locked)
 
     if submitted:
         # 若被鎖定則不處理
