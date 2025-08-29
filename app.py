@@ -1,862 +1,502 @@
-# -*- coding: utf-8 -*-
-"""
-🌳 家族樹小幫手｜單頁極簡版（含法定繼承人試算；No f-strings）
-- 區塊：建立我 → 一鍵父母 → 配偶/子女 → 家族圖 → 法定繼承人試算 → 進階建立 → 資料表 → 匯入/匯出
-- 新增：法定繼承試算依民法 §1138（順位）、§1139（第一順序決定）、§1140（代位繼承）、§1144（配偶應繼分）
-- 行為：所有新增皆需「勾選 + 提交」，避免誤新增；按鈕用提交時驗證
-- 顯示：已故 → 名字加「(殁)」、底色淺灰
-- 匯入：先暫存於 session_state，上按「📥 套用匯入」才覆蓋（避免 rerun 造成沒反應）
-"""
-from __future__ import annotations
-import json, uuid
-from typing import List, Optional, Dict, Tuple
-
 import streamlit as st
-from graphviz import Digraph
+from datetime import datetime
+from typing import List, Dict
 
-VERSION = "2025-08-26-onepage-heirs-1138-1139-1140-1144"
+# =========================
+# Page Config
+# =========================
+st.set_page_config(
+    page_title="影響力｜AI 傳承規劃平台",
+    page_icon="logo2.png",     # 根目錄的方形 logo 作為 favicon
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# ====== 常量 ======
-GENDER_OPTIONS = ["女", "男", "其他/不透漏"]
-REL_MAP = {"bio": "親生", "adopted": "收養", "step": "繼親"}
-STATUS_MAP = {"married": "已婚", "divorced": "前任(離異)", "separated": "分居"}
+# =========================
+# Global Styles (CSS)
+# =========================
+BRAND_PRIMARY = "#1F4A7A"   # 專業藍
+BRAND_ACCENT  = "#C99A2E"   # 溫暖金
+BRAND_BG      = "#F7F9FB"   # 淺底
+CARD_BG       = "white"
 
-GENDER_STYLE = {"男": {"fillcolor": "#E3F2FD"},
-                "女": {"fillcolor": "#FCE4EC"},
-                "其他/不透漏": {"fillcolor": "#F3F4F6"}}
-STATUS_EDGE_STYLE = {"married": {"style": "solid", "color": "#9E9E9E"},
-                     "divorced": {"style": "dashed", "color": "#9E9E9E"},
-                     "separated": {"style": "dotted", "color": "#9E9E9E"}}
-CHILD_EDGE_STYLE = {"bio": {"style": "solid", "color": "#BDBDBD"},
-                    "adopted": {"style": "dotted", "color": "#BDBDBD"},
-                    "step": {"style": "dashed", "color": "#BDBDBD"}}
+st.markdown(
+    f"""
+    <style>
+      /* 全域字體與背景 */
+      html, body, [class*="css"]  {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", "Helvetica Neue", Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        background-color: {BRAND_BG};
+      }}
+      /* 讓主容器更寬鬆 */
+      .main > div {{
+        padding-top: 0.5rem;
+        padding-bottom: 2rem;
+      }}
+      /* 標題風格 */
+      .title-xl {{
+        font-size: 40px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+        line-height: 1.2;
+        color: {BRAND_PRIMARY};
+        margin: 0 0 10px 0;
+      }}
+      .subtitle {{
+        font-size: 18px;
+        color: #334155;
+        margin-bottom: 24px;
+      }}
+      /* Hero 區塊 */
+      .hero {{
+        border-radius: 18px;
+        padding: 40px;
+        background: radial-gradient(1000px 400px at 10% 10%, #ffffff 0%, #f3f6fa 45%, #eef2f7 100%);
+        border: 1px solid #e6eef5;
+        box-shadow: 0 6px 18px rgba(10, 18, 50, 0.04);
+      }}
+      .hero .badge {{
+        display: inline-block;
+        background: {BRAND_PRIMARY};
+        color: white;
+        padding: 6px 12px;
+        border-radius: 999px;
+        font-size: 12px;
+        letter-spacing: .5px;
+        margin-bottom: 12px;
+      }}
+      .hero-cta {{
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }}
+      .btn-primary {{
+        background: {BRAND_PRIMARY};
+        color: white !important;
+        padding: 10px 16px;
+        border-radius: 12px;
+        text-decoration: none !important;
+        font-weight: 700;
+        border: 1px solid {BRAND_PRIMARY};
+      }}
+      .btn-ghost {{
+        background: white;
+        color: {BRAND_PRIMARY} !important;
+        padding: 10px 16px;
+        border-radius: 12px;
+        text-decoration: none !important;
+        font-weight: 700;
+        border: 1px solid #cfdae6;
+      }}
+      /* 卡片 */
+      .card {{
+        background: {CARD_BG};
+        border-radius: 16px;
+        padding: 18px;
+        border: 1px solid #e8eef5;
+        box-shadow: 0 8px 16px rgba(17, 24, 39, 0.04);
+        height: 100%;
+      }}
+      .card h4 {{
+        margin: 6px 0 6px 0;
+        color: {BRAND_PRIMARY};
+        font-weight: 800;
+      }}
+      .muted {{
+        color: #64748b;
+        font-size: 14px;
+        line-height: 1.5;
+      }}
+      /* 分隔小標 */
+      .section-title {{
+        font-weight: 900;
+        letter-spacing: .4px;
+        color: #0f172a;
+        margin: 20px 0 8px 0;
+      }}
+      /* 頂部標籤導航（模擬 tab 的視覺） */
+      .topnav {{
+        display: flex;
+        gap: 8px;
+        margin: 10px 0 18px 0;
+        flex-wrap: wrap;
+      }}
+      .pill {{
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid #e2e8f0;
+        color: #0f172a;
+        font-size: 13px;
+        text-decoration: none;
+        background: #fff;
+      }}
+      .pill.active {{
+        border-color: {BRAND_ACCENT};
+        color: #1f2937;
+        background: #fff7e6;
+      }}
+      /* 頁尾 */
+      .footer {{
+        color: #6b7280;
+        font-size: 13px;
+        margin-top: 6px;
+      }}
+      /* 隱藏 Streamlit 預設頁面標題空白 */
+      header[data-testid="stHeader"] {{
+        background: transparent;
+      }}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
-# ====== State/Helper ======
-def _new_id(prefix): return "{}_{}".format(prefix, uuid.uuid4().hex[:8])
-def _safe_index(seq, value, default=0):
-    try: return list(seq).index(value)
-    except ValueError: return default
+# =========================
+# Helpers
+# =========================
+def top_brand_bar():
+    col1, col2 = st.columns([1, 5], vertical_alignment="center")
+    with col1:
+        st.image("logo.png", use_container_width=True)  # 橫式 Logo
+    with col2:
+        st.markdown(
+            f"""
+            <div style="text-align:right;">
+              <span class="muted">《影響力》傳承策略平台｜永傳家族辦公室</span>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
-def init_state():
-    if "tree" not in st.session_state:
-        st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
-    if "celebrate_ready" not in st.session_state:
-        st.session_state.celebrate_ready = False
-    # 補預設欄位
-    for mid in list(st.session_state.tree.get("marriages", {}).keys()):
-        st.session_state.tree["marriages"][mid].setdefault("status", "married")
-        st.session_state.tree["child_types"].setdefault(mid, {})
-    for _, p in st.session_state.tree.get("persons", {}).items():
-        p.setdefault("deceased", False); p.setdefault("note", ""); p.setdefault("gender", "其他/不透漏")
+def top_tabs(active: str):
+    tabs = [
+        ("home", "首頁 Home"),
+        ("legacy", "傳承地圖"),
+        ("tax", "稅務試算"),
+        ("policy", "保單策略"),
+        ("values", "價值觀探索"),
+        ("about", "關於 / 聯絡"),
+    ]
+    st.markdown('<div class="topnav">', unsafe_allow_html=True)
+    for key, label in tabs:
+        cls = "pill active" if key == active else "pill"
+        # 使用 query params 切換
+        href = f"?page={key}"
+        st.markdown(f'<a class="{cls}" href="{href}">{label}</a>', unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
 
-def get_me_pid():
-    for pid, p in st.session_state.tree["persons"].items():
-        if p.get("is_me"): return pid
-    return None
-
-def add_person(name, gender, year=None, note="", is_me=False, deceased=False):
-    pid = _new_id("P")
-    st.session_state.tree["persons"][pid] = {
-        "name": (name or "").strip() or "未命名",
-        "gender": gender if gender in GENDER_OPTIONS else "其他/不透漏",
-        "year": (year or "").strip(), "note": (note or "").strip(),
-        "is_me": bool(is_me), "deceased": bool(deceased)
-    }
-    return pid
-
-def add_or_get_marriage(a, b, status="married"):
-    for mid, m in st.session_state.tree["marriages"].items():
-        if {m.get("spouse1"), m.get("spouse2")} == {a, b}:
-            if status and m.get("status") != status: m["status"] = status
-            st.session_state.tree["child_types"].setdefault(mid, {})
-            return mid
-    mid = _new_id("M")
-    st.session_state.tree["marriages"][mid] = {"spouse1": a, "spouse2": b, "children": [], "status": status}
-    st.session_state.tree["child_types"].setdefault(mid, {})
-    return mid
-
-def add_child(mid, cid, relation="bio"):
-    m = st.session_state.tree["marriages"].get(mid)
-    if not m: return
-    if cid not in m["children"]: m["children"].append(cid)
-    st.session_state.tree["child_types"].setdefault(mid, {})[cid] = relation
-
-def set_child_relation(mid, cid, relation):
-    st.session_state.tree["child_types"].setdefault(mid, {})
-    if cid in st.session_state.tree["child_types"][mid]:
-        st.session_state.tree["child_types"][mid][cid] = relation
-
-def get_marriages_of(pid):
-    mids = []
-    for mid, m in st.session_state.tree["marriages"].items():
-        if pid in (m.get("spouse1"), m.get("spouse2")): mids.append(mid)
-    return mids
-
-def get_parent_marriage_of(pid):
-    for mid, m in st.session_state.tree["marriages"].items():
-        if pid in m.get("children", []): return mid
-    return None
-
-def delete_person(pid):
-    t = st.session_state.tree
-    if pid not in t["persons"]: return
-    for mid, m in list(t["marriages"].items()):
-        if pid in m.get("children", []):
-            m["children"] = [c for c in m["children"] if c != pid]
-            if pid in t["child_types"].get(mid, {}): del t["child_types"][mid][pid]
-    for mid, m in list(t["marriages"].items()):
-        changed = False
-        if m.get("spouse1") == pid: m["spouse1"] = None; changed = True
-        if m.get("spouse2") == pid: m["spouse2"] = None; changed = True
-        if (m.get("spouse1") is None and m.get("spouse2") is None and not m.get("children")):
-            if mid in t["child_types"]: del t["child_types"][mid]
-            del t["marriages"][mid]
-        elif changed:
-            t["child_types"].setdefault(mid, {})
-    del t["persons"][pid]
-
-# ====== Demo ======
-def seed_demo():
-    st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
-    me = add_person("我", "女", year="1970", is_me=True)
-    f = add_person("爸爸", "男", year="1940")
-    mo = add_person("媽媽", "女", year="1945")
-    mid_p = add_or_get_marriage(f, mo)
-    add_child(mid_p, me, "bio")
-    sp = add_person("另一半", "男", year="1968")
-    mid_me = add_or_get_marriage(me, sp)
-    c1 = add_person("大女兒", "女", year="1995")
-    c2 = add_person("小兒子", "男", year="1999")
-    add_child(mid_me, c1); add_child(mid_me, c2)
-    ex = add_person("前任", "女")
-    mid_ex = add_or_get_marriage(f, ex, "divorced")
-    half = add_person("同父異母弟弟", "男", year="1980")
-    add_child(mid_ex, half)
-    st.session_state.celebrate_ready = True
-    st.toast("已載入示範家族。", icon="✅")
-
-# ====== 法定繼承：核心演算法（§1138/§1139/§1140/§1144） ======
-def _is_alive(pid):
-    p = st.session_state.tree["persons"].get(pid, {})
-    return not p.get("deceased", False)
-
-def _child_rel(mid, cid):
-    return st.session_state.tree["child_types"].get(mid, {}).get(cid, "bio")
-
-def _eligible_child(mid, cid):
-    # 只有親生與收養有法定親子繼承關係；繼親不具
-    rel = _child_rel(mid, cid)
-    return rel in ("bio", "adopted")
-
-def _list_children_of(person_id):
-    res = []
-    for mid, m in st.session_state.tree["marriages"].items():
-        if person_id in (m.get("spouse1"), m.get("spouse2")):
-            for cid in m.get("children", []):
-                if _eligible_child(mid, cid):
-                    res.append((mid, cid))
-    return res
-
-def _list_parents_of(person_id):
-    pmid = get_parent_marriage_of(person_id)
-    if pmid is None: return []
-    m = st.session_state.tree["marriages"][pmid]
-    return [p for p in [m.get("spouse1"), m.get("spouse2")] if p]
-
-def _list_siblings_of(person_id):
-    # 透過父母＋其餘婚姻，收集全血/半血兄弟姊妹
-    sibs = set()
-    pmid = get_parent_marriage_of(person_id)
-    if pmid:
-        for cid in st.session_state.tree["marriages"][pmid].get("children", []):
-            if cid != person_id: sibs.add(cid)
-    parents = _list_parents_of(person_id)
-    for par in parents:
-        for mid, m in st.session_state.tree["marriages"].items():
-            if par in (m.get("spouse1"), m.get("spouse2")):
-                for cid in m.get("children", []):
-                    if cid != person_id:
-                        sibs.add(cid)
-    return list(sibs)
-
-def _list_spouses_alive_of(person_id):
-    spouses = []
-    for mid, m in st.session_state.tree["marriages"].items():
-        if person_id in (m.get("spouse1"), m.get("spouse2")):
-            status = m.get("status", "married")
-            if status == "divorced":
-                continue
-            other = m.get("spouse1") if m.get("spouse2") == person_id else m.get("spouse2")
-            if other and _is_alive(other):
-                spouses.append(other)
-    # 去重
-    return list(dict.fromkeys(spouses).keys())
-
-def _stirpes_descendants(children_pairs):
-    """
-    逐支(per stirpes)遞迴（僅供第一順位使用）：
-    輸入 list[(mid, child_pid)]；輸出 list[(heir_pid, weight)]，weights across OUTPUT 加總=1
-    - 子女在世：該支由該子女承受（此支重=1）
-    - 子女先亡：該支由其直系卑親屬承受（在該支內 weights 加總=1），可遞迴
-    """
-    branches = []
-    for mid, child in children_pairs:
-        if not _eligible_child(mid, child):
-            continue
-        if _is_alive(child):
-            branches.append([(child, 1.0)])
-        else:
-            leaves = _stirpes_descendants(_list_children_of(child))
-            if leaves:
-                branches.append(leaves)
-    n = len(branches)
-    if n == 0:
-        return []
-    # 將每支 base = 1/n，再乘以該支內部的權重
-    out = []
-    base = 1.0 / float(n)
-    for leaves in branches:
-        for pid, w in leaves:
-            out.append((pid, base * float(w)))
-    # 合併同人
-    merged = {}
-    for pid, w in out:
-        merged[pid] = merged.get(pid, 0.0) + w
-    return [(pid, merged[pid]) for pid in merged]
-
-def heirs_by_order(decedent_pid):
-    """
-    回傳 (order, heirs_list, spouses_alive)
-    order: 1/2/3/4 或 None
-    heirs_list:
-      - 第1順位：list[(pid, weight)] 為直系卑親屬或其代位之「支內」權重合併後的結果（總和=1）
-      - 第2/3/4順位：list[(pid, 1.0)] 僅作名單，實際 share 於後續計算
-    spouses_alive: 存活配偶清單（離異不列）
-    """
-    spouses_alive = _list_spouses_alive_of(decedent_pid)
-
-    # 第一順位（§1138、§1139、§1140）
-    children = _list_children_of(decedent_pid)
-    first = _stirpes_descendants(children)  # already normalized to sum=1
-    if first:
-        return (1, first, spouses_alive)
-
-    # 第二順位：父母（在世）（§1138）
-    parents = [pid for pid in _list_parents_of(decedent_pid) if _is_alive(pid)]
-    if parents:
-        return (2, [(pid, 1.0) for pid in parents], spouses_alive)
-
-    # 第三順位：兄弟姊妹（不適用§1140 代位，依你指定條文）
-    sibs_alive = [sid for sid in _list_siblings_of(decedent_pid) if _is_alive(sid)]
-    if sibs_alive:
-        return (3, [(pid, 1.0) for pid in sibs_alive], spouses_alive)
-
-    # 第四順位：祖父母（在世）（§1138）
-    gps = set()
-    for par in _list_parents_of(decedent_pid):
-        for gp in _list_parents_of(par):
-            if _is_alive(gp):
-                gps.add(gp)
-    if gps:
-        return (4, [(pid, 1.0) for pid in gps], spouses_alive)
-
-    # 無其他順位
-    return (None, [], spouses_alive)
-
-def compute_statutory_shares_v2(decedent_pid):
-    """
-    法定繼承試算：民法§1138、§1139、§1140、§1144
-    傳回 {order, basis, result, notes}
-    """
-    order, group, spouses = heirs_by_order(decedent_pid)
-    res, notes = [], []
-    basis = "依民法§1138（順位）、§1139（第一順序決定）、§1140（代位繼承）、§1144（配偶應繼分）試算"
-
-    n_sp = len(spouses)
-
-    if order is None:
-        if n_sp > 0:
-            share_sp_each = 1.0 / float(n_sp)
-            for sp in spouses:
-                res.append({"pid": sp, "share": share_sp_each, "role": "配偶"})
-            notes.append("無第一至第四順位繼承人，配偶單獨繼承（§1144-4）。")
-        else:
-            notes.append("未找到任何法定繼承人。")
-        return {"order": order, "basis": basis, "result": res, "notes": notes}
-
-    # 第一順位：配偶視為一個子女分支（§1144-1）
-    if order == 1:
-        # 重新建立「子女分支」以取得分支數（而非 leaf 人數）
-        branches = []  # 每一支: list[(pid, weight)]，該支內 weights 加總=1
-        for mid, cid in _list_children_of(decedent_pid):
-            if _is_alive(cid):
-                branches.append([(cid, 1.0)])
-            else:
-                leaves = _stirpes_descendants(_list_children_of(cid))
-                if leaves: branches.append(leaves)
-        N = len(branches)  # 有效子女分支數（在世或代位線上仍有人）
-
-        if N == 0 and n_sp == 0:
-            notes.append("無子女亦無配偶，應再檢查第二至第四順位。")
-            return {"order": order, "basis": basis, "result": res, "notes": notes}
-
-        if n_sp > 0:
-            total_branch = N + 1  # 配偶為一支
-            branch_share = 1.0 / float(total_branch)
-            # 多位配偶分配該一支
-            sp_each = branch_share / float(n_sp)
-            for sp in spouses:
-                res.append({"pid": sp, "share": sp_each, "role": "配偶"})
-        else:
-            branch_share = 1.0 / float(N) if N > 0 else 0.0
-
-        # 子女各支分配（代位：在支內按 leaves 的 weight 比例承受）
-        for leaves in branches:
-            for pid, w in leaves:
-                res.append({"pid": pid, "share": branch_share * float(w),
-                            "role": "直系卑親屬" if w >= 0.999 else "代位繼承"})
-        notes.append("配偶與第一順位並存：配偶視為一分支，與各子女分支平均（§1144-1）；代位只適用第一順位（§1140）。")
-        return {"order": order, "basis": basis, "result": res, "notes": notes}
-
-    # 第二順位：父母（§1144-2）
-    if order == 2:
-        if n_sp > 0:
-            sp_total = 0.5
-            sp_each = sp_total / float(n_sp)
-            for sp in spouses:
-                res.append({"pid": sp, "share": sp_each, "role": "配偶"})
-            others_total = 0.5
-        else:
-            others_total = 1.0
-        alive_parents = [pid for pid, _ in group]
-        each_parent = (others_total / float(len(alive_parents))) if alive_parents else 0.0
-        for pid in alive_parents:
-            res.append({"pid": pid, "share": each_parent, "role": "父母"})
-        notes.append("配偶與第二順位並存：配偶1/2，父母共1/2（§1144-2）。" if n_sp > 0 else "無配偶：由父母平均（§1138）。")
-        return {"order": order, "basis": basis, "result": res, "notes": notes}
-
-    # 第三順位：兄弟姊妹（不適用§1140；§1144-2）
-    if order == 3:
-        if n_sp > 0:
-            sp_total = 0.5
-            sp_each = sp_total / float(n_sp)
-            for sp in spouses:
-                res.append({"pid": sp, "share": sp_each, "role": "配偶"})
-            others_total = 0.5
-        else:
-            others_total = 1.0
-        sibs = [pid for pid, _ in group]
-        each_sib = (others_total / float(len(sibs))) if sibs else 0.0
-        for pid in sibs:
-            res.append({"pid": pid, "share": each_sib, "role": "兄弟姊妹"})
-        notes.append("配偶與第三順位並存：配偶1/2，兄弟姊妹共1/2（§1144-2）。" if n_sp > 0 else "無配偶：兄弟姊妹平均（§1138）。")
-        return {"order": order, "basis": basis, "result": res, "notes": notes}
-
-    # 第四順位：祖父母（§1144-3）
-    if order == 4:
-        if n_sp > 0:
-            sp_total = 2.0/3.0
-            sp_each = sp_total / float(n_sp)
-            for sp in spouses:
-                res.append({"pid": sp, "share": sp_each, "role": "配偶"})
-            others_total = 1.0/3.0
-        else:
-            others_total = 1.0
-        gps = [pid for pid, _ in group]
-        each_gp = (others_total / float(len(gps))) if gps else 0.0
-        for pid in gps:
-            res.append({"pid": pid, "share": each_gp, "role": "祖父母"})
-        notes.append("配偶與第四順位並存：配偶2/3，祖父母共1/3（§1144-3）。" if n_sp > 0 else "無配偶：祖父母平均（§1138）。")
-        return {"order": order, "basis": basis, "result": res, "notes": notes}
-
-    return {"order": order, "basis": basis, "result": res, "notes": notes}
-
-# ====== UI 區塊 ======
-def block_header():
-    st.title("🌳 家族樹小幫手｜單頁版")
-    st.caption("填寫必要欄位並按提交即可；不會自動寫入。")
-    c1, c2, c3 = st.columns([1,1,2])
+def cta_buttons():
+    c1, c2 = st.columns([1,1])
     with c1:
-        if st.button("✨ 載入示範家族", key="btn_seed"):
-            seed_demo()
+        if st.button("🚀 立即體驗 Demo", use_container_width=True, type="primary"):
+            st.query_params.update({"page": "legacy"})
+            st.rerun()
     with c2:
-        if st.button("🗑 清空全部", key="btn_reset"):
-            st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
-            st.toast("已清空。", icon="🗑")
-    st.markdown("---")
+        if st.button("📞 預約顧問 / 合作洽談", use_container_width=True):
+            st.query_params.update({"page": "about"})
+            st.rerun()
 
-def block_me():
-    st.subheader("Step 1｜建立『我』")
-    me_pid = get_me_pid()
-    if me_pid:
-        p = st.session_state.tree["persons"][me_pid]
-        col1, col2, col3, col4 = st.columns([2,1,1,1])
-        p["name"] = col1.text_input("我的名稱", value=p["name"], key="me_name")
-        p["gender"] = col2.selectbox("性別", GENDER_OPTIONS,
-                                     index=_safe_index(GENDER_OPTIONS, p.get("gender","其他/不透漏"),2),
-                                     key="me_gender")
-        p["year"] = col3.text_input("出生年(選填)", value=p.get("year",""), key="me_year")
-        p["deceased"] = col4.toggle("已故?", value=p.get("deceased",False), key="me_dec")
-        st.success("已建立『我』，可繼續下一步。")
-    else:
-        with st.form("form_me"):
-            name = st.text_input("我的名稱", value="我", key="me_new_name")
-            gender = st.selectbox("性別", GENDER_OPTIONS, key="me_new_gender")
-            year = st.text_input("出生年(選填)", key="me_new_year")
-            confirm = st.checkbox("我確認新增", key="me_new_ok")
-            ok = st.form_submit_button("✅ 建立『我』")
-        if ok:
-            if not confirm: st.warning("請先勾選「我確認新增」。")
-            else:
-                add_person(name, gender, year=year, is_me=True)
-                st.session_state.celebrate_ready = True
-                st.toast("已建立『我』", icon="✅")
+def feature_card(title: str, desc: str, emoji: str):
+    st.markdown(
+        f"""
+        <div class="card">
+          <div style="font-size:26px">{emoji}</div>
+          <h4>{title}</h4>
+          <div class="muted">{desc}</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-def block_parents():
-    st.subheader("Step 2｜一鍵新增父母（可略過）")
-    me = get_me_pid()
-    if not me:
-        st.info("請先完成 Step 1"); return
-    c1, c2, c3 = st.columns([1.2,1.2,1.2])
-    fa = c1.text_input("父親姓名", value="爸爸", key="father_name_input")
-    mo = c2.text_input("母親姓名", value="媽媽", key="mother_name_input")
-    if c3.button("＋ 新增父母並連結到『我』", key="btn_add_parents"):
-        f = add_person(fa, "男"); m = add_person(mo, "女")
-        mid = add_or_get_marriage(f, m); add_child(mid, me, "bio")
-        st.session_state.celebrate_ready = True
-        st.toast("已新增父母。", icon="👨‍👩‍👧")
+def left_nav():
+    st.markdown("### 功能導覽")
+    st.markdown("- 🔰 首頁總覽")
+    st.markdown("- 🗺️ 傳承地圖（家族與資產視覺）")
+    st.markdown("- 💰 稅務試算（遺產/贈與）")
+    st.markdown("- 🧩 保單策略（放大與現金流）")
+    st.markdown("- ❤️ 價值觀探索（情感連結）")
+    st.markdown("- 🤝 關於我們與聯絡")
+    st.divider()
+    st.caption("小提醒：左側與頂部導覽都可切換頁面。")
 
-def block_spouse_children():
-    st.subheader("Step 3｜配偶 / Step 4｜子女")
-    me = get_me_pid()
-    if not me:
-        st.info("請先完成 Step 1"); return
+# =========================
+# Pages
+# =========================
+def page_home():
+    top_tabs("home")
+    st.markdown('<div class="hero">', unsafe_allow_html=True)
+    st.markdown('<div class="badge">AI 傳承教練</div>', unsafe_allow_html=True)
+    st.markdown('<div class="title-xl">10 分鐘完成高資產家族 10 年的傳承規劃</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="subtitle">專業 × 快速 × 可信任｜將法稅知識、保單策略與家族價值觀整合為行動方案，幫助顧問有效成交、幫助家庭安心決策。</div>',
+        unsafe_allow_html=True
+    )
+    cta_buttons()
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    # 配偶
-    with st.expander("＋ 新增配偶/另一半（可標注前任/分居）", expanded=False):
-        with st.form("form_add_spouse_main", clear_on_submit=True):
-            sp_name = st.text_input("姓名", value="", key="sp_name_main")
-            sp_gender = st.selectbox("性別", GENDER_OPTIONS, index=1, key="sp_gender_main")
-            sp_status = st.selectbox("關係狀態", list(STATUS_MAP.keys()), index=0,
-                                     format_func=lambda s: STATUS_MAP[s], key="sp_status_main")
-            col_ok1, col_ok2 = st.columns([1,2])
-            confirm = col_ok1.checkbox("我確認新增", key="confirm_add_sp_main")
-            submit = col_ok2.form_submit_button("💍 提交新增關係")
-        if submit:
-            if not confirm: st.warning("請先勾選「我確認新增」。")
-            elif sp_name.strip():
-                sp = add_person(sp_name.strip(), sp_gender)
-                add_or_get_marriage(me, sp, sp_status)
-                st.session_state.celebrate_ready = True
-                st.success("已新增關係")
-            else:
-                st.warning("請輸入配偶姓名後再提交。")
+    st.markdown("#### 核心功能")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        feature_card("AI 傳承地圖", "以家族成員與資產六大類為主軸，快速產出「可視化傳承地圖」，成為顧問面談神器。", "🗺️")
+    with c2:
+        feature_card("稅務試算引擎", "即時計算遺產/贈與稅，套用本土化稅表與扣除規則，支援情境比較。", "🧮")
+    with c3:
+        feature_card("保單策略模擬", "以現金流與保額放大視角，模擬終身壽/美元儲蓄等方案的傳承效益。", "📦")
 
-    # 子女
-    my_mids = get_marriages_of(me)
-    if my_mids:
-        persons = st.session_state.tree["persons"]
-        labels = []
-        for mid in my_mids:
-            m = st.session_state.tree["marriages"][mid]
-            s1 = persons.get(m["spouse1"],{}).get("name","?")
-            s2 = persons.get(m["spouse2"],{}).get("name","?")
-            lbl = "{} ❤ {}（{}）".format(s1, s2, STATUS_MAP.get(m.get("status","married"), m.get("status","married")))
-            labels.append((mid, lbl))
-        pick = st.selectbox("選擇要新增子女的關係",
-                            options=list(range(len(labels))),
-                            format_func=lambda i: labels[i][1], key="choose_mid_main")
-        chosen_mid = labels[pick][0]
-        with st.expander("＋ 新增子女", expanded=False):
-            with st.form("form_add_child_main_{}".format(chosen_mid), clear_on_submit=True):
-                c_name = st.text_input("子女姓名", key="child_name_main_{}".format(chosen_mid))
-                c_gender = st.selectbox("性別", GENDER_OPTIONS, index=0, key="child_gender_main_{}".format(chosen_mid))
-                c_year = st.text_input("出生年(選填)", key="child_year_main_{}".format(chosen_mid))
-                c_rel = st.selectbox("關係類型", list(REL_MAP.keys()), index=0,
-                                     format_func=lambda s: REL_MAP[s], key="child_rel_main_{}".format(chosen_mid))
-                col1, col2 = st.columns([1,2])
-                confirm_c = col1.checkbox("我確認新增", key="confirm_add_child_{}".format(chosen_mid))
-                submit_c = col2.form_submit_button("👶 提交新增子女")
-            if submit_c:
-                if not confirm_c: st.warning("請先勾選「我確認新增」。")
-                elif c_name.strip():
-                    cid = add_person(c_name.strip(), c_gender, year=c_year)
-                    add_child(chosen_mid, cid, relation=c_rel)
-                    st.session_state.celebrate_ready = True
-                    st.success("已新增子女")
-                else:
-                    st.warning("請輸入子女姓名後再提交。")
-    else:
-        st.info("尚未新增任何配偶/婚姻，請先新增配偶。")
+    c4, c5, c6 = st.columns(3)
+    with c4:
+        feature_card("價值觀探索", "把『想留給誰、怎麼留』說清楚，讓數字與情感同向，降低家族溝通阻力。", "❤️")
+    with c5:
+        feature_card("一鍵提案", "將分析結果匯整成客製化提案（章節化重點＋行動清單），提升成交通關率。", "📝")
+    with c6:
+        feature_card("合規與專業庫", "內建合規規則與知識庫，結合律師/會計師/保經顧問實務，降低風險。", "🛡️")
 
-def block_quick_two_gen(target_pid):
-    with st.expander("⚡ 快速加直系兩代（父母 + 配偶 + 多子女）", expanded=False):
-        st.caption("可只填需要的欄位；未提交前不會建立任何資料。")
-        with st.form("form_q2g_{}".format(target_pid), clear_on_submit=True):
-            st.markdown("**A. 父母**（可留白略過）")
-            c1, c2 = st.columns([1.2,1.2])
-            fa_name = c1.text_input("父親姓名", key="q2g_fa_{}".format(target_pid))
-            mo_name = c2.text_input("母親姓名", key="q2g_mo_{}".format(target_pid))
-            add_parents = st.checkbox("建立父母並連結", key="q2g_addp_{}".format(target_pid))
+    st.markdown("#### 服務對象")
+    s1, s2 = st.columns(2)
+    with s1:
+        feature_card("B2B2C｜專業顧問", "保險顧問、財稅顧問、家族辦公室：10 分鐘生成專業提案，提升效率與專業度。", "🏢")
+    with s2:
+        feature_card("B2C｜高資產家庭", "企業主與高資產家庭：以簡單明確的決策畫面，讓複雜傳承更安心。", "👨‍👩‍👧‍👦")
 
-            st.markdown("**B. 配偶/關係**（可留白略過）")
-            c4, c5, c6 = st.columns([1.2,1.0,1.0])
-            sp_name = c4.text_input("配偶姓名", key="q2g_spn_{}".format(target_pid))
-            sp_gender = c5.selectbox("性別", GENDER_OPTIONS, index=1, key="q2g_spg_{}".format(target_pid))
-            sp_status = c6.selectbox("狀態", list(STATUS_MAP.keys()), index=0,
-                                     format_func=lambda s: STATUS_MAP[s], key="q2g_sps_{}".format(target_pid))
-            add_spouse = st.checkbox("建立配偶/關係", key="q2g_adds_{}".format(target_pid))
+def page_legacy_map():
+    top_tabs("legacy")
+    st.subheader("🗺️ 傳承地圖（示範表單）")
+    st.caption("目標：快速輸入關鍵資訊，產出『家族＋資產』的可視化地圖與行動重點。")
 
-            st.markdown("**C. 子女**（可留白略過）")
-            c7, c8, c9, c10 = st.columns([2.0,1.0,1.0,1.2])
-            kids_csv = c7.text_input("子女姓名（以逗號分隔）", key="q2g_kcsv_{}".format(target_pid))
-            kid_gender = c8.selectbox("預設性別", GENDER_OPTIONS, index=0, key="q2g_kg_{}".format(target_pid))
-            kid_rel = c9.selectbox("關係類型", list(REL_MAP.keys()), index=0,
-                                   format_func=lambda s: REL_MAP[s], key="q2g_krel_{}".format(target_pid))
-            kid_year = c10.text_input("預設出生年(選填)", key="q2g_kyr_{}".format(target_pid))
-            col_ok1, col_ok2 = st.columns([1,2])
-            confirm = col_ok1.checkbox("我確認建立上述資料", key="q2g_ok_{}".format(target_pid))
-            submit = col_ok2.form_submit_button("🚀 一鍵建立")
-        if submit:
-            if not confirm:
-                st.warning("請先勾選「我確認建立上述資料」。"); return
-            if add_parents and (fa_name or mo_name):
-                fpid = add_person((fa_name or "父親").strip(), "男")
-                mpid = add_person((mo_name or "母親").strip(), "女")
-                mid = add_or_get_marriage(fpid, mpid, "married")
-                add_child(mid, target_pid, "bio")
-            chosen_mid = None
-            if add_spouse and sp_name:
-                spid = add_person(sp_name.strip(), sp_gender)
-                chosen_mid = add_or_get_marriage(target_pid, spid, sp_status)
-            kids = [s.strip() for s in (kids_csv or "").split(",") if s.strip()]
-            if kids:
-                if chosen_mid is None:
-                    placeholder = add_person("未知配偶", "其他/不透漏")
-                    chosen_mid = add_or_get_marriage(target_pid, placeholder, "married")
-                for nm in kids:
-                    cid = add_person(nm, kid_gender, year=kid_year)
-                    add_child(chosen_mid, cid, relation=kid_rel)
-            st.session_state.celebrate_ready = True
-            st.success("已完成快速建立。"); st.rerun()
+    with st.form("legacy_form"):
+        st.markdown("**一、家族成員**")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            family_name = st.text_input("家族姓氏 / 家族名（可選）", value="")
+            patriarch   = st.text_input("主要決策者（例：李先生）", value="")
+        with col2:
+            spouse      = st.text_input("配偶（例：王女士）", value="")
+            heirs       = st.text_input("子女 / 繼承人（逗號分隔）", value="")
+        with col3:
+            guardians   = st.text_input("監護/信託受託人（可選）", value="")
 
-def block_advanced():
-    st.subheader("🎛 進階建立｜大家族與複雜關係")
-    persons = st.session_state.tree["persons"]
-    if not persons:
-        st.info("請先建立至少一位成員。"); return
-    ids = list(persons.keys())
-    pick = st.selectbox("選擇成員以編輯/加關係",
-                        options=list(range(len(ids))),
-                        format_func=lambda i: persons[ids[i]]["name"], key="adv_pick")
-    pid = ids[pick]; p = persons[pid]
+        st.markdown("**二、資產六大類（概略）**")
+        a1, a2, a3 = st.columns(3)
+        with a1:
+            equity = st.text_input("公司股權（例：A公司60%）", value="")
+            re_est = st.text_input("不動產（例：台北信義住辦）", value="")
+        with a2:
+            finance = st.text_input("金融資產（例：存款/股票/基金）", value="")
+            policy  = st.text_input("保單（例：終身壽3000萬）", value="")
+        with a3:
+            offshore = st.text_input("海外資產（例：香港帳戶）", value="")
+            others   = st.text_input("其他資產（例：藝術品）", value="")
 
-    # ✏️ 編輯
-    with st.expander("✏️ 編輯成員資料", expanded=True):
-        c1,c2,c3,c4 = st.columns([2,1,1,1])
-        p["name"] = c1.text_input("名稱", value=p["name"], key="edit_name_{}".format(pid))
-        p["gender"] = c2.selectbox("性別", GENDER_OPTIONS,
-                                   index=_safe_index(GENDER_OPTIONS,p.get("gender","其他/不透漏"),2),
-                                   key="edit_gender_{}".format(pid))
-        p["year"] = c3.text_input("出生年(選填)", value=p.get("year",""), key="edit_year_{}".format(pid))
-        p["deceased"] = c4.toggle("已故?", value=p.get("deceased",False), key="edit_dec_{}".format(pid))
-        p["note"] = st.text_area("備註(收養/繼親/職業等)", value=p.get("note",""), key="edit_note_{}".format(pid))
-        st.markdown("---")
-        st.markdown("🗑️ **刪除這位成員**")
-        if p.get("is_me"):
-            st.caption("此成員為『我』，不可刪除。")
+        st.markdown("**三、特殊考量**")
+        c1, c2 = st.columns(2)
+        with c1:
+            cross_border = st.checkbox("涉及跨境（台灣/大陸/美國等）", value=False)
+            special_needs = st.checkbox("受扶養/身心狀況考量", value=False)
+        with c2:
+            fairness = st.selectbox("公平原則偏好", ["平均分配", "依需求與責任", "結合股權設計"], index=1)
+            governance = st.selectbox("治理工具偏好", ["遺囑", "信託", "保單＋信託", "控股結構"], index=2)
+
+        submitted = st.form_submit_button("生成傳承地圖與行動重點")
+    if submitted:
+        st.success("✅ 已生成！以下為示意輸出：")
+        colA, colB = st.columns([1,1])
+        with colA:
+            st.markdown("##### 家族結構（摘要）")
+            st.write(f"- 決策者：{patriarch or '（未填）'} / 配偶：{spouse or '（未填）'}")
+            st.write(f"- 子女/繼承人：{heirs or '（未填）'}")
+            st.write(f"- 監護/受託：{guardians or '（未填）'}")
+            st.write("---")
+            st.markdown("##### 資產分類（六大）")
+            st.write(f"- 公司股權：{equity or '未填'}")
+            st.write(f"- 不動產：{re_est or '未填'}")
+            st.write(f"- 金融資產：{finance or '未填'}")
+            st.write(f"- 保單：{policy or '未填'}")
+            st.write(f"- 海外資產：{offshore or '未填'}")
+            st.write(f"- 其他：{others or '未填'}")
+        with colB:
+            st.markdown("##### 建議工具與原則")
+            st.write(f"- 公平原則：{fairness}")
+            st.write(f"- 治理工具：{governance}")
+            if cross_border:
+                st.info("🌏 涉及跨境：建議先確認各地稅籍與資產所在地法律，優先處理稅務居民與扣繳風險。")
+            if special_needs:
+                st.warning("💛 特殊照護：建議設計專款與監護安排，避免資產被誤用。")
+            st.markdown("##### 行動清單（示例）")
+            st.write("- (1) 彙整資產明細與估值、確認持有人與所在地")
+            st.write("- (2) 初步試算遺產/贈與稅，先看『稅務黑洞』")
+            st.write("- (3) 擬定保單＋信託配置，確保現金流與公平性")
+            st.write("- (4) 規劃股權與公司治理，避免營運權與所有權衝突")
+
+def page_tax():
+    top_tabs("tax")
+    st.subheader("🧮 稅務試算（示範版）")
+    st.caption("此為介面示意：後續可接入您既有的稅表與規則引擎。")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        estate_base = st.number_input("遺產總額 (TWD)", min_value=0, value=120_000_000, step=1_000_000)
+        funeral     = st.number_input("喪葬費（上限 1,380,000）", min_value=0, value=1_380_000, step=10_000)
+    with col2:
+        spouse_ded  = st.number_input("配偶扣除（5,530,000）", min_value=0, value=5_530_000, step=10_000)
+        basic_ex    = st.number_input("基本免稅（13,330,000）", min_value=0, value=13_330_000, step=10_000)
+    with col3:
+        dependents  = st.number_input("受扶養人數（直系卑親屬每人 560,000）", min_value=0, value=2, step=1)
+        disabled    = st.number_input("身心障礙人數（每人 6,930,000）", min_value=0, value=0, step=1)
+
+    # 簡化示範：計算課稅基礎與級距（請依實務替換正式稅表）
+    total_deductions = (
+        min(funeral, 1_380_000)
+        + spouse_ded
+        + basic_ex
+        + dependents * 560_000
+        + disabled * 6_930_000
+    )
+    taxable = max(0, estate_base - total_deductions)
+
+    def tax_calc(amount: int) -> Dict[str, int]:
+        # 示範級距（請以正式表替換；支援速算扣除）
+        if amount <= 56_210_000:
+            rate, quick = 0.10, 0
+        elif amount <= 112_420_000:
+            rate, quick = 0.15, 2_810_000
         else:
-            sure = st.checkbox("我確定要刪除", key="confirm_del_{}".format(pid))
-            del_btn = st.button("❌ 刪除此成員", key="btn_del_{}".format(pid), disabled=not sure)
-            if del_btn:
-                delete_person(pid); st.success("已刪除"); st.rerun()
+            rate, quick = 0.20, 8_430_000
+        tax = int(amount * rate - quick)
+        return {"rate": int(rate * 100), "quick": quick, "tax": max(tax, 0)}
 
-    # ⚡ 快速兩代（對此成員）
-    block_quick_two_gen(pid)
+    result = tax_calc(taxable)
 
-    st.markdown("---")
-    cA, cB, cC = st.columns(3)
+    st.markdown("#### 試算結果")
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("可扣除總額", f"{total_deductions:,.0f}")
+    r2.metric("課稅基礎", f"{taxable:,.0f}")
+    r3.metric("適用稅率", f"{result['rate']}%")
+    r4.metric("預估應納稅額", f"{result['tax']:,.0f}")
 
-    # 父母
-    with cA:
-        st.markdown("**父母**")
-        fa = st.text_input("父親姓名", key="adv_f_{}".format(pid))
-        mo = st.text_input("母親姓名", key="adv_m_{}".format(pid))
-        if st.button("➕ 新增父母並連結", key="btn_add_parents_{}".format(pid)):
-            fpid = add_person(fa or "父親", "男")
-            mpid = add_person(mo or "母親", "女")
-            mid = add_or_get_marriage(fpid, mpid, "married")
-            add_child(mid, pid, "bio"); st.session_state.celebrate_ready = True
-            st.toast("已新增父母並連結。", icon="👨‍👩‍👧")
+    st.caption("※ 最終結果仍需以正式稅表、扣除額與個案事實為準。此為示意介面。")
 
-    # 配偶
-    with cB:
-        st.markdown("**配偶/關係**")
-        spn = st.text_input("配偶姓名", key="adv_sp_{}".format(pid))
-        spg = st.selectbox("性別", GENDER_OPTIONS, index=1, key="adv_spg_{}".format(pid))
-        sps = st.selectbox("狀態", list(STATUS_MAP.keys()), index=0,
-                           format_func=lambda s: STATUS_MAP[s], key="adv_sps_{}".format(pid))
-        if st.button("➕ 新增關係", key="btn_add_sp_{}".format(pid)):
-            if spn.strip():
-                spid = add_person(spn.strip(), spg)
-                add_or_get_marriage(pid, spid, sps)
-                st.session_state.celebrate_ready = True
-                st.toast("已新增關係", icon="💍")
-            else:
-                st.warning("請先輸入配偶姓名。")
+def page_policy():
+    top_tabs("policy")
+    st.subheader("📦 保單策略（示範版）")
+    st.caption("以『保額放大 × 現金流』角度模擬，支援 6/7/10 年繳、美元或台幣等。")
+    col1, col2 = st.columns([1,1])
+    with col1:
+        premium = st.number_input("年繳保費", min_value=0, value=1_000_000, step=50_000)
+        years   = st.selectbox("繳費期間", [6, 7, 10, 12, 20])
+        ccy     = st.selectbox("幣別", ["TWD", "USD"])
+    with col2:
+        target  = st.selectbox("策略目標", ["放大財富傳承", "補足遺產稅", "退休現金流", "企業風險隔離"])
+        rate    = st.slider("假設內部報酬率 IRR（示意）", 1.0, 6.0, 3.0, 0.1)
 
-    # 子女
-    with cC:
-        st.markdown("**子女**")
-        my_mids = get_marriages_of(pid)
-        if my_mids:
-            persons = st.session_state.tree["persons"]
-            mids_ui = []
-            for mid in my_mids:
-                m = st.session_state.tree["marriages"][mid]
-                s1 = persons.get(m["spouse1"],{}).get("name","?")
-                s2 = persons.get(m["spouse2"],{}).get("name","?")
-                mids_ui.append((mid, "{} ❤ {}（{}）".format(s1, s2, STATUS_MAP.get(m.get("status","married"), m.get("status","married")))))
-            mid_idx = st.selectbox("選擇關係", options=list(range(len(mids_ui))),
-                                   format_func=lambda i: mids_ui[i][1], key="adv_mid_{}".format(pid))
-            chosen_mid = mids_ui[mid_idx][0]
-            with st.form("form_add_child_adv_{}".format(pid), clear_on_submit=True):
-                cn = st.text_input("子女姓名", key="adv_child_name_{}".format(pid))
-                cg = st.selectbox("性別", GENDER_OPTIONS, index=0, key="adv_child_gender_{}".format(pid))
-                cy = st.text_input("出生年(選填)", key="adv_child_year_{}".format(pid))
-                cr = st.selectbox("關係類型", list(REL_MAP.keys()), index=0,
-                                  format_func=lambda s: REL_MAP[s], key="adv_child_rel_{}".format(pid))
-                okcol1, okcol2 = st.columns([1,2])
-                confirm = okcol1.checkbox("我確認新增", key="adv_confirm_child_{}".format(pid))
-                ok = okcol2.form_submit_button("👶 提交新增子女")
-            if ok:
-                if not confirm: st.warning("請先勾選「我確認新增」。")
-                elif cn.strip():
-                    cid = add_person(cn.strip(), cg, year=cy)
-                    add_child(chosen_mid, cid, relation=cr)
-                    st.session_state.celebrate_ready = True
-                    st.success("已新增子女")
-                else:
-                    st.warning("請輸入子女姓名後再提交。")
-        else:
-            st.caption("尚無關係，請先新增配偶/另一半。")
+    # 非精算：僅示意保額/現金值估算（後續可接您既有計算模組）
+    total_premium = premium * years
+    indicative_face = int(total_premium * (18 if target == "放大財富傳承" else 12))
+    cash_value_10y = int(total_premium * (1 + rate/100) ** 10)
 
-    st.markdown("---")
-    # 批次兄弟姊妹
-    st.markdown("**兄弟姊妹（批次）**")
-    pmid = get_parent_marriage_of(pid)
-    if pmid is None:
-        st.caption("此成員目前沒有已知的雙親關係，無法判定兄弟姊妹。請先新增其父母。")
-    else:
-        sibs = st.text_input("以逗號分隔：如 小明, 小美", key="adv_sibs_{}".format(pid))
-        sg = st.selectbox("預設性別", GENDER_OPTIONS, index=2, key="adv_sibs_gender_{}".format(pid))
-        confirm_s = st.checkbox("我確認新增", key="adv_confirm_sibs_{}".format(pid))
-        click_add_sibs = st.button("👫 提交新增兄弟姊妹", key="btn_add_sibs_submit_{}".format(pid))
-        if click_add_sibs:
-            if not confirm_s: st.warning("請先勾選「我確認新增」。")
-            else:
-                names = [s.strip() for s in (sibs or "").split(",") if s.strip()]
-                if not names: st.warning("請至少輸入一個姓名（以逗號分隔）。")
-                else:
-                    for nm in names:
-                        sid = add_person(nm, sg); add_child(pmid, sid, "bio")
-                    st.session_state.celebrate_ready = True
-                    st.success("已新增兄弟姊妹"); st.rerun()
+    st.markdown("#### 估算摘要（示意）")
+    s1, s2, s3 = st.columns(3)
+    s1.metric("總保費", f"{total_premium:,.0f} {ccy}")
+    s2.metric("估計身故保額", f"{indicative_face:,.0f} {ccy}")
+    s3.metric("10年估計現金值", f"{cash_value_10y:,.0f} {ccy}")
+    st.caption("※ 以上為介面示意，實務請接保單商品真實數據與精算假設。")
 
-    # 微調關係
-    st.markdown("---")
-    marriages = st.session_state.tree["marriages"]
-    child_types = st.session_state.tree["child_types"]
-    if marriages:
-        st.markdown("**關係檢視與微調**")
-        for mid, m in marriages.items():
-            s1 = st.session_state.tree["persons"].get(m["spouse1"],{}).get("name","?")
-            s2 = st.session_state.tree["persons"].get(m["spouse2"],{}).get("name","?")
-            with st.expander("{} ❤ {}".format(s1, s2), expanded=False):
-                m["status"] = st.selectbox("婚姻狀態", list(STATUS_MAP.keys()),
-                                           index=_safe_index(list(STATUS_MAP.keys()), m.get("status","married"), 0),
-                                           format_func=lambda s: STATUS_MAP[s], key="stat_{}".format(mid))
-                for cid in m.get("children", []):
-                    cname = st.session_state.tree["persons"].get(cid, {}).get("name", cid)
-                    current_rel = child_types.get(mid, {}).get(cid, "bio")
-                    new_rel = st.selectbox("{} 的關係".format(cname), list(REL_MAP.keys()),
-                                           index=_safe_index(list(REL_MAP.keys()), current_rel, 0),
-                                           format_func=lambda s: REL_MAP[s], key="rel_{}_{}".format(mid, cid))
-                    set_child_relation(mid, cid, new_rel)
+def page_values():
+    top_tabs("values")
+    st.subheader("❤️ 價值觀探索（示範版）")
+    st.caption("把家族的愛與信念先說清楚，工具與資金配置才會同向。")
+    cols = st.columns(3)
+    with cols[0]:
+        v1 = st.multiselect("想優先照顧", ["配偶", "子女", "父母", "夥伴", "公益"], default=["子女","配偶"])
+    with cols[1]:
+        v2 = st.multiselect("重要原則", ["公平", "感恩", "責任", "創新", "永續"], default=["公平","責任"])
+    with cols[2]:
+        v3 = st.multiselect("傳承方式", ["等分", "需求導向", "信託分期", "股權分流"], default=["信託分期","股權分流"])
 
-def block_graph():
-    st.subheader("🖼 家族圖")
-    try:
-        persons = st.session_state.tree["persons"]
-        dot = Digraph(comment="FamilyTree",
-                      graph_attr={"rankdir": "TB", "splines": "spline", "nodesep": "0.4", "ranksep": "0.6",
-                                  "fontname": "PingFang TC, Microsoft JhengHei, Noto Sans CJK TC, Arial"})
-        # 人節點（已故：名字加(殁)，底色淺灰）
-        for pid, p in persons.items():
-            label = p.get("name","未命名")
-            if p.get("year"): label = label + "\n(" + str(p.get("year")) + ")"
-            if p.get("deceased"):
-                label = label + "(殁)"; fill = "#E0E0E0"
-            else:
-                fill = GENDER_STYLE.get(p.get("gender") or "其他/不透漏",
-                                        GENDER_STYLE["其他/不透漏"])["fillcolor"]
-            if p.get("is_me"): label = "⭐ " + label
-            dot.node(pid, label=label, shape="box", style="rounded,filled",
-                     color="#90A4AE", fillcolor=fill, penwidth="1.2")
+    st.markdown("#### 探索摘要（示意）")
+    st.write(f"- 優先照顧：{', '.join(v1) if v1 else '（未選）'}")
+    st.write(f"- 重要原則：{', '.join(v2) if v2 else '（未選）'}")
+    st.write(f"- 傳承方式：{', '.join(v3) if v3 else '（未選）'}")
+    st.info("建議：將價值觀轉譯為行動規則（例如：『不動產留長子、金融資產分期信託給長女與次女』），再連結到稅務與保單策略。")
 
-        # 關係與子女
-        marriages = st.session_state.tree["marriages"]
-        child_types = st.session_state.tree["child_types"]
-        for mid, m in marriages.items():
-            dot.node(mid, label="", shape="point", width="0.02")
-            stl = STATUS_EDGE_STYLE.get(m.get("status","married"), STATUS_EDGE_STYLE["married"])
-            if m.get("spouse1") and m.get("spouse2"):
-                dot.edge(m["spouse1"], mid, color=stl["color"], style=stl["style"])
-                dot.edge(m["spouse2"], mid, color=stl["color"], style=stl["style"])
-            for c in m.get("children", []):
-                if c in persons:
-                    rel = child_types.get(mid, {}).get(c, "bio")
-                    cstl = CHILD_EDGE_STYLE.get(rel, CHILD_EDGE_STYLE["bio"])
-                    dot.edge(mid, c, color=cstl["color"], style=cstl["style"])
-        st.graphviz_chart(dot, use_container_width=True)
-    except Exception as e:
-        st.error("圖形渲染失敗：{}".format(e))
-
-def block_heirs():
-    st.subheader("⚖️ 法定繼承人試算（民法§1138、§1139、§1140、§1144）")
-    persons = st.session_state.tree["persons"]
-    if not persons:
-        st.info("請先建立至少一位成員。"); return
-
-    # 選擇被繼承人
-    id_list = list(persons.keys())
-    pick = st.selectbox("選擇被繼承人", options=list(range(len(id_list))),
-                        format_func=lambda i: persons[id_list[i]]["name"], key="heir_pick")
-    target = id_list[pick]
-
-    with st.expander("說明 / 限制", expanded=False):
-        st.caption("本試算依民法§1138（順位）、§1139（第一順序決定）、§1140（代位繼承）、§1144（配偶應繼分）。未涵蓋：遺囑、拋棄或喪失繼承權、特留分、夫妻剩餘財產分配、半血分額差異、祖父母分線等。")
-
-    if st.button("🧮 立即試算", key="btn_calc_heirs"):
-        out = compute_statutory_shares_v2(target)
-        # 顯示結果表格
-        rows = []
-        for item in out["result"]:
-            pid = item["pid"]
-            name = persons.get(pid, {}).get("name", pid)
-            share = item["share"]
-            role = item.get("role", "")
-            rows.append({"成員": name, "角色": role, "應繼分": "{:.2f}%".format(share * 100.0)})
-        if rows:
-            st.markdown("**試算結果**")
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-        else:
-            st.info("沒有可分配的繼承人結果。")
-        order_name = {1:"第一順位（直系卑親屬）",2:"第二順位（父母）",3:"第三順位（兄弟姊妹）",4:"第四順位（祖父母）"}.get(out["order"], "無")
-        st.markdown("**適用順位**：{}".format(order_name))
-        st.markdown("**法律依據**：{}".format(out["basis"]))
-        if out["notes"]:
-            st.markdown("**備註**：{}".format("；".join(out["notes"])))
-
-def block_tables():
-    st.subheader("📋 資料檢視")
-    persons = st.session_state.tree["persons"]
-    marriages = st.session_state.tree["marriages"]
-    if persons:
-        st.markdown("**成員名冊**")
-        st.dataframe([{"pid": pid, **p} for pid, p in persons.items()], use_container_width=True, hide_index=True)
-    if marriages:
-        st.markdown("**婚姻/關係**")
-        rows = []
-        for mid, m in marriages.items():
-            rows.append({
-                "mid": mid,
-                "spouse1": persons.get(m.get("spouse1"),{}).get("name", m.get("spouse1")),
-                "spouse2": persons.get(m.get("spouse2"),{}).get("name", m.get("spouse2")),
-                "status": STATUS_MAP.get(m.get("status","married"), m.get("status","married")),
-                "children": ", ".join([persons.get(cid,{}).get("name", cid) for cid in m.get("children", [])]),
-            })
-        st.dataframe(rows, use_container_width=True, hide_index=True)
-
-def block_io():
-    st.subheader("📦 匯入 / 匯出")
-
-    # 匯出目前資料
-    data = json.dumps(st.session_state.tree, ensure_ascii=False, indent=2)
-    st.download_button("⬇ 下載 JSON", data=data, file_name="family_tree.json",
-                       mime="application/json", key="btn_dl_json")
+def page_about():
+    top_tabs("about")
+    st.subheader("🤝 關於我們 / 聯絡")
+    st.markdown(
+        f"""
+        **永傳家族辦公室（Grace Family Office）**  
+        我們整合律師、會計師、財稅與保險專家，用 AI 工具把複雜變簡單，陪伴家庭安心決策。
+        """
+    )
+    col1, col2 = st.columns([1,1])
+    with col1:
+        name = st.text_input("您的稱呼 *", "")
+        email = st.text_input("Email *", "")
+        phone = st.text_input("電話（可選）", "")
+        topic = st.selectbox("想了解的主題", ["體驗平台 Demo", "企業接班與股權", "遺產/贈與稅", "保單策略", "其它"])
+    with col2:
+        when_date = st.date_input("期望日期", value=None)
+        when_ampm = st.selectbox("時段偏好", ["不限", "上午", "下午"], index=0)
+        msg = st.text_area("想說的話（選填）", height=120)
+        if st.button("送出需求", type="primary"):
+            st.success("已收到，我們會盡快與您聯繫。謝謝！")
 
     st.divider()
+    st.caption("《影響力》傳承策略平台｜永傳家族辦公室｜https://gracefo.com｜聯絡信箱：123@gracefo.com")
 
-    # 上傳檔先緩存在 session_state，避免 rerun 遺失
-    if "upload_bytes" not in st.session_state:
-        st.session_state.upload_bytes = None
-        st.session_state.upload_name = None
+# =========================
+# Sidebar (Left)
+# =========================
+with st.sidebar:
+    st.image("logo2.png", width=64)
+    st.markdown("### 影響力｜AI 傳承規劃平台")
+    st.caption("專業 × 快速 × 可信任")
+    left_nav()
+    st.markdown("---")
+    st.markdown("**快速前往**")
+    if st.button("🔸 傳承地圖", use_container_width=True):
+        st.query_params.update({"page": "legacy"}); st.rerun()
+    if st.button("🔸 稅務試算", use_container_width=True):
+        st.query_params.update({"page": "tax"}); st.rerun()
+    if st.button("🔸 保單策略", use_container_width=True):
+        st.query_params.update({"page": "policy"}); st.rerun()
+    if st.button("🔸 價值觀探索", use_container_width=True):
+        st.query_params.update({"page": "values"}); st.rerun()
+    if st.button("🔸 關於 / 聯絡", use_container_width=True):
+        st.query_params.update({"page": "about"}); st.rerun()
 
-    up = st.file_uploader("選擇 family_tree.json（選擇後仍需按下方按鈕才會匯入）",
-                          type=["json"], key="uploader_json")
-    if up is not None:
-        st.session_state.upload_bytes = up.getvalue()
-        st.session_state.upload_name = getattr(up, "name", "未命名")
+# =========================
+# Top Brand Bar
+# =========================
+top_brand_bar()
 
-    if st.session_state.upload_bytes:
-        st.info("已選擇檔案：{}".format(st.session_state.upload_name))
-        try:
-            preview = json.loads(st.session_state.upload_bytes.decode("utf-8"))
-            persons_cnt = len(preview.get("persons", {})) if isinstance(preview, dict) else 0
-            marriages_cnt = len(preview.get("marriages", {})) if isinstance(preview, dict) else 0
-            st.caption("預覽：成員 {} 人、關係 {} 筆".format(persons_cnt, marriages_cnt))
-        except Exception as e:
-            st.error("檔案無法解析為 JSON：{}".format(e))
+# =========================
+# Router by Query Params
+# =========================
+q = st.query_params
+page = (q.get("page") or ["home"])
+page = page[0] if isinstance(page, list) else page
 
-        cols = st.columns([1,1,2])
-        apply = cols[0].button("📥 套用匯入（覆蓋目前資料）", key="btn_apply_import")
-        clear  = cols[1].button("🧹 取消選擇", key="btn_clear_upload")
+if page == "home":
+    page_home()
+elif page == "legacy":
+    page_legacy_map()
+elif page == "tax":
+    page_tax()
+elif page == "policy":
+    page_policy()
+elif page == "values":
+    page_values()
+elif page == "about":
+    page_about()
+else:
+    page_home()
 
-        if apply:
-            try:
-                raw = st.session_state.upload_bytes.decode("utf-8")
-                data = json.loads(raw)
-                if not isinstance(data, dict):
-                    raise ValueError("JSON 頂層不是物件")
-                tree = {
-                    "persons": data.get("persons", {}) or {},
-                    "marriages": data.get("marriages", {}) or {},
-                    "child_types": data.get("child_types", {}) or {},
-                }
-                st.session_state.tree = tree
-                init_state()
-                st.success("✅ 匯入完成：成員 {} 人、關係 {} 筆"
-                           .format(len(tree["persons"]), len(tree["marriages"])))
-                st.session_state.upload_bytes = None
-                st.session_state.upload_name = None
-                st.rerun()
-            except Exception as e:
-                st.error("套用匯入失敗：{}".format(e))
-
-        if clear:
-            st.session_state.upload_bytes = None
-            st.session_state.upload_name = None
-            st.toast("已清除選擇的檔案。", icon="🧹")
-            st.rerun()
-    else:
-        st.caption("提示：選擇檔案後，需按「📥 套用匯入」才會覆蓋目前資料。未按按鈕不會自動匯入。")
-
-# ====== Main ======
-def main():
-    st.set_page_config(page_title="家族樹小幫手", page_icon="🌳", layout="wide")
-    init_state()
-    st.write("🟢 App booted — {}".format(VERSION))
-    block_header()
-    block_me(); st.divider()
-    block_parents(); st.divider()
-    block_spouse_children(); st.divider()
-    block_graph(); st.divider()
-    block_heirs(); st.divider()        # ← 法定繼承人試算（§1138/§1139/§1140/§1144）
-    block_advanced(); st.divider()
-    block_tables(); st.divider()
-    block_io()
-    st.caption("隱私：所有資料僅在本次工作階段中，下載或重新整理後即清空。")
-
-if __name__ == "__main__":
-    main()
+# =========================
+# Footer
+# =========================
+st.markdown(
+    f"""
+    <div class="footer">
+      《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime("%Y/%m/%d")}
+    </div>
+    """,
+    unsafe_allow_html=True
+)
