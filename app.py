@@ -62,9 +62,9 @@ if page == "home":
     st.markdown('</div>', unsafe_allow_html=True)
 
     import importlib as _il
-    from pages_legacy import render as _legacy_demo
+    
     st.markdown("#### 亮點功能（摘錄）")
-    _legacy_demo.__doc__
+    
 
 elif page == "legacy":
     from pages_legacy import render; render()

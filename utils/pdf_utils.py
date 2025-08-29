@@ -1,4 +1,4 @@
-# utils/pdf_utils.py
+
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
@@ -18,12 +18,10 @@ _FONT_PATH = os.path.join(os.path.dirname(__file__), "..", _BRAND.get("FONT_TTF"
 # ---- 字型註冊（修正：用名稱字串比對）----
 FONT_NAME = "NotoSansTC"
 try:
-    # 若字型檔存在且尚未註冊，才註冊
     if os.path.isfile(_FONT_PATH) and (FONT_NAME not in pdfmetrics.getRegisteredFontNames()):
         pdfmetrics.registerFont(TTFont(FONT_NAME, _FONT_PATH))
 except Exception:
-    # 後備字型（避免因缺字型而整體失敗）
-    FONT_NAME = "Helvetica"
+    FONT_NAME = "Helvetica"  # fallback
 
 # 樣式
 _styles = getSampleStyleSheet()
