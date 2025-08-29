@@ -1,8 +1,7 @@
 
 import streamlit as st
 from datetime import datetime
-from utils.pdf_utils import build_branded_pdf, p, h2, title, spacer, table
-
+from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
 def render():
     st.subheader("🗺️ 傳承地圖（輸入 → 摘要 → PDF）")
     with st.form("legacy_form"):
@@ -15,7 +14,6 @@ def render():
             heirs_raw   = st.text_input("子女 / 繼承人（逗號分隔）", "長子,長女")
         with c3:
             trustees    = st.text_input("受託/監護安排（可選）", "")
-
         a1, a2, a3 = st.columns(3)
         with a1:
             equity   = st.text_input("公司股權", "A公司60%")
@@ -26,7 +24,6 @@ def render():
         with a3:
             offshore = st.text_input("海外資產", "香港帳戶")
             others   = st.text_input("其他資產", "藝術品")
-
         b1, b2 = st.columns(2)
         with b1:
             fairness   = st.selectbox("公平原則", ["平均分配", "依需求與責任", "結合股權設計"], index=1)
@@ -34,15 +31,11 @@ def render():
         with b2:
             governance = st.selectbox("治理工具偏好", ["遺囑", "信託", "保單＋信託", "控股結構"], index=2)
             special    = st.checkbox("特殊照護（身心/學習/監護）", value=False)
-
         submitted = st.form_submit_button("✅ 生成摘要")
-
     if not submitted:
         st.info("請輸入上方資訊，點擊「生成摘要」。")
         return
-
     heirs = [h.strip() for h in heirs_raw.split(",") if h.strip()]
-
     st.success("已生成摘要：")
     st.write({
         "家族": family_name or "（未填）",
@@ -51,9 +44,6 @@ def render():
         "子女/繼承人": ", ".join(heirs) if heirs else "（未填）",
         "受託/監護": trustees or "（未填）",
     })
-
-    # Build PDF
-    filename = f"/mnt/data/{(family_name or 'family')}_proposal_{datetime.now().strftime('%Y%m%d')}.pdf"
     flow = [
         title(f"{family_name or '家族'} 傳承規劃摘要"),
         spacer(8),
@@ -83,6 +73,5 @@ def render():
         spacer(6),
         p(f"產出日期：{datetime.now().strftime('%Y/%m/%d')}"),
     ]
-    build_branded_pdf(filename, flow)
-    with open(filename, "rb") as f:
-        st.download_button("⬇️ 下載 PDF", data=f.read(), file_name=filename.split("/")[-1], mime="application/pdf")
+    pdf_bytes = build_branded_pdf_bytes(flow)
+    st.download_button("⬇️ 下載 PDF", data=pdf_bytes, file_name=f"{(family_name or 'family')}_proposal_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
