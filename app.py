@@ -20,7 +20,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 def navigate(key: str): st.query_params.update({"page": key}); st.rerun()
 with st.sidebar:
-    st.image(_BRAND.get("LOGO_SQUARE", "logo2.png"), width=38)
+    st.image(_BRAND.get("LOGO_SQUARE", "logo2.png"), width=64)
     st.markdown("### 影響力｜AI 傳承規劃平台"); st.caption("專業 × 快速 × 可信任"); st.markdown("---")
     if st.button("🏠 首頁總覽", use_container_width=True): navigate("home")
     if st.button("🗺️ 傳承地圖", use_container_width=True): navigate("legacy")
@@ -36,6 +36,7 @@ if page == "home":
     st.markdown('<div class="hero">', unsafe_allow_html=True)
     st.markdown('<div class="title-xl">10 分鐘完成高資產家族 10 年的傳承規劃</div>', unsafe_allow_html=True)
     st.markdown('<div class="subtitle">專業 × 快速 × 可信任｜整合法稅、保單策略與價值觀，幫助顧問有效成交、幫助家庭安心決策。</div>', unsafe_allow_html=True)
+    st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
         if st.button("🚀 開始建立傳承地圖", type="primary", use_container_width=True): navigate("legacy")

@@ -31,18 +31,21 @@ def render():
     st.write({k: f"{v:.2%}" for k, v in shares.items()} if shares else {"提示": "尚無可辨識之繼承人，或僅配偶"})
 
     st.markdown("---")
-    st.markdown("**扣除額與稅額**（一般字級顯示避免截斷）")
+    st.markdown("**扣除額與稅額**（單位：萬元）")
 
     eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
 
     colA, colB, colC = st.columns(3)
     with colA:
-        estate_base = st.number_input("遺產總額 (TWD)", min_value=0, value=120_000_000, step=1_000_000)
-        funeral     = st.number_input("喪葬費（上限 1,380,000）", min_value=0, value=1_380_000, step=10_000)
+        estate_base_wan = st.number_input("遺產總額（單位：萬元）", min_value=0, value=12000, step=10)
+    estate_base = estate_base_wan * 10000
+        funeral_wan = st.number_input("喪葬費（上限 138 萬；單位：萬元）", min_value=0, value=138, step=1)
+    funeral = funeral_wan * 10000
     with colB:
         spouse_ded  = 5_530_000 if eligible["spouse"] == 1 else 0
-        st.text_input("配偶扣除（自動）", value=f"{spouse_ded:,}", disabled=True)
-        basic_ex    = st.number_input("基本免稅（13,330,000）", min_value=0, value=13_330_000, step=10_000)
+        st.text_input("配偶扣除（自動，單位：萬元）", value=_fmt_wan(spouse_ded), disabled=True)
+        basic_ex_wan = st.number_input("基本免稅（1,333 萬；單位：萬元）", min_value=0, value=1333, step=1)
+    basic_ex = basic_ex_wan * 10000
     with colC:
         dep_children = eligible["children"]; asc_count = eligible["ascendants"]
         st.text_input("直系卑親屬人數（自動 ×560,000）", value=str(dep_children), disabled=True)
@@ -106,11 +109,13 @@ def render():
     st.download_button("⬇️ 下載稅務試算 PDF", data=pdf1, file_name=f"estate_tax_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
 
     # ---- Gift tax (keep simple, single page, no cover) ----
-    st.markdown("---"); st.markdown("**贈與稅（一般字級）**")
+    st.markdown("---"); st.markdown("**贈與稅（單位：萬元）**")
     g1, g2, g3 = st.columns(3)
     with g1:
-        gift_total = st.number_input("本年贈與總額 (TWD)", min_value=0, value=10_000_000, step=500_000)
-        annual_ex  = st.number_input("每年基本免稅", min_value=0, value=2_440_000, step=10_000)
+        gift_total_wan = st.number_input("本年贈與總額（單位：萬元）", min_value=0, value=1000, step=10)
+    gift_total = gift_total_wan * 10000
+        annual_ex_wan = st.number_input("每年基本免稅（單位：萬元）", min_value=0, value=244, step=1)
+    annual_ex = annual_ex_wan * 10000
     with g2:
         pay_by     = st.selectbox("納稅義務人", ["贈與人", "受贈人"], index=0)
         donees     = st.number_input("受贈人數（統計用途）", min_value=1, value=1, step=1)

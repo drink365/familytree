@@ -14,7 +14,7 @@ def _fmt_wan(n: int | float) -> str:
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
 
 def render():
-    st.subheader("📦 保單策略模擬（摘要 PDF）")
+    st.subheader("📦 保單策略模擬（萬元）")
     c1, c2 = st.columns(2)
     with c1:
         premium = st.number_input("年繳保費", min_value=0, value=1_000_000, step=50_000)
