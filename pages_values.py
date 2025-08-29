@@ -1,7 +1,7 @@
 
 import streamlit as st
 from datetime import datetime
-from utils.pdf_utils import build_pdf_with_cover_bytes, p, h2, title, spacer
+from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
 def render():
     st.subheader("❤️ 價值觀探索（PDF）")
     c1, c2, c3 = st.columns(3)
@@ -21,10 +21,7 @@ def render():
     st.write({"優先照顧": ", ".join(care) if care else "（未選）","重要原則": ", ".join(principles) if principles else "（未選）","傳承方式": ", ".join(ways) if ways else "（未選）"})
     for b in bullets: st.markdown(f"- {b}")
     flow = [title("價值觀 × 行動準則"), spacer(6), h2("探索重點"), p(f"優先照顧：{', '.join(care) if care else '未選'}"), p(f"重要原則：{', '.join(principles) if principles else '未選'}"), p(f"傳承方式：{', '.join(ways) if ways else '未選'}"), spacer(6), h2("建議家規 × 資金規則（示意）")] + [p(f"- {b}") for b in bullets]
-    pdf = build_pdf_with_cover_bytes(
-        cover_title='價值觀 × 行動準則',
-        cover_subtitle='',
-        meta_lines=[f'產出日期：{datetime.now().strftime("%Y/%m/%d")}','永傳家族辦公室  gracefo.com'],
+    pdf = build_branded_pdf_bytes(flow).strftime("%Y/%m/%d")}','永傳家族辦公室  gracefo.com'],
         body_flow=flow
     )
     st.download_button("⬇️ 下載價值觀 PDF", data=pdf, file_name=f"value_charter_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
