@@ -2,8 +2,10 @@
 import streamlit as st
 from datetime import datetime
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
+
 def render():
     st.subheader("🗺️ 傳承地圖（輸入 → 摘要 → PDF）")
+
     with st.form("legacy_form"):
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -14,6 +16,7 @@ def render():
             heirs_raw   = st.text_input("子女 / 繼承人（逗號分隔）", "長子,長女")
         with c3:
             trustees    = st.text_input("受託/監護安排（可選）", "")
+
         a1, a2, a3 = st.columns(3)
         with a1:
             equity   = st.text_input("公司股權", "A公司60%")
@@ -24,6 +27,7 @@ def render():
         with a3:
             offshore = st.text_input("海外資產", "香港帳戶")
             others   = st.text_input("其他資產", "藝術品")
+
         b1, b2 = st.columns(2)
         with b1:
             fairness   = st.selectbox("公平原則", ["平均分配", "依需求與責任", "結合股權設計"], index=1)
@@ -31,11 +35,15 @@ def render():
         with b2:
             governance = st.selectbox("治理工具偏好", ["遺囑", "信託", "保單＋信託", "控股結構"], index=2)
             special    = st.checkbox("特殊照護（身心/學習/監護）", value=False)
+
         submitted = st.form_submit_button("✅ 生成摘要")
+
     if not submitted:
         st.info("請輸入上方資訊，點擊「生成摘要」。")
         return
+
     heirs = [h.strip() for h in heirs_raw.split(",") if h.strip()]
+
     st.success("已生成摘要：")
     st.write({
         "家族": family_name or "（未填）",
@@ -44,36 +52,37 @@ def render():
         "子女/繼承人": ", ".join(heirs) if heirs else "（未填）",
         "受託/監護": trustees or "（未填）",
     })
+
     flow = [
         title(f"{family_name or '家族'} 傳承規劃摘要"),
         spacer(8),
         h2("家族資料"),
-        p(f"決策者：{patriarch or '（未填）'}／配偶：{spouse or '（未填）'}"),
-        p(f"子女/繼承人：{', '.join(heirs) if heirs else '（未填）'}"),
-        p(f"受託/監護：{trustees or '（未填）'}"),
+        p("決策者：" + (patriarch or "（未填）") + "／配偶：" + (spouse or "（未填）")),
+        p("子女/繼承人：" + (", ".join(heirs) if heirs else "（未填）")),
+        p("受託/監護：" + (trustees or "（未填）")),
         spacer(6),
         h2("六大資產"),
-        p(f"公司股權：{equity or '未填'}"),
-        p(f"不動產：{re_est or '未填'}"),
-        p(f"金融資產：{finance or '未填'}"),
-        p(f"保單：{policy or '未填'}"),
-        p(f"海外資產：{offshore or '未填'}"),
-        p(f"其他資產：{others or '未填'}"),
+        p("公司股權：" + (equity or "未填")),
+        p("不動產：" + (re_est or "未填")),
+        p("金融資產：" + (finance or "未填")),
+        p("保單：" + (policy or "未填")),
+        p("海外資產：" + (offshore or "未填")),
+        p("其他資產：" + (others or "未填")),
         spacer(6),
         h2("原則與工具"),
-        p(f"公平原則：{fairness}"),
-        p(f"治理工具：{governance}"),
-        p("涉及跨境：是" if cross else "涉及跨境：否"),
-        p("特殊照護：是" if special else "特殊照護：否"),
+        p("公平原則：" + fairness),
+        p("治理工具：" + governance),
+        p("涉及跨境：" + ("是" if cross else "否")),
+        p("特殊照護：" + ("是" if special else "否")),
         spacer(6),
         h2("行動清單（示意）"),
         p("1. 彙整資產並初步試算稅負"),
         p("2. 設計分配與監督機制"),
         p("3. 以保單＋信託建立流動性"),
         spacer(6),
-        p(f"產出日期：{datetime.now().strftime('%Y/%m/%d')}"),
+        p("產出日期：" + datetime.now().strftime("%Y/%m/%d")),
     ]
-    pdf_bytes = build_branded_pdf_bytes(flow).strftime("%Y/%m/%d")}','永傳家族辦公室  gracefo.com'],
-        body_flow=flow
-    )
-    st.download_button("⬇️ 下載 PDF", data=pdf_bytes, file_name=f"{(family_name or 'family')}_proposal_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
+
+    pdf_bytes = build_branded_pdf_bytes(flow)
+    file_name = f"{(family_name or 'family')}_proposal_{datetime.now().strftime('%Y%m%d')}.pdf"
+    st.download_button("⬇️ 下載 PDF", data=pdf_bytes, file_name=file_name, mime="application/pdf")
