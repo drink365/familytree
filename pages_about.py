@@ -1,17 +1,13 @@
 
 import streamlit as st
+import time, random
 from datetime import date
 from utils.notify import save_contact, send_email
 from utils.settings import CAPTCHA_ENABLED, CAPTCHA_RANGE, FRONTEND_LOCK_SECONDS, RATE_LIMIT_SECONDS
 from utils.ratelimit import should_allow, hash_payload
-import time
-import random
 
 def render():
     st.subheader("🤝 關於我們 / 聯絡")
-
-    def _arm_lock():
-        st.session_state.lock_until = time.time() + FRONTEND_LOCK_SECONDS
 
     # 初始化 session_state
     if "lock_until" not in st.session_state:
@@ -19,6 +15,9 @@ def render():
     if CAPTCHA_ENABLED and "cap_a" not in st.session_state:
         st.session_state.cap_a = random.randint(*CAPTCHA_RANGE)
         st.session_state.cap_b = random.randint(*CAPTCHA_RANGE)
+
+    def arm_lock():
+        st.session_state.lock_until = time.time() + FRONTEND_LOCK_SECONDS
 
     with st.form("contact_form", clear_on_submit=False):
         c1, c2 = st.columns(2)
@@ -32,44 +31,34 @@ def render():
             when_ampm = st.selectbox("時段偏好", ["上午", "下午", "晚上"], index=0)
             msg = st.text_area("想說的話（選填）", height=140)
 
-        # 簡易驗證碼（可關閉）
+        # 驗證碼
         if CAPTCHA_ENABLED:
             a, b = st.session_state.cap_a, st.session_state.cap_b
             ans = st.number_input(f"請輸入驗證：{a} + {b} = ?", min_value=0, step=1)
         else:
             ans = 0
 
-        # 前端鎖定按鈕
         locked = time.time() < st.session_state.lock_until
         btn_label = "已送出，請稍候…" if locked else "送出需求"
-        submitted = st.form_submit_button(btn_label, disabled=locked, on_click=_arm_lock, disabled=locked)
+        submitted = st.form_submit_button(btn_label, on_click=arm_lock, disabled=locked)
 
     if submitted:
-        # 若被鎖定則不處理
         if time.time() < st.session_state.lock_until:
             st.warning("請稍候再試。")
             return
 
-        # 送出後立即鎖定按鈕 N 秒
-        st.session_state.lock_until = time.time() + FRONTEND_LOCK_SECONDS
-
-        # 基本欄位檢查
         if not name.strip() or not email.strip():
             st.error("請填寫稱呼與 Email。")
             return
 
-        # 驗證碼檢查
         if CAPTCHA_ENABLED:
             if ans != (st.session_state.cap_a + st.session_state.cap_b):
                 st.error("驗證碼錯誤，請再試一次。")
-                # 重新出題
                 st.session_state.cap_a = random.randint(*CAPTCHA_RANGE)
                 st.session_state.cap_b = random.randint(*CAPTCHA_RANGE)
                 return
-            else:
-                # 通過一次就換題，避免重放
-                st.session_state.cap_a = random.randint(*CAPTCHA_RANGE)
-                st.session_state.cap_b = random.randint(*CAPTCHA_RANGE)
+            st.session_state.cap_a = random.randint(*CAPTCHA_RANGE)
+            st.session_state.cap_b = random.randint(*CAPTCHA_RANGE)
 
         payload = dict(
             name=name.strip(),
@@ -81,13 +70,13 @@ def render():
             msg=msg or ""
         )
 
-        # 後端限流（同 email 在 RATE_LIMIT_SECONDS 內僅受理一次；同內容直接忽略）
+        # 30 秒內重複送出直接忽略
         p_hash = hash_payload(payload)
         if not should_allow(email, cooldown=RATE_LIMIT_SECONDS, content_hash=p_hash):
             st.info("我們剛剛已收到您的需求，請稍後再送。")
             return
 
-        # 1) 儲存 CSV
+        # 儲存 + 寄信
         try:
             save_contact(payload)
             saved_ok = True
@@ -95,7 +84,6 @@ def render():
             saved_ok = False
             st.warning(f"資料儲存時發生問題：{e}")
 
-        # 2) 寄信（若已設定 SMTP）
         mailed = False
         try:
             mailed = send_email(payload)
