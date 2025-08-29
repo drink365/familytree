@@ -52,7 +52,7 @@ def render():
         p(f"子女/繼承人：{', '.join(heirs) if heirs else '（未填）'}"),
         p(f"受託/監護：{trustees or '（未填）'}"),
         spacer(6),
-        h2("資產六大"),
+        h2("六大資產"),
         p(f"公司股權：{equity or '未填'}"),
         p(f"不動產：{re_est or '未填'}"),
         p(f"金融資產：{finance or '未填'}"),
