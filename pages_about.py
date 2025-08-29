@@ -1,41 +1,53 @@
-
 import streamlit as st
-from utils.notify import save_contact, send_email
 from datetime import date
+from utils.notify import save_contact, send_email
+
 def render():
     st.subheader("🤝 關於我們 / 聯絡")
-    col1, col2 = st.columns([1,1])
-    with col1:
-        name  = st.text_input("您的稱呼 *", "")
-        email = st.text_input("Email *", "")
-        phone = st.text_input("電話（可選）", "")
-        topic = st.selectbox("想了解的主題", ["體驗平台 Demo", "企業接班與股權", "遺產/贈與稅", "保單策略", "其它"])
-    with col2:
-        when_date = st.date_input("期望日期", value=date.today())
-        when_ampm = st.selectbox("時段偏好", ["不限", "上午", "下午"], index=0)
-        msg = st.text_area("想說的話（選填）", height=120)
-        
-if st.button("送出需求", type="primary"):
-    # 簡單驗證
-    if not name or not email:
-        st.error("請填寫稱呼與 Email。")
-    else:
-        payload = dict(name=name, email=email, phone=phone, topic=topic, when_date=when_date, when_ampm=when_ampm, msg=msg)
-        # 儲存 CSV
+
+    # ✅ 用表單包起來，才會出現送出按鈕
+    with st.form("contact_form", clear_on_submit=False):
+        c1, c2 = st.columns(2)
+
+        with c1:
+            name = st.text_input("您的稱呼 *", value="")
+            email = st.text_input("Email *", value="")
+            phone = st.text_input("電話（可選）", value="")
+            topic = st.selectbox("想了解的主題", ["體驗平台 Demo", "傳承規劃諮詢", "稅務試算討論", "保單策略設計", "其它"], index=0)
+
+        with c2:
+            when_date = st.date_input("期望日期", value=date.today())
+            when_ampm = st.selectbox("時段偏好", ["上午", "下午", "晚上"], index=0)
+            msg = st.text_area("想說的話（選填）", height=140)
+
+        # ✅ 表單送出按鈕
+        submitted = st.form_submit_button("送出需求")
+
+    if submitted:
+        # 簡單驗證
+        if not name.strip() or not email.strip():
+            st.error("請填寫稱呼與 Email。")
+            return
+
+        payload = dict(
+            name=name.strip(), email=email.strip(), phone=phone.strip(),
+            topic=topic, when_date=str(when_date), when_ampm=when_ampm, msg=msg
+        )
+
+        # 1) 寫入 CSV
         try:
             save_contact(payload)
-            saved_ok = True
         except Exception as e:
-            saved_ok = False
-            st.warning(f"資料儲存時發生問題：{e}")
-        # 嘗試寄信（若尚未設定 SMTP 會略過）
-        mailed = False
+            st.warning(f"資料已送出，但儲存時發生問題：{e}")
+
+        # 2) 嘗試寄信（依 secrets 設定）
         try:
             mailed = send_email(payload)
+            if mailed:
+                st.success("已收到，我們會盡快與您聯繫（通知信已寄出）。謝謝！")
+            else:
+                st.success("已收到，我們會盡快與您聯繫。謝謝！")
+                st.info("通知信未寄出：請確認 SMTP 設定是否完整。")
         except Exception as e:
-            st.info("已儲存需求；通知信未寄出（未設定或寄送失敗）。")
-        if saved_ok:
             st.success("已收到，我們會盡快與您聯繫。謝謝！")
-        else:
-            st.success("已送出；我們將盡快與您聯繫。")
-
+            st.info(f"通知信未寄出（{e}）")
