@@ -44,9 +44,16 @@ def _smtp_config():
 def _hdr(s: str) -> str:
     return str(Header(s, "utf-8"))
 
+
+from email.utils import formataddr, parseaddr
+from email.header import Header
+
+def _hdr(s: str) -> str:
+    return str(Header(s, "utf-8"))
+
 def send_email(payload: dict) -> bool:
     cfg = _smtp_config()
-    # Incomplete config -> silently skip
+    # 未完整設定則略過
     if not all([cfg["host"], cfg["user"], cfg["pwd"], cfg["sender"], cfg["to"]]):
         return False
 
@@ -60,26 +67,33 @@ def send_email(payload: dict) -> bool:
         f"期望：{payload.get('when_date','')} {payload.get('when_ampm','')}",
         f"訊息：{(payload.get('msg') or '').strip()}",
     ]
-    body = "\n".join(lines)
+    body = "
+".join(lines)
 
     msg = MIMEText(body, _charset="utf-8")
     msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = formataddr((_hdr("影響力平台"), cfg["sender"]))
 
-    # multiple recipients: comma or semicolon
-    to_list = [e.strip() for e in str(cfg["to"]).replace(";", ",").split(",") if e.strip()]
+    # 顯示名稱使用品牌，信封與標頭地址都用純 email
+    sender_email = parseaddr(cfg["sender"])[1]
+    msg["From"] = formataddr((_hdr("永傳家族辦公室"), sender_email))
+
+    # 允許多收件者與「名稱 <email>」格式
+    to_raw = str(cfg["to"]).replace(";", ",").split(",")
+    to_list = [parseaddr(t.strip())[1] for t in to_raw if parseaddr(t.strip())[1]]
     msg["To"] = ", ".join(to_list)
 
-    # TLS (587) vs SSL (465)
-    if cfg["tls"]:
+    envelope_from = sender_email  # 必須 ASCII 純 email
+
+    if cfg["tls"]:  # 587 + STARTTLS
         context = ssl.create_default_context()
         with smtplib.SMTP(cfg["host"], cfg["port"]) as server:
             server.starttls(context=context)
             server.login(cfg["user"], cfg["pwd"])
-            server.sendmail(cfg["sender"], to_list, msg.as_string())
-    else:
+            server.sendmail(envelope_from, to_list, msg.as_string())
+    else:  # 465 + SSL
         context = ssl.create_default_context()
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=context) as server:
             server.login(cfg["user"], cfg["pwd"])
-            server.sendmail(cfg["sender"], to_list, msg.as_string())
+            server.sendmail(envelope_from, to_list, msg.as_string())
     return True
+
