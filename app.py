@@ -4,7 +4,7 @@ from datetime import datetime
 st.set_page_config(page_title="影響力｜AI 傳承規劃平台", page_icon="logo2.png", layout="wide", initial_sidebar_state="expanded")
 _BRAND = json.load(open("brand.json", "r", encoding="utf-8"))
 BRAND_PRIMARY = _BRAND["PRIMARY"]; BRAND_BG = _BRAND["BG"]
-st.markdown(f"""
+st.markdown("""
 <style>
   html, body, [class*="css"] {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", Arial; background-color: {BRAND_BG}; }}
   .main > div {{ padding-top: .5rem; padding-bottom: 2rem; }}
