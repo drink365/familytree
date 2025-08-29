@@ -1,6 +1,16 @@
 
 import streamlit as st
 from datetime import datetime
+
+def _wan(n: int | float) -> int:
+    try:
+        return int(round(n / 10000.0))
+    except Exception:
+        return 0
+
+def _fmt_wan(n: int | float) -> str:
+    return f"{_wan(n):,} 萬元"
+
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
 
 def render():
@@ -15,14 +25,15 @@ def render():
         irr     = st.slider("假設內部報酬率 IRR（示意）", 1.0, 6.0, 3.0, 0.1)
 
     total_premium = premium * years
+    is_twd = (currency == 'TWD')
     face_mult = {"放大財富傳承":18, "補足遺產稅":14, "退休現金流":10, "企業風險隔離":12}[goal]
     indicative_face = int(total_premium * face_mult)
     cv_10y = int(total_premium * (1 + irr/100.0)**10)
 
     st.write({
-        "總保費": f"{total_premium:,} {currency}",
-        "估計身故保額": f"{indicative_face:,} {currency}",
-        "10 年估計現金值": f"{cv_10y:,} {currency}",
+        "總保費": (_fmt_wan(total_premium) if is_twd else f"{total_premium:,} {currency}"),
+        "估計身故保額": (_fmt_wan(indicative_face) if is_twd else f"{indicative_face:,} {currency}"),
+        "10 年估計現金值": (_fmt_wan(cv_10y) if is_twd else f"{cv_10y:,} {currency}"),
         "IRR（示意）": f"{irr:.1f}%",
         "策略目標": goal
     })
@@ -35,11 +46,11 @@ def render():
     flow = [
         title("保單策略摘要"), spacer(6),
         p("策略目標：" + goal),
-        p(f"年繳保費 × 年期：{premium:,} × {years} ＝ 總保費 {total_premium:,} {currency}"),
-        p(f"估計身故保額（倍數示意）：{indicative_face:,} {currency}"),
-        p(f"10 年估計現金值（IRR {irr:.1f}%）：{cv_10y:,} {currency}"),
+        p((f"年繳保費 × 年期：{_fmt_wan(premium)} × {years} ＝ 總保費 {_fmt_wan(total_premium)}") if is_twd else f"年繳保費 × 年期：{premium:,} × {years} ＝ 總保費 {total_premium:,} {currency}"),
+        p((f"估計身故保額（倍數示意）：{_fmt_wan(indicative_face)}") if is_twd else f"估計身故保額（倍數示意）：{indicative_face:,} {currency}"),
+        p((f"10 年估計現金值（IRR {irr:.1f}%）：{_fmt_wan(cv_10y)}") if is_twd else f"10 年估計現金值（IRR {irr:.1f}%）：{cv_10y:,} {currency}"),
         spacer(6), h2("年度現金流")
-    ] + [p(f"第 {y} 年：{cash_out[y-1]:,}（累計 {cum_out[y-1]:,}）") for y in years_range]
+    ] + [p((f"第 {y} 年：{_fmt_wan(cash_out[y-1])}（累計 {_fmt_wan(cum_out[y-1])}）") if is_twd else f"第 {y} 年：{cash_out[y-1]:,}（累計 {cum_out[y-1]:,}）") for y in years_range]
 
     pdf = build_branded_pdf_bytes(flow)
     st.download_button("⬇️ 下載保單策略 PDF", data=pdf, file_name=f"policy_strategy_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")

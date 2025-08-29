@@ -8,7 +8,10 @@ st.markdown(f"""
 <style>
   html, body, [class*="css"] {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", Arial; background-color: {BRAND_BG}; }}
   .main > div {{ padding-top: .5rem; padding-bottom: 2rem; }}
-  .hero {{ border-radius: 18px; padding: 40px; background: radial-gradient(1000px 400px at 10% 10%, #ffffff 0%, #f3f6fa 45%, #eef2f7 100%); border: 1px solid #e6eef5; box-shadow: 0 6px 18px rgba(10,18,50,.04); }}
+  .hero {
+
+  .top-logo img { max-height: 36px; }
+{ border-radius: 18px; padding: 40px; background: radial-gradient(1000px 400px at 10% 10%, #ffffff 0%, #f3f6fa 45%, #eef2f7 100%); border: 1px solid #e6eef5; box-shadow: 0 6px 18px rgba(10,18,50,.04); }}
   .title-xl {{ font-size: 40px; font-weight: 800; color: {BRAND_PRIMARY}; margin: 0 0 10px 0; }}
   .subtitle {{ font-size: 18px; color: #334155; margin-bottom: 24px; }}
   header[data-testid="stHeader"] {{ background: transparent; }}
@@ -17,7 +20,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 def navigate(key: str): st.query_params.update({"page": key}); st.rerun()
 with st.sidebar:
-    st.image(_BRAND.get("LOGO_SQUARE", "logo2.png"), width=64)
+    st.image(_BRAND.get("LOGO_SQUARE", "logo2.png"), width=38)
     st.markdown("### 影響力｜AI 傳承規劃平台"); st.caption("專業 × 快速 × 可信任"); st.markdown("---")
     if st.button("🏠 首頁總覽", use_container_width=True): navigate("home")
     if st.button("🗺️ 傳承地圖", use_container_width=True): navigate("legacy")
@@ -27,7 +30,7 @@ with st.sidebar:
     if st.button("🤝 關於我們 / 聯絡", use_container_width=True): navigate("about")
 q = st.query_params; page = (q.get("page") or ["home"]); page = page[0] if isinstance(page, list) else page
 top = st.columns([1,5])
-with top[0]: st.image(_BRAND.get("LOGO_WIDE","logo.png"), use_container_width=True)
+with top[0]: st.image(_BRAND.get("LOGO_WIDE","logo.png"), width=180)
 with top[1]: st.markdown('<div style="text-align:right; color:#64748b;">《影響力》傳承策略平台｜永傳家族辦公室</div>', unsafe_allow_html=True)
 if page == "home":
     st.markdown('<div class="hero">', unsafe_allow_html=True)

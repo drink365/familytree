@@ -1,6 +1,16 @@
 
 import streamlit as st
 from datetime import datetime
+
+def _wan(n: int | float) -> int:
+    try:
+        return int(round(n / 10000.0))
+    except Exception:
+        return 0
+
+def _fmt_wan(n: int | float) -> str:
+    return f"{_wan(n):,} 萬元"
+
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
 from tax import determine_heirs_and_shares, eligible_deduction_counts_by_heirs, apply_brackets, ESTATE_BRACKETS, GIFT_BRACKETS
 
@@ -48,11 +58,11 @@ def render():
     result = apply_brackets(taxable, ESTATE_BRACKETS)
 
     st.write({
-        "可扣除總額": f"{total_deductions:,}",
-        "課稅基礎": f"{taxable:,}",
+        "可扣除總額": _fmt_wan(total_deductions),
+        "課稅基礎": _fmt_wan(taxable),
         "適用稅率": f"{result['rate']}%",
         "速算扣除": f"{result['quick']:,}",
-        "預估應納稅額": f"{result['tax']:,}",
+        "預估應納稅額": _fmt_wan(result['tax']),
     })
 
     # ---- Build PDF flow (without cover page) ----
@@ -76,20 +86,20 @@ def render():
     for label, amt in deduction_items:
         if amt and int(amt) > 0:
             if label == "直系卑親屬":
-                flow.append(p(f"直系卑親屬（{dep_children} 人 × 560,000）：{amt:,}"))
+                flow.append(p(f"直系卑親屬（{dep_children} 人 × 56 萬）：{_fmt_wan(amt)}"))
             elif label == "直系尊親屬":
-                flow.append(p(f"直系尊親屬（{asc_count} 人 × 1,380,000）：{amt:,}"))
+                flow.append(p(f"直系尊親屬（{asc_count} 人 × 138 萬）：{_fmt_wan(amt)}"))
             else:
                 flow.append(p(f"{label}：{int(amt):,}"))
 
     # Always include total line
     flow += [
-        p(f"可扣除總額：{total_deductions:,}"),
+        p("可扣除總額：" + _fmt_wan(total_deductions)),
         spacer(6),
         h2("稅額試算"),
-        p(f"課稅基礎：{taxable:,}"),
+        p("課稅基礎：" + _fmt_wan(taxable)),
         p(f"適用稅率：{result['rate']}% ／ 速算扣除：{result['quick']:,}"),
-        p(f"預估應納稅額：{result['tax']:,}"),
+        p("預估應納稅額：" + _fmt_wan(result['tax'])),
     ]
 
     pdf1 = build_branded_pdf_bytes(flow)
@@ -112,18 +122,18 @@ def render():
     st.write({
         "贈與總額": f"{gift_total:,}",
         "免稅額": f"{annual_ex:,}",
-        "課稅基礎": f"{gift_taxable:,}",
+        "課稅基礎": _fmt_wan(gift_taxable),
         "適用稅率": f"{g_result['rate']}%",
         "速算扣除": f"{g_result['quick']:,}",
-        "預估應納稅額": f"{g_result['tax']:,}",
+        "預估應納稅額": _fmt_wan(g_result['tax']),
     })
 
     flow2 = [
         title("贈與稅試算結果"), spacer(8),
         p(f"贈與總額：{gift_total:,}"), p(f"基本免稅：{annual_ex:,}"),
-        p(f"課稅基礎：{gift_taxable:,}"),
+        p("課稅基礎：" + _fmt_wan(gift_taxable)),
         p(f"適用稅率：{g_result['rate']}% ／ 速算扣除：{g_result['quick']:,}"),
-        p(f"預估應納稅額：{g_result['tax']:,}"), spacer(6),
+        p("預估應納稅額：" + _fmt_wan(g_result['tax'])), spacer(6),
         p(f"備註：{note or '（無）'} ／ 納稅義務人：{pay_by} ／ 受贈人數：{donees}"),
     ]
     pdf2 = build_branded_pdf_bytes(flow2)
