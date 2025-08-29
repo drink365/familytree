@@ -20,7 +20,13 @@ st.markdown("""
 """, unsafe_allow_html=True)
 def navigate(key: str): st.query_params.update({"page": key}); st.rerun()
 with st.sidebar:
-    st.image(_BRAND.get("LOGO_SQUARE", "logo2.png"), width=64)
+    logo2_path = _BRAND.get("LOGO_SQUARE", "logo2.png")
+    try:
+        _img = Image.open(logo2_path)
+        disp_w = max(24, _img.width // 2)  # 以原圖一半寬度顯示，Retina 更銳利
+        st.image(_img, width=disp_w)
+    except Exception:
+        st.image(logo2_path, width=64)
     st.markdown("### 影響力｜AI 傳承規劃平台"); st.caption("專業 × 快速 × 可信任"); st.markdown("---")
     if st.button("🏠 首頁總覽", use_container_width=True): navigate("home")
     if st.button("🗺️ 傳承地圖", use_container_width=True): navigate("legacy")

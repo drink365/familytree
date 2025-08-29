@@ -17,7 +17,8 @@ def render():
     st.subheader("📦 保單策略模擬（萬元）")
     c1, c2 = st.columns(2)
     with c1:
-        premium = st.number_input("年繳保費", min_value=0, value=1_000_000, step=50_000)
+        premium_wan = st.number_input("年繳保費（單位：萬元）", min_value=0, value=100, step=5)
+    premium = premium_wan * 10000
         years   = st.selectbox("繳費期間（年）", [6,7,10,12,20], index=0)
         currency= st.selectbox("幣別", ["TWD","USD"], index=0)
     with c2:
