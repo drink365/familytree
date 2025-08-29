@@ -1,7 +1,7 @@
 
 import streamlit as st
 from datetime import datetime
-from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
+from utils.pdf_utils import build_pdf_with_cover_bytes, p, h2, title, spacer
 def render():
     st.subheader("📦 保單策略模擬（摘要 PDF）")
     c1, c2 = st.columns(2)
@@ -22,5 +22,10 @@ def render():
     cum_out  = [sum(cash_out[:i]) for i in range(1, years+1)]
     st.write([{ "年度": y, "保費現金流": f"{cash_out[y-1]:,}", "累計現金流": f"{cum_out[y-1]:,}" } for y in years_range])
     flow = [title("保單策略摘要"), spacer(6), p(f"策略目標：{goal}"), p(f"年繳保費 × 年期：{premium:,} × {years} ＝ 總保費 {total_premium:,} {currency}"), p(f"估計身故保額（倍數示意）：{indicative_face:,} {currency}"), p(f"10 年估計現金值（IRR {irr:.1f}%）：{cv_10y:,} {currency}"), spacer(6), h2("年度現金流")] + [p(f"第 {y} 年：{cash_out[y-1]:,}（累計 {cum_out[y-1]:,}）") for y in years_range]
-    pdf = build_branded_pdf_bytes(flow)
+    pdf = build_pdf_with_cover_bytes(
+        cover_title='保單策略摘要',
+        cover_subtitle='',
+        meta_lines=[f'產出日期：{datetime.now().strftime("%Y/%m/%d")}','永傳家族辦公室  gracefo.com'],
+        body_flow=flow
+    )
     st.download_button("⬇️ 下載保單策略 PDF", data=pdf, file_name=f"policy_strategy_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")

@@ -1,7 +1,7 @@
 
 import streamlit as st
 from datetime import datetime
-from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
+from utils.pdf_utils import build_pdf_with_cover_bytes, p, h2, title, spacer, table
 def render():
     st.subheader("🗺️ 傳承地圖（輸入 → 摘要 → PDF）")
     with st.form("legacy_form"):
@@ -73,5 +73,10 @@ def render():
         spacer(6),
         p(f"產出日期：{datetime.now().strftime('%Y/%m/%d')}"),
     ]
-    pdf_bytes = build_branded_pdf_bytes(flow)
+    pdf_bytes = build_pdf_with_cover_bytes(
+        cover_title='家族傳承規劃摘要',
+        cover_subtitle=f'{family_name or "（未填）"}',
+        meta_lines=[f'產出日期：{datetime.now().strftime("%Y/%m/%d")}','永傳家族辦公室  gracefo.com'],
+        body_flow=flow
+    )
     st.download_button("⬇️ 下載 PDF", data=pdf_bytes, file_name=f"{(family_name or 'family')}_proposal_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")

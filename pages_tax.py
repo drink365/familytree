@@ -1,7 +1,7 @@
 
 import streamlit as st
 from datetime import datetime
-from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
+from utils.pdf_utils import build_pdf_with_cover_bytes, p, h2, title, spacer, table
 from tax import determine_heirs_and_shares, eligible_deduction_counts_by_heirs, apply_brackets, ESTATE_BRACKETS, GIFT_BRACKETS
 def render():
     st.subheader("🧮 稅務試算（依民法繼承人計算扣除額）")
@@ -48,7 +48,12 @@ def render():
         p(f"適用稅率：{result['rate']}% ／ 速算扣除：{result['quick']:,}"),
         p(f"預估應納稅額：{result['tax']:,}"),
     ]
-    pdf1 = build_branded_pdf_bytes(flow)
+    pdf1 = build_pdf_with_cover_bytes(
+        cover_title='遺產稅試算結果',
+        cover_subtitle='',
+        meta_lines=[f'產出日期：{datetime.now().strftime("%Y/%m/%d")}','永傳家族辦公室  gracefo.com'],
+        body_flow=flow
+    )
     st.download_button("⬇️ 下載稅務試算 PDF", data=pdf1, file_name=f"estate_tax_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
     st.markdown("---"); st.markdown("**贈與稅（一般字級）**")
     g1, g2, g3 = st.columns(3)
@@ -71,5 +76,10 @@ def render():
         p(f"預估應納稅額：{g_result['tax']:,}"), spacer(6),
         p(f"備註：{note or '（無）'} ／ 納稅義務人：{pay_by} ／ 受贈人數：{donees}"),
     ]
-    pdf2 = build_branded_pdf_bytes(flow2)
+    pdf2 = build_pdf_with_cover_bytes(
+        cover_title='贈與稅試算結果',
+        cover_subtitle='',
+        meta_lines=[f'產出日期：{datetime.now().strftime("%Y/%m/%d")}','永傳家族辦公室  gracefo.com'],
+        body_flow=flow2
+    )
     st.download_button("⬇️ 下載贈與稅試算 PDF", data=pdf2, file_name=f"gift_tax_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")

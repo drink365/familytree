@@ -107,3 +107,41 @@ def table(data, colWidths=None):
         ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#fcfcfd")]),
     ]))
     return t
+
+from reportlab.platypus import PageBreak
+
+def build_pdf_with_cover_bytes(cover_title: str, cover_subtitle: str, meta_lines, body_flow):
+    """
+    產生含封面的品牌 PDF（記憶體輸出）。
+    - cover_title: 封面主標（如：家族傳承規劃摘要）
+    - cover_subtitle: 次標（如：王家家族）
+    - meta_lines: 於封面下方列出之資訊（list[str]），例如日期、聯絡資訊
+    - body_flow: 內頁 Flowables（Paragraph/Table/Spacer…）
+    """
+    from io import BytesIO
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm, topMargin=28*mm, bottomMargin=20*mm, title=_BRAND["NAME"])
+
+    # 封面樣式（較大字級、留白）
+    cover_flow = []
+    cover_flow.append(spacer(40))
+    cover_flow.append(title(cover_title))
+    if cover_subtitle:
+        cover_flow.append(spacer(8))
+        cover_flow.append(Paragraph(cover_subtitle, ParagraphStyle("cover_sub", parent=styles["h2"], fontSize=12, leading=16, textColor=colors.HexColor("#475569"))))
+    cover_flow.append(spacer(16))
+
+    # Meta lines（例如日期）
+    if meta_lines:
+        for line in meta_lines:
+            cover_flow.append(Paragraph(line, styles["small"]))
+
+    # 底部品牌（與頁腳一致）
+    cover_flow.append(spacer(260))
+
+    # 組合：封面 + 換頁 + 正文
+    flow = cover_flow + [PageBreak()] + body_flow
+
+    def _on_page(c, d): _draw_header_footer(c, d)
+    doc.build(flow, onFirstPage=_on_page, onLaterPages=_on_page)
+    return buf.getvalue()
