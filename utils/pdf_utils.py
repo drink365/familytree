@@ -57,7 +57,7 @@ def _draw_header_footer(c: canvas.Canvas, doc):
             img = ImageReader(logo_path)
             iw, ih = img.getSize()
             target_h = band_h - 6 * mm  # padding
-            scale = target_h / float(ih)
+            scale = 0.8 * target_h / float(ih)
             draw_w = iw * scale
             draw_h = ih * scale
             x = 10 * mm
@@ -69,7 +69,7 @@ def _draw_header_footer(c: canvas.Canvas, doc):
     # Right title
     c.setFont(FONT_NAME, 10)
     c.setFillColor(colors.HexColor("#344054"))
-    c.drawRightString(w - 15 * mm, h - 6 * mm, "《影響力》傳承策略平台｜永傳家族辦公室")
+    c.drawRightString(w - 15 * mm, h - 10 * mm, "《影響力》傳承策略平台｜永傳家族辦公室")
 
     # Footer center: org + domain (no date to keep clean)
     c.setFillColor(colors.HexColor("#6b7280"))
