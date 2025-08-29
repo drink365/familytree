@@ -11,6 +11,10 @@ def _wan(n: int | float) -> int:
 def _fmt_wan(n: int | float) -> str:
     return f"{_wan(n):,} 萬元"
 
+def _fmt_wan_signed(n: int | float) -> str:
+    sign = "-" if n < 0 else ""
+    return f"{sign}{_wan(abs(n)):,} 萬元"
+
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
 
 def render():
