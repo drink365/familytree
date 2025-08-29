@@ -73,7 +73,7 @@ def render():
         "可扣除總額": _fmt_wan(total_deductions),
         "課稅基礎": _fmt_wan(taxable),
         "適用稅率": f"{result['rate']}%",
-        "速算扣除": f"{result['quick']:,}",
+        "速算扣除": _fmt_wan(result['quick']),
         "預估應納稅額": _fmt_wan(result['tax']),
     })
 
@@ -104,7 +104,7 @@ def render():
         spacer(6),
         h2("稅額試算（單位：萬元）"),
         p("課稅基礎：" + _fmt_wan(taxable)),
-        p(f"適用稅率：{result['rate']}% ／ 速算扣除：{result['quick']:,}"),
+        p(f"適用稅率：{result['rate']}% ／ 速算扣除：{_wan(result['quick'])} 萬元"),
         p("預估應納稅額：" + _fmt_wan(result['tax'])),
     ]
 
@@ -134,7 +134,7 @@ def render():
         "免稅額": _fmt_wan(annual_ex),
         "課稅基礎": _fmt_wan(gift_taxable),
         "適用稅率": f"{g_result['rate']}%",
-        "速算扣除": f"{g_result['quick']:,}",
+        "速算扣除": _fmt_wan(g_result['quick']),
         "預估應納稅額": _fmt_wan(g_result['tax']),
     })
 
@@ -142,7 +142,7 @@ def render():
         title("贈與稅試算結果"), spacer(8),
         p("贈與總額：" + _fmt_wan(gift_total)), p("基本免稅：" + _fmt_wan(annual_ex)),
         p("課稅基礎：" + _fmt_wan(gift_taxable)),
-        p(f"適用稅率：{g_result['rate']}% ／ 速算扣除：{g_result['quick']:,}"),
+        p(f"適用稅率：{g_result['rate']}% ／ 速算扣除：{_wan(g_result['quick'])} 萬元"),
         p("預估應納稅額：" + _fmt_wan(g_result['tax'])), spacer(6),
         p(f"備註：{note or '（無）'} ／ 納稅義務人：{pay_by} ／ 受贈人數：{donees}"),
     ]
