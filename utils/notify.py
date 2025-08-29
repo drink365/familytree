@@ -75,6 +75,7 @@ def send_email(payload):
     # 顯示名稱用品牌；Envelope 與標頭的 email 一律萃取純 email
     sender_email = parseaddr(cfg["sender"])[1]
     msg["From"] = formataddr((_hdr("永傳家族辦公室"), sender_email))
+    msg["Reply-To"] = payload.get("email", "")
 
     to_raw = str(cfg["to"]).replace(";", ",").split(",")
     to_list = [parseaddr(t.strip())[1] for t in to_raw if parseaddr(t.strip())[1]]
