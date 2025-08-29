@@ -13,7 +13,7 @@ def render():
     with c5: grandparent_count = st.number_input("祖父母存活數（0-2）", min_value=0, max_value=2, value=0, step=1)
     order, shares = determine_heirs_and_shares(spouse_alive, child_count, parent_count, sibling_count, grandparent_count)
     display_order = ("配偶＋" + order) if spouse_alive else order
-    st.markdown("**繼承順序**：" + display_order)
+    st.markdown("**法定繼承人**：" + display_order)
     st.write({k: f"{v:.2%}" for k, v in shares.items()} if shares else {"提示": "尚無可辨識之繼承人，或僅配偶"})
     st.markdown("---")
     st.markdown("**扣除額與稅額**（一般字級顯示避免截斷）")
@@ -36,7 +36,7 @@ def render():
     st.write({"可扣除總額": f"{total_deductions:,}","課稅基礎": f"{taxable:,}","適用稅率": f"{result['rate']}%","速算扣除": f"{result['quick']:,}","預估應納稅額": f"{result['tax']:,}"})
     flow = [
         title("遺產稅試算結果"), spacer(8),
-        h2("法定繼承人與應繼分"), p("繼承順序：" + display_order),
+        h2("法定繼承人與應繼分"), p("法定繼承人：" + display_order),
         p("應繼分：" + (", ".join([f"{k} {v:.2%}" for k,v in shares.items()]) if shares else "N/A")),
         spacer(6), h2("扣除額計算（僅法定繼承人）"),
         p(f"喪葬費：{min(funeral, 1_380_000):,}"),

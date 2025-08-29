@@ -69,7 +69,7 @@ def _draw_header_footer(c: canvas.Canvas, doc):
     # Right title
     c.setFont(FONT_NAME, 10)
     c.setFillColor(colors.HexColor("#344054"))
-    c.drawRightString(w - 15 * mm, h - 6 * mm, _BRAND["NAME"])
+    c.drawRightString(w - 15 * mm, h - 6 * mm, "《影響力》傳承策略平台｜永傳家族辦公室")
 
     # Footer center: org + domain (no date to keep clean)
     c.setFillColor(colors.HexColor("#6b7280"))
