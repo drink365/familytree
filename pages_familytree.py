@@ -1,199 +1,367 @@
-import json
-from typing import Dict, List
-
-import streamlit as st
+# pages_familytree.py
+# -*- coding: utf-8 -*-
+import streamlit as st, json
 from graphviz import Digraph
 
-# =============================
-# pages_familytree.py — 強制分層（世代一定分開）
-# =============================
-# 方式：
-# 1) 仍採「婚姻節點」：配偶水平、子女由婚姻點往下。
-# 2) 以 **不可見父母→子女邊**（style=invis, constraint=true, weight 高, minlen>=2）
-#    強制 Graphviz 在層級上把父母放在子女之上；
-#    同時 mnode→child 邊也保留 constraint=true，讓子女往下落位。
-# 3) 不再依賴事前計算世代；任何資料都會正確分層。
+# -------------------- State & Helpers --------------------
+def _init_state():
+    if "tree" not in st.session_state:
+        st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
+    for k in ("pid_counter","mid_counter"):
+        if k not in st.session_state:
+            st.session_state[k] = 1
 
-# ---------- 匿名示範資料（可改為你的匯入資料） ---------- #
-DEMO_FAMILY: Dict = {
-    "people": {
-        "p1": {"name": "人甲", "gender": "M"},
-        "p2": {"name": "人乙", "gender": "F"},
-        "p3": {"name": "人丙", "gender": "F"},
-        "p4": {"name": "人丁", "gender": "M"},
-        "u1": {"name": "外戚甲", "gender": "M"},
-        "u2": {"name": "外戚乙", "gender": "F"},
-        "c1": {"name": "子一", "gender": "M"},
-        "c2": {"name": "子二", "gender": "F"},
-        "c3": {"name": "子三", "gender": "F"}
-    },
-    "marriages": [
-        {"id": "m1", "spouses": ["p1", "p2"], "children": ["p3", "u1"]},
-        {"id": "m2", "spouses": ["p3", "p4"], "children": ["c1", "c2", "c3"]},
-        {"id": "m3", "spouses": ["u1", "u2"], "children": []}
-    ]
-}
+def _new_id(prefix):
+    k = "pid_counter" if prefix == "P" else "mid_counter"
+    v = st.session_state[k]
+    st.session_state[k] += 1
+    return f"{prefix}{v}"
 
-# ---------- 視覺屬性 ---------- #
-NODE_COMMON = dict(shape="box", style="rounded,filled", fontname="Microsoft JhengHei, PingFang TC, Arial",
-                   fontsize="12", color="#90A4AE", penwidth="1.2")
-EDGE_COMMON = dict(dir="none", color="#6E7E8A", penwidth="1.2")
-FILL_MALE = "#F7FBFF"
-FILL_FEMALE = "#F3F6FF"
+def _label(p: dict) -> str:
+    y = []
+    b = str(p.get("birth","")).strip()
+    d = str(p.get("death","")).strip()
+    if b: y.append(b)
+    if d: y.append(d)
+    years = "-".join(y)
+    return f'{p.get("name","?")}' + (f"\n{years}" if years else "")
 
+# -------------------- Generation Layering --------------------
+def _compute_generations(tree):
+    """Assign generation layers so that spouses share a rank and children are the next rank."""
+    persons = set(tree.get("persons", {}).keys())
+    marriages = tree.get("marriages", {})
 
-def normalize_gender(val: str) -> str:
-    v = (val or "").strip().lower()
-    if v in ("f", "female", "女", "女性"):
-        return "F"
-    return "M"
+    # Build indices
+    spouse_to_mids = {}
+    parents_of = {}
+    for mid, m in marriages.items():
+        for s in m.get("spouses", []):
+            spouse_to_mids.setdefault(s, set()).add(mid)
+        for c in m.get("children", []):
+            parents_of.setdefault(c, set()).update(m.get("spouses", []))
 
+    # Roots: those without parents
+    from collections import deque
+    depth = {}
+    q = deque()
 
-def build_graph(family: Dict, nodesep: float = 0.5, ranksep: float = 1.0, ortho: bool = True) -> Digraph:
-    g = Digraph("FamilyTree", graph_attr=dict(
-        rankdir="TB",
-        nodesep=str(nodesep),
-        ranksep=str(ranksep),
-        splines="ortho" if ortho else "true",
-        ordering="out",
-        pad="0.2"
-    ))
+    roots = [p for p in persons if p not in parents_of]
+    for r in roots:
+        depth[r] = 0
+        q.append(r)
 
-    g.attr("node", **NODE_COMMON)
-    g.attr("edge", **EDGE_COMMON)
+    # If no roots (cycle/only children recorded), seed with arbitrary node
+    if not q and persons:
+        anyp = next(iter(persons))
+        depth[anyp] = 0
+        q.append(anyp)
 
-    people = family.get("people", {})
-    marriages: List[Dict] = family.get("marriages", [])
+    while q:
+        p = q.popleft()
+        d = depth[p]
 
-    # 1) 人物節點
-    for pid, info in people.items():
-        name = info.get("name", pid)
-        gender = normalize_gender(info.get("gender", ""))
-        fill = FILL_FEMALE if gender == "F" else FILL_MALE
-        g.node(pid, label=name, fillcolor=fill)
+        # Spouses of p stay same layer
+        for mid in spouse_to_mids.get(p, []):
+            spouses = marriages.get(mid, {}).get("spouses", [])
+            # sync spouse depth
+            for s in spouses:
+                if s == p:
+                    continue
+                if depth.get(s) != d:
+                    depth[s] = d
+                    q.append(s)
 
-    # 2) 婚姻 + 子女
-    for i, m in enumerate(marriages):
-        spouses = m.get("spouses", [])
-        children = m.get("children", [])
-        if len(spouses) != 2:
+            # children placed one layer below parents
+            par_depths = [depth.get(s, d) for s in spouses if s in depth]
+            if par_depths:
+                cd = max(par_depths) + 1
+                for c in marriages.get(mid, {}).get("children", []):
+                    if depth.get(c, -10) < cd:
+                        depth[c] = cd
+                        q.append(c)
+
+    # Default any missing
+    for p in persons:
+        depth.setdefault(p, 0)
+    return depth
+
+# -------------------- Graph Builder (layered with crossing minimization) --------------------
+def _graph(tree):
+    depth = _compute_generations(tree)
+
+    # ---- compute left-to-right order within each generation to reduce crossings ----
+    marriages = tree.get("marriages", {})
+    persons = tree.get("persons", {})
+    # persons by depth
+    by_depth = {}
+    for pid in persons:
+        by_depth.setdefault(depth.get(pid, 0), []).append(pid)
+
+    # initial order: stable by creation id then name
+    def pid_index(p):
+        try:
+            return int(str(p)[1:]) if str(p).startswith("P") else 10**9
+        except:
+            return 10**9
+    for d in by_depth:
+        by_depth[d].sort(key=lambda x: (pid_index(x), persons.get(x, {}).get("name","")))
+
+    # helpers
+    children_of = {p: [] for p in persons}
+    parents_of  = {p: [] for p in persons}
+    spouse_sets = {p: set() for p in persons}
+    for mid, m in marriages.items():
+        sps = list(m.get("spouses", []))
+        for s in sps:
+            spouse_sets.setdefault(s, set()).update([x for x in sps if x!=s])
+        chs = list(m.get("children", []))
+        for s in sps:
+            children_of.setdefault(s, []).extend(chs)
+        for c in chs:
+            parents_of.setdefault(c, []).extend(sps)
+
+    # iterative barycenter sweeps
+    def sweep_down(by_depth):
+        positions = {p:i for d in by_depth for i,p in enumerate(by_depth[d])}
+        new = {}
+        for d in sorted(by_depth.keys()):
+            layer = by_depth[d]
+            scored=[]
+            for p in layer:
+                par = parents_of.get(p, [])
+                if par:
+                    pos = [positions.get(pp, 0) for pp in par]
+                    key = sum(pos)/len(pos)
+                else:
+                    key = positions.get(p, 0)
+                scored.append((key, p))
+            scored.sort(key=lambda t: (t[0], pid_index(t[1])))
+            new[d]=[p for _,p in scored]
+            positions.update({p:i for i,p in enumerate(new[d])})
+        return new
+
+    def sweep_up(by_depth):
+        positions = {p:i for d in by_depth for i,p in enumerate(by_depth[d])}
+        new = {}
+        for d in sorted(by_depth.keys(), reverse=True):
+            layer = by_depth[d]
+            scored=[]
+            for p in layer:
+                kids = [c for c in children_of.get(p, []) if depth.get(c, d+1)>=d]
+                vals=[]
+                if kids:
+                    vals.extend(positions.get(c, 0) for c in kids)
+                for s in spouse_sets.get(p, []):
+                    vals.append(positions.get(s, positions.get(p,0)))
+                key = sum(vals)/len(vals) if vals else positions.get(p, 0)
+                scored.append((key, p))
+            scored.sort(key=lambda t: (t[0], pid_index(t[1])))
+            new[d]=[p for _,p in scored]
+            positions.update({p:i for i,p in enumerate(new[d])})
+        return new
+
+    for _ in range(3):
+        by_depth = sweep_down(by_depth)
+        by_depth = sweep_up(by_depth)
+
+    g = Digraph("G", format="svg")
+    g.attr(rankdir="TB", nodesep="0.35", ranksep="0.6")
+    g.attr("node", shape="box", style="rounded,filled", fillcolor="#f8fbff", color="#8aa5c8",
+           fontname="Noto Sans CJK TC, Arial", fontsize="10")
+    g.attr("edge", color="#7b8aa8")
+
+    # persons per generation + invisible chain to enforce order
+    for d, nodes in sorted(by_depth.items()):
+        with g.subgraph(name=f"rank_{d}") as sg:
+            sg.attr(rank="same")
+            prev=None
+            for pid in nodes:
+                gender = tree["persons"].get(pid, {}).get("gender")
+                shape = "ellipse" if gender == "F" else "box"
+                sg.node(pid, label=_label(tree["persons"][pid]), shape=shape)
+                if prev is not None:
+                    sg.edge(prev, pid, style="invis", weight="300")
+                prev = pid
+
+    # marriages and children edges
+    for mid, m in tree.get("marriages", {}).items():
+        spouses = list(m.get("spouses", []))
+        if not spouses:
             continue
-        a, b = spouses
-        mid = m.get("id") or f"m{i+1}"
-        mnode = f"_m_{mid}"
+        with g.subgraph(name=f"rank_mid_{mid}") as sg:
+            sg.attr(rank="same")
+            sg.node(mid, label="", shape="point", width="0.01")
+            if len(spouses) >= 2:
+                s1, s2 = spouses[0], spouses[1]
+                sg.edge(s1, mid, style="invis", weight="200")
+                sg.edge(mid, s2, style="invis", weight="200")
 
-        # 婚姻節點（小圓點）
-        g.node(mnode, shape="point", width="0.02", height="0.02", label="", color="#6E7E8A", penwidth="1.2")
+        if len(spouses) >= 2:
+            s1, s2 = spouses[0], spouses[1]
+            style = "dashed" if m.get("divorced") else "solid"
+            g.edge(s1, s2, dir="none", constraint="true", weight="200", style=style)
 
-        # 讓 a, mnode, b 在同層（水平配偶線）
-        with g.subgraph(name=f"cluster_spouse_{mid}") as s:
-            s.attr(rank="same")
-            # 用隱形邊固定順序 a - m - b（不影響分層）
-            s.edge(a, mnode, style="invis", weight="50", constraint="false")
-            s.edge(mnode, b, style="invis", weight="50", constraint="false")
+        if len(spouses) > 2:
+            for i in range(1, len(spouses)-1):
+                a, b = spouses[i], spouses[i+1]
+                g.edge(a, b, dir="none", constraint="true", weight="150", style="solid")
 
-        # 真實配偶線（保持水平；不參與分層）
-        g.edge(a, mnode, weight="4", constraint="false")
-        g.edge(b, mnode, weight="4", constraint="false")
-
-        # 子女由婚姻節點往下（參與分層、最少一階）
-        for c in children:
-            g.edge(mnode, c, weight="6", constraint="true", minlen="1")
-            # 關鍵：加「不可見父母→子女」邊，強制父母在子女之上
-            # 這兩條邊只用來約束層級，不顯示
-            g.edge(a, c, style="invis", constraint="true", weight="100", minlen="2")
-            g.edge(b, c, style="invis", constraint="true", weight="100", minlen="2")
+        child_types = tree.get("child_types", {})
+        HIDE_LABELS = {"生", "bio", "親生"}
+        for c in m.get("children", []):
+            if c in tree.get("persons", {}):
+                ctype = (child_types.get(mid, {}) or {}).get(c, "")
+                lbl = "" if (ctype or "").strip() in HIDE_LABELS else ctype
+                if lbl:
+                    g.edge(mid, c, label=lbl)
+                else:
+                    g.edge(mid, c)
 
     return g
 
-
-# ---------- 匯入 / 匯出 ---------- #
-
-def _export_family_download_btn(family: Dict):
-    data = json.dumps(family, ensure_ascii=False, indent=2)
-    st.download_button("下載 JSON", data=data, file_name="family.json", mime="application/json")
-
-
-def _import_family_from_uploader(key: str = "family_upload") -> Dict:
-    up = st.file_uploader("上傳 family.json（UTF‑8）", type=["json"], key=key)
-    if up is not None:
-        try:
-            text = up.read().decode("utf-8")
-            data = json.loads(text)
-            if isinstance(data, dict) and "people" in data and "marriages" in data:
-                return data
-            st.error("JSON 結構不正確，需包含 people 與 marriages。")
-        except Exception as e:
-            st.error(f"解析 JSON 失敗：{e}")
-    return {}
-
-
-# ---------- 主渲染 ---------- #
-
+# -------------------- Page Render --------------------
 def render():
-    st.markdown("## ③ 家族樹視覺化（強制分層 / 配偶水平 / 子女垂直）")
+    _init_state()
+    st.title("🌳 家族樹")
+    st.caption("➊ 新增人物 → ➋ 建立婚姻 → ➌ 加入子女 → ➍ 匯出/匯入 JSON")
 
-    # 取得資料（優先用 session_state）
-    if "family" not in st.session_state or not st.session_state.get("family"):
-        st.session_state["family"] = DEMO_FAMILY
-    family: Dict = st.session_state.get("family", DEMO_FAMILY)
+    t = st.session_state.tree
+    # 匯入後的提示
+    if st.session_state.get("ft_flash_msg"):
+        st.success(st.session_state.pop("ft_flash_msg"))
 
-    with st.sidebar:
-        st.subheader("資料管理")
-        imported = _import_family_from_uploader()
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("匯入到畫面", use_container_width=True):
-                if imported:
-                    st.session_state["family"] = imported
-                    family = imported
-                    st.success("已匯入。")
+    with st.expander("① 人物管理", expanded=True):
+        cols = st.columns([2,1,1,1,1])
+        name = cols[0].text_input("姓名 *", key="ft_name")
+        gender = cols[1].selectbox("性別", ["男","女"], index=0, key="ft_gender")
+        birth = cols[2].text_input("出生年", key="ft_birth", placeholder="1970")
+        death = cols[3].text_input("逝世年", key="ft_death", placeholder="")
+        if cols[4].button("➕ 新增人物", key="btn_add_person", use_container_width=True):
+            if not name.strip():
+                st.warning("請輸入姓名")
+            else:
+                pid = _new_id("P")
+                t["persons"][pid] = {"name": name.strip(), "gender": gender, "birth": birth.strip(), "death": death.strip()}
+                st.success(f"已新增人物 {pid}")
+
+        if t["persons"]:
+            st.write("目前人物：")
+            for pid, p in list(t["persons"].items()):
+                cols = st.columns([2,1,1,1,1])
+                cols[0].text_input("姓名", p.get("name",""), key=f"{pid}_name")
+                cols[1].selectbox("性別", ["男","女"], index= 0 if p.get("gender","男")=="男" else 1, key=f"{pid}_gender")
+                cols[2].text_input("出生年", p.get("birth",""), key=f"{pid}_birth")
+                cols[3].text_input("逝世年", p.get("death",""), key=f"{pid}_death")
+                if cols[4].button("🗑️ 刪除", key=f"btn_del_{pid}"):
+                    pid_del = pid
+                    # remove pid from marriages & children types
+                    for mid, m in list(t["marriages"].items()):
+                        if pid_del in m.get("spouses", []):
+                            del t["marriages"][mid]; t.get("child_types", {}).pop(mid, None)
+                        elif pid_del in m.get("children", []):
+                            m["children"] = [c for c in m["children"] if c != pid_del]
+                            t.get("child_types", {}).get(mid, {}).pop(pid_del, None)
+                    del t["persons"][pid_del]
+                    st.success("已刪除")
+
+    with st.expander("② 婚姻關係", expanded=True):
+        people = list(t["persons"].keys())
+        if not people:
+            st.info("請先新增至少一位人物")
+        else:
+            c1,c2,c3 = st.columns(3)
+            a = c1.selectbox("配偶 A", [""]+people, format_func=lambda x: x if not x else f'{x}｜{t["persons"][x]["name"]}')
+            b = c2.selectbox("配偶 B", [""]+people, format_func=lambda x: x if not x else f'{x}｜{t["persons"][x]["name"]}')
+            if c3.button("💍 建立婚姻", key="btn_add_marriage"):
+                if not a or not b or a == b:
+                    st.warning("請選擇兩位不同人物")
                 else:
-                    st.warning("請先選擇可解析的 JSON。")
-        with c2:
-            if st.button("載入示範", use_container_width=True):
-                st.session_state["family"] = DEMO_FAMILY
-                family = DEMO_FAMILY
-                st.info("已載入示範資料。")
-        with c3:
-            if st.button("清空資料", use_container_width=True):
-                st.session_state["family"] = {"people": {}, "marriages": []}
-                family = st.session_state["family"]
-                st.info("已清空。")
+                    mid = _new_id("M")
+                    t["marriages"][mid] = {"spouses": [a,b], "children": [], "divorced": False}
+                    t["child_types"][mid] = {}
+                    st.success(f"已建立婚姻 {mid}")
 
-        st.caption("完成後可下載目前資料：")
-        _export_family_download_btn(family)
+        if t["marriages"]:
+            def safe_format_marriage(x):
+                spouses = t["marriages"].get(x, {}).get("spouses", [])
+                names = [t["persons"].get(pid, {}).get("name", f"未知成員{pid}") for pid in spouses]
+                return f'{x}｜' + " × ".join(names)
 
-        st.subheader("版面設定")
-        nodesep = st.slider("同層距離 nodesep", 0.2, 2.0, 0.5, 0.1)
-        ranksep = st.slider("層距 ranksep", 0.4, 2.5, 1.0, 0.1)
-        ortho = st.checkbox("直角連線 (splines=ortho)", value=True)
+            st.divider()
+            mid = st.selectbox("選擇婚姻以新增子女", list(t["marriages"].keys()), format_func=safe_format_marriage)
+            # 離婚狀態
+            if mid:
+                div_ck = st.checkbox("該婚姻已離婚？", value=bool(t["marriages"][mid].get("divorced", False)))
+                t["marriages"][mid]["divorced"] = bool(div_ck)
+            if mid:
+                c1,c2,c3 = st.columns([2,1,1])
+                child = c1.selectbox(
+                    "子女",
+                    [""] + [p for p in t["persons"].keys() if p not in t["marriages"][mid]["children"]],
+                    format_func=lambda x: x if not x else f'{x}｜{t["persons"][x]["name"]}'
+                )
+                ctype = c2.selectbox("關係", ["生","繼","認領","其他","bio"], index=0, key="sel_ctype")
+                if c3.button("👶 新增子女", key="btn_add_child"):
+                    if not child:
+                        st.warning("請選擇子女")
+                    else:
+                        t["marriages"][mid]["children"].append(child)
+                        t["child_types"].setdefault(mid, {})[child] = ctype
+                        st.success("已新增子女")
 
-    # 畫圖
-    G = build_graph(family, nodesep=nodesep, ranksep=ranksep, ortho=ortho)
-    st.graphviz_chart(G, use_container_width=True)
+    with st.expander("③ 家族樹視覺化", expanded=True):
+        st.graphviz_chart(_graph(t))
 
-    with st.expander("JSON 資料結構說明", expanded=False):
-        st.markdown(
-            """
-            ```json
-            {
-              "people": {
-                "id1": {"name": "姓名", "gender": "M|F|男|女"},
-                "id2": {"name": "姓名", "gender": "F"}
-              },
-              "marriages": [
-                {"id": "m1", "spouses": ["id1", "id2"], "children": ["cid1", "cid2"]}
-              ]
-            }
-            ```
-            - **強制分層**：以不可見的「父母→子女」邊（`style=invis, constraint=true, minlen>=2`）確保父母在上、子女在下。
-            - **配偶水平**：以婚姻節點連接配偶，線條不再上彎。
-            - **子女垂直**：所有子女自婚姻節點往下延伸。
-            - 支援再婚/多婚姻。
-            """
+    with st.expander("④ 匯入 / 匯出", expanded=True):
+        # 匯出
+        st.download_button(
+            "⬇️ 下載 JSON",
+            data=json.dumps(t, ensure_ascii=False, indent=2),
+            file_name="family_tree.json",
+            mime="application/json",
+            key="btn_dl_json",
         )
 
+        # 匯入（先上傳，再按「執行匯入」）
+        upl = st.file_uploader("選擇 JSON 檔", type=["json"], key="ft_upload_json")
+        do_import = st.button("⬆️ 執行匯入", use_container_width=True, key="btn_do_import")
 
-if __name__ == "__main__":
-    render()
+        if do_import:
+            if upl is None:
+                st.warning("請先選擇要匯入的 JSON 檔。")
+            else:
+                try:
+                    raw = upl.getvalue()
+                    import hashlib
+                    md5 = hashlib.md5(raw).hexdigest()
+                    if st.session_state.get("ft_last_import_md5") == md5:
+                        st.info("此檔已匯入過。若要重新匯入，請先更改檔案內容或重新選擇檔案。")
+                    else:
+                        data = json.loads(raw.decode("utf-8"))
+                        if not isinstance(data, dict):
+                            raise ValueError("檔案格式錯誤（非 JSON 物件）")
+                        data.setdefault("persons", {})
+                        data.setdefault("marriages", {})
+                        data.setdefault("child_types", {})
+
+                        # 重新設定計數器，避免新建 ID 衝突
+                        def _max_id(prefix, keys):
+                            mx = 0
+                            for k in keys:
+                                if isinstance(k, str) and k.startswith(prefix):
+                                    try:
+                                        mx = max(mx, int(k[len(prefix):] or "0"))
+                                    except Exception:
+                                        pass
+                            return mx
+
+                        st.session_state.tree = data
+                        st.session_state["ft_last_import_md5"] = md5
+                        st.session_state["pid_counter"] = _max_id("P", data["persons"].keys()) + 1
+                        st.session_state["mid_counter"] = _max_id("M", data["marriages"].keys()) + 1
+
+                        st.session_state["ft_flash_msg"] = "已匯入"
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"匯入失敗：{e}")
