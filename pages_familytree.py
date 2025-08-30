@@ -429,8 +429,8 @@ def render():
             # 離婚狀態
             if mid:
                 div_ck = st.checkbox("該婚姻已離婚？", value=bool(t["marriages"][mid].get("divorced", False)))
+                t["marriages"][mid]["divorced"] = bool(div_ck)
 
-            t["marriages"][mid]["divorced"] = bool(div_ck)
 
             st.markdown("**配偶順序（可調整）**")
             if mid:
@@ -460,7 +460,6 @@ def render():
                             t["marriages"][mid]["spouses"] = sp
                             st.rerun()
             st.divider()
-                    t["marriages"][mid]["divorced"] = bool(div_ck)
             if mid:
                 c1,c2,c3 = st.columns([2,1,1])
                 child = c1.selectbox(
