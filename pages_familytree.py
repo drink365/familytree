@@ -127,6 +127,11 @@ def _graph(tree):
                 s1, s2 = spouses[0], spouses[1]
                 sg.edge(s1, mid, style="invis", weight="200")
                 sg.edge(mid, s2, style="invis", weight="200")
+                # ## SPOUSE_ORDER: enforce left-to-right spouse order to reduce crossings
+                if len(spouses) >= 2:
+                    for i in range(len(spouses)-1):
+                        sg.edge(spouses[i], spouses[i+1], style="invis", weight="150", constraint="true")
+    
 
         # Visible horizontal line between first two spouses
         if len(spouses) >= 2:
@@ -235,7 +240,36 @@ def render():
             # 離婚狀態
             if mid:
                 div_ck = st.checkbox("該婚姻已離婚？", value=bool(t["marriages"][mid].get("divorced", False)))
-                t["marriages"][mid]["divorced"] = bool(div_ck)
+
+            st.markdown("**配偶順序（可調整）**")
+            if mid:
+                sp = t["marriages"][mid].get("spouses", [])
+                if len(sp) <= 1:
+                    st.info("此婚姻目前只有一位配偶。")
+                else:
+                    for i, sid in enumerate(sp):
+                        cols = st.columns([6,1,1,1,1])
+                        cols[0].write(f"{i+1}. {sid}｜" + t["persons"].get(sid, {}).get("name","?"))
+                        if cols[1].button("↑", key=f"sp_up_{mid}_{sid}") and i>0:
+                            sp[i-1], sp[i] = sp[i], sp[i-1]
+                            t["marriages"][mid]["spouses"] = sp
+                            st.rerun()
+                        if cols[2].button("↓", key=f"sp_dn_{mid}_{sid}") and i < len(sp)-1:
+                            sp[i+1], sp[i] = sp[i], sp[i+1]
+                            t["marriages"][mid]["spouses"] = sp
+                            st.rerun()
+                        if cols[3].button("置頂", key=f"sp_top_{mid}_{sid}") and i>0:
+                            moved = sp.pop(i)
+                            sp.insert(0, moved)
+                            t["marriages"][mid]["spouses"] = sp
+                            st.rerun()
+                        if cols[4].button("置底", key=f"sp_bot_{mid}_{sid}") and i < len(sp)-1:
+                            moved = sp.pop(i)
+                            sp.append(moved)
+                            t["marriages"][mid]["spouses"] = sp
+                            st.rerun()
+            st.divider()
+                    t["marriages"][mid]["divorced"] = bool(div_ck)
             if mid:
                 c1,c2,c3 = st.columns([2,1,1])
                 child = c1.selectbox(
