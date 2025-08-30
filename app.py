@@ -44,12 +44,16 @@ def get_page_from_query() -> str:
 page = get_page_from_query()
 
 # -------------------- Sidebar --------------------
+
 with st.sidebar:
     st.markdown("## 導覽")
-    # 左側固定顯示 logo2.png（若不存在則退回 LOGO_PATH）
     sidebar_logo = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
     if sidebar_logo:
-        st.image(sidebar_logo, use_container_width=False, width=80)
+        st.image(sidebar_logo, use_container_width=False, width=72)
+        st.markdown(
+            "<style>section[data-testid='stSidebar'] img {display:block; margin: 6px auto;}</style>",
+            unsafe_allow_html=True,
+        )
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -137,20 +141,23 @@ def _safe_import_and_render(module_name: str):
     except Exception as e:
         st.error(f"載入 `{module_name}` 失敗：{e}")
 
-# 路由
-if page == "home":
-    render_home()
-elif page == "familytree":
-    _safe_import_and_render("pages_familytree")
-elif page == "legacy":
-    _safe_import_and_render("pages_legacy")
-elif page == "tax":
-    _safe_import_and_render("pages_tax")
-elif page == "policy":
-    _safe_import_and_render("pages_policy")
-elif page == "values":
-    _safe_import_and_render("pages_values")
-elif page == "about":
-    _safe_import_and_render("pages_about")
-else:
-    render_home()
+
+# 路由（以字典單點呼叫，避免任何情況下的重複渲染）
+def _page_familytree(): _safe_import_and_render("pages_familytree")
+def _page_legacy(): _safe_import_and_render("pages_legacy")
+def _page_tax(): _safe_import_and_render("pages_tax")
+def _page_policy(): _safe_import_and_render("pages_policy")
+def _page_values(): _safe_import_and_render("pages_values")
+def _page_about(): _safe_import_and_render("pages_about")
+
+_ROUTES = {
+    "home": render_home,
+    "familytree": _page_familytree,
+    "legacy": _page_legacy,
+    "tax": _page_tax,
+    "policy": _page_policy,
+    "values": _page_values,
+    "about": _page_about,
+}
+
+_ROUTES.get(page, render_home)()
