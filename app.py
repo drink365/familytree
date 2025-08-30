@@ -57,6 +57,50 @@ section[data-testid="stSidebar"] .stButton > button:hover {
     box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
 }
 
+
+/* === 強制顯示側邊欄按鈕 === */
+section[data-testid="stSidebar"] div.stButton > button {
+    all: unset !important;
+    display: block !important;
+    width: 100% !important;
+    background-color: #ffffff !important;
+    color: #1f2937 !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 10px !important;
+    padding: 8px 12px !important;
+    margin-bottom: 8px !important;
+    font-weight: 600 !important;
+    text-align: left !important;
+    cursor: pointer !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:hover {
+    background-color: #f3f4f6 !important;
+    border-color: #cbd5e1 !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
+}
+
+
+/* === 強制顯示側邊欄按鈕 (higher specificity) === */
+section[data-testid="stSidebar"] div.stButton > button {
+    all: unset !important;
+    display: block !important;
+    width: 100% !important;
+    background-color: #ffffff !important;
+    color: #1f2937 !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 10px !important;
+    padding: 10px 12px !important;
+    margin-bottom: 10px !important;
+    font-weight: 600 !important;
+    text-align: left !important;
+    cursor: pointer !important;
+}
+section[data-testid="stSidebar"] div.stButton > button:hover {
+    background-color: #f3f4f6 !important;
+    border-color: #cbd5e1 !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 def navigate(key: str): st.query_params.update({"page": key}); st.rerun()
