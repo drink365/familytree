@@ -130,9 +130,9 @@ def _enforce_spouse_adjacency(order, marriages, layer, depth):
                 continue
             # 把較右的移到較左者旁（右側）
             if ia < ib:
-                mover, anchor, target = b, a, pos[a] + 1
+                mover, target = b, pos[a] + 1
             else:
-                mover, anchor, target = a, b, pos[b] + 1
+                mover, target = a, pos[b] + 1
             order.pop(pos[mover])
             if pos[mover] < target:
                 target -= 1
@@ -146,7 +146,7 @@ def _enforce_spouse_adjacency(order, marriages, layer, depth):
 #    barycenter 多輪掃描 + 強化：
 #    A) 夫妻緊鄰；B) 兄弟姊妹群兩端推開跨家庭橋節點
 # =========================================================
-def _auto_layout(tree, sweeps=4):
+def _auto_layout(tree, sweeps=5):
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
     depth     = _compute_generations(tree)
@@ -308,6 +308,12 @@ def _graph(tree):
                   [p for p in people if p not in st.session_state.gen_order.get(str(d), [])]
             if seq: per_layer_order[d] = seq
 
+    # 額外保障：同層所有夫妻必相鄰（每次繪圖前再校正一次）
+    for d in list(per_layer_order.keys()):
+        per_layer_order[d] = _enforce_spouse_adjacency(
+            list(per_layer_order[d]), marriages, d, depth
+        )
+
     # -- 婚姻與子女 --
     for mid, m in marriages.items():
         sps  = m.get("spouses", []) or []
@@ -454,6 +460,26 @@ def _marriage_form(t):
                 mid = _next_mid()
                 t["marriages"][mid]={"spouses":[s1,s2],"children":[]}
                 st.success(f"已新增婚姻：{mid}")
+
+                # === 立刻把兩位配偶排成相鄰（同層） ===
+                depth = _compute_generations(t)
+                d = max(depth.get(s1, 0), depth.get(s2, 0))  # 配偶會被拉到同層
+                # 該層目前順序（若尚未建立，先用層內名單）
+                layer_people = [p for p, lv in depth.items() if lv == d]
+                cur = list(st.session_state.gen_order.get(str(d), layer_people))
+                # 補上未在 cur 的人，避免遺漏
+                seen = set(cur)
+                cur += [p for p in layer_people if p not in seen]
+                # 若兩人不相鄰，將 s2 移到 s1 右側
+                if s1 in cur and s2 in cur:
+                    i, j = cur.index(s1), cur.index(s2)
+                    if abs(i - j) != 1:
+                        cur.pop(j)
+                        if j < i:
+                            i -= 1
+                        cur.insert(i + 1, s2)
+                        st.session_state.gen_order[str(d)] = cur
+                st.rerun()
 
     if t["marriages"]:
         with st.expander("婚姻清單（點開管理）", expanded=False):
@@ -621,7 +647,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree • r10")
+    st.caption("familytree • r11")
 
 if __name__ == "__main__":
     st.set_page_config(page_title="家族樹", layout="wide")
