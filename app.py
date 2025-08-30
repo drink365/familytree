@@ -17,7 +17,7 @@ st.sidebar.markdown("## 導覽")
 def nav_card(label, page_key, icon):
     with st.container():
             navigate(page_key)
-    st.markdown("---")
+    st.sidebar.markdown("---")
 for label, key, icon in [("首頁","home","🏠"),("家族樹","familytree","🌳"),("法稅傳承","legacy","🏛️"),("稅務工具","tax","🧾"),("保單策略","policy","📦"),("價值觀探索","values","💬"),("關於我們","about","👩‍💼")]:
     nav_card(label, key, icon)
 
