@@ -4,6 +4,18 @@ from datetime import datetime
 st.set_page_config(page_title="影響力｜AI 傳承規劃平台", page_icon="logo2.png", layout="wide", initial_sidebar_state="expanded")
 _BRAND = json.load(open("brand.json", "r", encoding="utf-8"))
 BRAND_PRIMARY = _BRAND["PRIMARY"]; BRAND_BG = _BRAND["BG"]
+
+st.sidebar.markdown("## 導覽")
+st.sidebar.button("🏠 首頁", on_click=lambda: navigate("home"))
+st.sidebar.button("🌳 家族樹", on_click=lambda: navigate("familytree"))
+st.sidebar.button("🏛️ 法稅傳承", on_click=lambda: navigate("legacy"))
+st.sidebar.button("🧾 稅務工具", on_click=lambda: navigate("tax"))
+st.sidebar.button("📦 保單策略", on_click=lambda: navigate("policy"))
+st.sidebar.button("💬 價值觀探索", on_click=lambda: navigate("values"))
+st.sidebar.button("👩‍💼 關於我們", on_click=lambda: navigate("about"))
+
+if 'page' not in st.session_state:
+    st.session_state['page'] = 'home'
 st.markdown("""
 <style>
   html, body, [class*="css"] {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", Arial; background-color: {BRAND_BG}; }}
@@ -41,7 +53,7 @@ if page == "home":
     with c1:
         if st.button("🚀 開始建立傳承地圖", type="primary", use_container_width=True): navigate("legacy")
     with c2:
-        if st.button("📞 預約顧問 / 合作洽談", use_container_width=True): navigate("about")
+        if st.button("🌳 家族樹 Family Tree", use_container_width=True): navigate("about")
     st.markdown('</div>', unsafe_allow_html=True)
 elif page == "legacy":
     from pages_legacy import render; render()
@@ -49,6 +61,8 @@ elif page == "tax":
     from pages_tax import render; render()
 elif page == "policy":
     from pages_policy import render; render()
+elif page == "familytree":
+    from pages_familytree import render; render()
 elif page == "values":
     from pages_values import render; render()
 elif page == "about":

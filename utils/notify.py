@@ -67,9 +67,6 @@ def send_email(payload):
         u"訊息：%s" % ((payload.get("msg","") or "").strip()),
     ]
     body = "\n".join(lines)
-    lines.append("我們已收到您的需求，將盡快與您聯繫，陪伴您完成家族的傳承規劃。")
-    lines.append("")
-    lines.append("永傳家族辦公室 敬上")
 
     # 郵件內容（UTF-8）
     msg = MIMEText(body, _charset="utf-8")
