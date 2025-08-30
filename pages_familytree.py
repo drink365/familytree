@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 # pages_familytree.py
 #
-# Streamlit 家族樹（配偶相鄰、配偶顯示單一直線、婚姻點在配偶中間、子女自婚姻點往下）
+# Streamlit 家族樹（配偶相鄰；配偶之間畫單一水平直線；婚姻點隱藏只用來連子女）
+
 from __future__ import annotations
 import json
 import uuid
@@ -11,14 +12,14 @@ import streamlit as st
 from graphviz import Digraph
 
 
-# =========================
+# ---------------------------
 # Session 初始化
-# =========================
+# ---------------------------
 def _init_state():
     ss = st.session_state
     ss.setdefault("family", {"persons": {}, "marriages": {}})
-    ss.setdefault("gen_order", {})      # 每層輸出順序（人物 id 列表）
-    ss.setdefault("group_order", {})    # 保留欄位（目前未用）
+    ss.setdefault("gen_order", {})
+    ss.setdefault("group_order", {})
     ss.setdefault("uploader_key", f"up_{uuid.uuid4().hex[:6]}")
 
 
@@ -30,11 +31,10 @@ def _new_mid():
     return f"M{uuid.uuid4().hex[:4]}"
 
 
-# =========================
+# ---------------------------
 # 小工具
-# =========================
+# ---------------------------
 def _parents_mid_of(pid: str, marriages: Dict[str, dict]) -> Optional[str]:
-    """回傳該人的父母婚姻 mid（若沒有則 None）。"""
     for mid, m in marriages.items():
         if pid in (m.get("children") or []):
             return mid
@@ -42,30 +42,24 @@ def _parents_mid_of(pid: str, marriages: Dict[str, dict]) -> Optional[str]:
 
 
 def _base_key(pid: str, persons: Dict[str, dict]) -> Tuple:
-    """排序 key：出生年(未知最後) ➜ 姓名 ➜ id。"""
     p = persons.get(pid, {})
     nm = p.get("name", "")
     by = p.get("birth_year", None)
     return (9999 if by in (None, "", 0) else int(by), str(nm), pid)
 
 
-# =========================
-# 世代計算
-#   一開始把「所有人」都放第 0 層（橫向）
-#   只做「父母 ➜ 子女」往下推；不做子女 ➜ 父母回推
-#   配偶強制同層
-# =========================
+# ---------------------------
+# 世代計算（先全部第 0 層，再由上往下推）
+# ---------------------------
 def _compute_generations(tree: Dict) -> Dict[str, int]:
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # 起點：所有人都在第 0 層，確保無關係時先橫向排列
     depth: Dict[str, int] = {pid: 0 for pid in persons}
 
     spouses_of  = {mid: (m.get("spouses")  or []) for mid, m in marriages.items()}
     children_of = {mid: (m.get("children") or []) for mid, m in marriages.items()}
 
-    # 由上往下鬆弛：配偶同層、子女 = 父母層 + 1
     for _ in range(200):
         changed = False
 
@@ -99,9 +93,9 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
     return depth
 
 
-# =========================
-# 排序（層內以「本人/配偶」為單位，保證相鄰）
-# =========================
+# ---------------------------
+# 層內排序（以本人/配偶為單位，確保相鄰）
+# ---------------------------
 def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
@@ -115,7 +109,6 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
     gen_order: Dict[str, List[str]] = {}
 
     def _pick_primary_spouse(p: str, d: int) -> Optional[str]:
-        """挑同層最合適配偶（『有父母』者優先，較穩定），再比 base_key。"""
         cands = []
         for m in marriages.values():
             sps = m.get("spouses", []) or []
@@ -128,15 +121,13 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
 
         def k(s):
             pm = _parents_mid_of(s, marriages)
-            return (pm is None, _base_key(s, persons))  # 有父母者優先（False < True）
+            return (pm is None, _base_key(s, persons))  # 有父母者優先
         cands.sort(key=k)
         return cands[0]
 
     maxd = max(layers) if layers else 0
     for d in range(0, maxd + 1):
-        # 基準順序
         members = sorted(layers.get(d, []), key=lambda x: _base_key(x, persons))
-        # 以「單位」輸出（[人, 配偶] 或 [人]），確保夫妻相鄰
         placed = set()
         seq: List[str] = []
         for p in members:
@@ -151,14 +142,14 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
                 placed.add(p)
         gen_order[str(d)] = seq
 
-    st.session_state.gen_order  = gen_order
-    st.session_state.group_order = {}  # 目前不需要
+    st.session_state.gen_order = gen_order
+    st.session_state.group_order = {}
     return gen_order, {}
 
 
-# =========================
-# Graphviz（配偶水平直線 + 指定 ports；婚姻點只接子女）
-# =========================
+# ---------------------------
+# Graphviz（配偶水平線 + 婚姻點隱藏）
+# ---------------------------
 def _graph(tree: Dict):
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
@@ -168,8 +159,8 @@ def _graph(tree: Dict):
     g = Digraph(
         "G",
         graph_attr={
-            "rankdir": "TB",           # 由上往下；同層橫向
-            "splines": "polyline",     # 折線/直線（更穩定）
+            "rankdir": "TB",           # 上→下
+            "splines": "polyline",     # 直線/折線，穩定
             "nodesep": "0.45",
             "ranksep": "0.85",
             "fontname": "Noto Sans CJK TC, Helvetica, Arial",
@@ -178,21 +169,19 @@ def _graph(tree: Dict):
     g.attr("node", shape="rounded", fontsize="12",
            fontname="Noto Sans CJK TC, Helvetica, Arial")
 
-    # 各層子圖 + 橫向隱形邊固定左右順序
+    # 同層 subgraph + 隱形邊固定左右順序
     maxd = max(depth.values()) if depth else 0
     for d in range(0, maxd + 1):
         with g.subgraph(name=f"rank_{d}") as sg:
             sg.attr(rank="same")
             order = gen_order.get(str(d), [])
-            # 放人物節點
             for pid in order:
                 label = persons.get(pid, {}).get("name", pid)
                 sg.node(pid, label)
-            # 用隱形邊把同層串起來，強制橫向（避免擠成一團）
             for i in range(len(order) - 1):
                 sg.edge(order[i], order[i + 1], style="invis", weight="100")
 
-    # 先在配偶層放婚姻點，並用隱形邊把婚姻點固定在配偶正中
+    # 放婚姻點（完全隱藏），用透明定位邊把婚姻點夾在兩配偶中間
     for mid, m in marriages.items():
         sps = m.get("spouses", []) or []
         if not sps:
@@ -201,29 +190,29 @@ def _graph(tree: Dict):
         mnode = f"{mid}_pt"
 
         with g.subgraph(name=f"rank_{d}") as sg:
-            sg.node(mnode, "", shape="point", width="0.02", height="0.02")
+            # 婚姻點隱藏（仍可連子女）
+            sg.node(mnode, "", shape="point", width="0.02", height="0.02", style="invis")
 
             if len(sps) >= 2:
-                # 只取前兩位（常見一夫一妻）；若你有多配偶情境，可自行延伸
                 left, right = sps[0], sps[1]
-                # 以重權重的隱形邊把婚姻點夾在兩配偶中間，位置穩定
-                sg.edge(left,  mnode, style="invis", weight="300")
-                sg.edge(mnode, right, style="invis", weight="300")
 
-                # 顯示配偶之間「單一水平直線」（指定 port，保證水平）
+                # 透明定位邊（絕對看不見）
+                sg.edge(left,  mnode, color="transparent", penwidth="0", weight="300")
+                sg.edge(mnode, right, color="transparent", penwidth="0", weight="300")
+
+                # 配偶之間真正的水平線（強制端點）
                 g.edge(left, right,
                        dir="none",
-                       constraint="false",   # 不影響層級
+                       constraint="false",
                        minlen="0",
                        weight="0",
                        penwidth="1.6",
-                       tailport="e",         # 從左配偶右側出發
-                       headport="w")         # 進到右配偶左側
+                       tailport="e",
+                       headport="w")
             elif len(sps) == 1:
-                # 只有一方（資料不完整）就不畫水平線
-                sg.edge(sps[0], mnode, style="invis", weight="300")
+                sg.edge(sps[0], mnode, color="transparent", penwidth="0", weight="300")
 
-    # 畫子女（婚姻點 ➜ 子女）
+    # 子女：婚姻點 ➜ 子女
     for mid, m in marriages.items():
         sps  = m.get("spouses", []) or []
         kids = m.get("children", []) or []
@@ -236,9 +225,9 @@ def _graph(tree: Dict):
     st.graphviz_chart(g, use_container_width=True)
 
 
-# =========================
+# ---------------------------
 # UI：人物
-# =========================
+# ---------------------------
 def _ui_persons(tree: Dict):
     st.markdown("### ① 人物管理")
     with st.form("person_form", clear_on_submit=True):
@@ -261,9 +250,9 @@ def _ui_persons(tree: Dict):
                 st.rerun()
 
 
-# =========================
+# ---------------------------
 # UI：婚姻 / 子女
-# =========================
+# ---------------------------
 def _ui_marriages(tree: Dict):
     st.markdown("### ② 婚姻與子女")
     persons   = tree["persons"]
@@ -288,7 +277,7 @@ def _ui_marriages(tree: Dict):
                 _apply_rules(tree)
                 st.rerun()
 
-    # 管理每段婚姻
+    # 管理婚姻
     for mid, m in marriages.items():
         sps = m.get("spouses", []) or []
         with st.expander(f"{mid} 婚姻（點開管理）", expanded=False):
@@ -297,7 +286,6 @@ def _ui_marriages(tree: Dict):
             # 加子女
             with st.form(f"kid_{mid}", clear_on_submit=True):
                 cc1, cc2 = st.columns([5, 1])
-                # 僅允許未被其他婚姻認領，或已在本婚姻底下的人
                 candidates = [
                     pid for pid in persons
                     if _parents_mid_of(pid, marriages) in (None, mid)
@@ -326,18 +314,18 @@ def _ui_marriages(tree: Dict):
                 st.rerun()
 
 
-# =========================
+# ---------------------------
 # UI：家族樹視覺化
-# =========================
+# ---------------------------
 def _ui_graph(tree: Dict):
     st.markdown("### ③ 家族樹視覺化")
     _apply_rules(tree)
     _graph(tree)
 
 
-# =========================
+# ---------------------------
 # UI：匯入／匯出（避免匯入後閃爍）
-# =========================
+# ---------------------------
 def _ui_io(tree: Dict):
     st.markdown("### ④ 匯入 / 匯出")
     c1, c2, c3 = st.columns([1, 1, 1])
@@ -368,7 +356,6 @@ def _ui_io(tree: Dict):
             except Exception as e:
                 st.error(f"匯入失敗：{e}")
 
-    # 清空
     if c3.button("清空所有資料"):
         st.session_state.family = {"persons": {}, "marriages": {}}
         st.session_state.gen_order = {}
@@ -377,9 +364,9 @@ def _ui_io(tree: Dict):
         st.rerun()
 
 
-# =========================
+# ---------------------------
 # Page：main / render
-# =========================
+# ---------------------------
 def main():
     st.set_page_config(page_title="家族樹", layout="wide")
     _init_state()
@@ -398,7 +385,6 @@ def main():
 
 
 def render():
-    # 若你的主程式會呼叫 render()，也可用這個入口
     _init_state()
     st.markdown("## 🌳 家族樹")
     tree = st.session_state.family
