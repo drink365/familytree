@@ -202,7 +202,8 @@ def _stable_cluster_order(d, clusters, marriages, persons):
 def _build_couple_blocks(d, base_cluster_order, marriages, depth):
     """
     將同一層 d 的『跨群婚姻』連結成不可分割區塊（connected components）。
-    回傳 blocks：list[list[cid]]，內部群序沿用 base_cluster_order，避免晃動。
+    回傳 blocks：list[list[cid]]，內部群序沿用 base_cluster_order，避免晃動；
+    同時回傳 adj：群之間因婚姻而相鄰的鄰接表（供區塊內線性化使用）。
     """
     order_index = {cid: i for i, cid in enumerate(base_cluster_order)}
     adj = {cid: set() for cid in base_cluster_order}
@@ -234,7 +235,58 @@ def _build_couple_blocks(d, base_cluster_order, marriages, depth):
                     stack.append(v)
         comp.sort(key=lambda x: order_index[x])  # 區塊內群順序沿用 base
         blocks.append(comp)
-    return blocks
+    return blocks, adj
+
+
+def _linearize_block(block, order_index, adj):
+    """
+    給定一個 block（群 id 列表）與該 block 內的婚姻鄰接表 adj，
+    輸出一個盡量讓『有婚姻相連的群』兩兩相鄰的線性順序。
+    做法：從度數=1的葉節點（若無則度數最大的）起，貪婪擴展成一條 path，
+    同度時以 order_index 輔助，維持穩定性。
+    """
+    if len(block) <= 2:
+        return sorted(block, key=lambda x: order_index[x])
+
+    local_adj = {u: [v for v in adj[u] if v in block] for u in block}
+    degree = {u: len(local_adj[u]) for u in block}
+
+    leaves = [u for u in block if degree[u] == 1]
+    if leaves:
+        start = sorted(leaves, key=lambda x: order_index[x])[0]
+    else:
+        start = sorted(block, key=lambda x: (-degree[x], order_index[x]))[0]
+
+    used = {start}
+    path = [start]
+
+    def _best_next(cands):
+        return sorted(cands, key=lambda x: order_index[x])[0]
+
+    while len(used) < len(block):
+        left, right = path[0], path[-1]
+        cand_left = [v for v in local_adj[left] if v not in used]
+        cand_right = [v for v in local_adj[right] if v not in used]
+
+        if cand_left and not cand_right:
+            v = _best_next(cand_left)
+            used.add(v); path.insert(0, v)
+        elif cand_right and not cand_left:
+            v = _best_next(cand_right)
+            used.add(v); path.append(v)
+        elif cand_left and cand_right:
+            vL = _best_next(cand_left)
+            vR = _best_next(cand_right)
+            if order_index[vL] <= order_index[vR]:
+                used.add(vL); path.insert(0, vL)
+            else:
+                used.add(vR); path.append(vR)
+        else:
+            rest = [u for u in block if u not in used]
+            v = sorted(rest, key=lambda x: order_index[x])[0]
+            used.add(v); path.append(v)
+
+    return path
 
 
 def _apply_rules(tree, focus_child=None):
@@ -277,31 +329,37 @@ def _apply_rules(tree, focus_child=None):
         base_cluster_order = _stable_cluster_order(d, clusters, marriages, persons)
 
         # 把跨群婚姻合併為『夫妻區塊』
-        blocks = _build_couple_blocks(d, base_cluster_order, marriages, depth)
+        blocks, adj = _build_couple_blocks(d, base_cluster_order, marriages, depth)
 
-        # 邊界微調：跨群夫妻各自站在區塊交界兩側（左群→右緣；右群→左緣）
-        cid_pos = {cid: i for i, cid in enumerate(base_cluster_order)}
-        for m in marriages.values():
-            sps = [s for s in (m.get("spouses", []) or []) if depth.get(s) == d]
-            if len(sps) < 2:
-                continue
-            a, b = sps[0], sps[1]
-            ca = _cluster_id_of(a, d, marriages)
-            cb = _cluster_id_of(b, d, marriages)
-            if ca == cb or ca not in clusters or cb not in clusters:
-                continue
-            if cid_pos[ca] < cid_pos[cb]:
-                _move_to_back(clusters[ca], a)
-                _move_to_front(clusters[cb], b)
-            else:
-                _move_to_back(clusters[cb], b)
-                _move_to_front(clusters[ca], a)
-
-        # 將『夫妻區塊』展開為最終層序（區塊為單位，不會拆散配偶）
+        # 依婚姻鄰接，對每個區塊做「線性化」→ 盡量讓跨群夫妻群彼此相鄰
+        order_index = {cid: i for i, cid in enumerate(base_cluster_order)}
         final_list = []
         for comp in blocks:
-            for cid in comp:
+            comp_ordered = _linearize_block(comp, order_index, adj)
+
+            # 邊界微調：跨群夫妻各自站在區塊交界兩側（左群→右緣；右群→左緣）
+            cid_pos = {cid: i for i, cid in enumerate(comp_ordered)}
+            for m in marriages.values():
+                sps = [s for s in (m.get("spouses", []) or []) if depth.get(s) == d]
+                if len(sps) < 2:
+                    continue
+                a, b = sps[0], sps[1]
+                ca = _cluster_id_of(a, d, marriages)
+                cb = _cluster_id_of(b, d, marriages)
+                if ca == cb or ca not in clusters or cb not in clusters:
+                    continue
+                if ca in cid_pos and cb in cid_pos and abs(cid_pos[ca] - cid_pos[cb]) >= 1:
+                    if cid_pos[ca] < cid_pos[cb]:
+                        _move_to_back(clusters[ca], a)
+                        _move_to_front(clusters[cb], b)
+                    else:
+                        _move_to_back(clusters[cb], b)
+                        _move_to_front(clusters[ca], a)
+
+            # 展開區塊
+            for cid in comp_ordered:
                 final_list.extend(clusters[cid])
+
         gen_order[str(d)] = final_list
 
     # group_order（供需要時以層序 anchor 婚姻）
@@ -354,7 +412,7 @@ def _graph(tree):
         label = nm + (f"\n{by}" if by else "")
         g.node(pid, label=label)
 
-    # 層內節點
+    # 同層的順序
     layers = {}
     for pid, d in depth.items():
         layers.setdefault(d, []).append(pid)
@@ -621,7 +679,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree • couple-block layout v1")
+    st.caption("familytree • couple-block layout + intra-block linearization v2")
 
 
 if __name__ == "__main__":
