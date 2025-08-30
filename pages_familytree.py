@@ -80,20 +80,21 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # 收集父母→子女、配偶對
-    children_of = {mid: (m.get("children") or []) for mid, m in marriages.items()}
+    # 先把「所有人」都放在第 0 層，確保一開始全都橫向排在同一層
+    depth: Dict[str, int] = {pid: 0 for pid in persons}
+
+    # 快取
     spouses_of  = {mid: (m.get("spouses")  or []) for mid, m in marriages.items()}
+    children_of = {mid: (m.get("children") or []) for mid, m in marriages.items()}
 
-    # 根：不在任何 children 列表的人，放第 0 層
-    all_children = set(c for kids in children_of.values() for c in kids)
-    depth: Dict[str, int] = {pid: 0 for pid in persons if pid not in all_children}
-
-    # 由上往下鬆弛直到收斂：配偶同層、子女 = 父母層 + 1
+    # 由上往下推：配偶同層；子女 = 父母層 + 1（不做孩子→父母回推）
     for _ in range(200):
         changed = False
 
-        # 配偶同層（若其中一人已知層級）
+        # 配偶同層（若其中一人已經有層級）
         for sps in spouses_of.values():
+            if not sps:
+                continue
             known = [depth[s] for s in sps if s in depth]
             if known:
                 d = min(known)
@@ -102,10 +103,11 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
                         depth[s] = d
                         changed = True
 
-        # 子女 = 父母層 + 1（若父母已有層級）
+        # 子女一律在父母層 + 1
         for mid, kids in children_of.items():
-            sps = spouses_of.get(mid, [])
-            pd = [depth[s] for s in sps if s in depth]
+            if not kids:
+                continue
+            pd = [depth[s] for s in spouses_of.get(mid, []) if s in depth]
             if pd:
                 d = min(pd) + 1
                 for c in kids:
@@ -115,10 +117,6 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
 
         if not changed:
             break
-
-    # 尚未決定的人（孤立或尚未關聯）仍置於第 0 層
-    for pid in persons:
-        depth.setdefault(pid, 0)
 
     return depth
 
