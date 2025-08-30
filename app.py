@@ -47,7 +47,7 @@ with st.sidebar:
     st.markdown("## 導覽")
     sidebar_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if sidebar_logo:
-        st.image(sidebar_logo, use_column_width=True)  # 側邊欄統一使用橫式 logo.png（有則用）
+        st.image(sidebar_logo, use_container_width=True)  # 側邊欄統一使用橫式 logo.png（有則用）
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -97,7 +97,7 @@ def render_home():
     # 首頁 LOGO：優先用 logo.png，若不存在再用 LOGO_PATH
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo:
-        st.image(main_logo, use_column_width=False, width=320)  # 橫式 LOGO 顯示較大
+        st.image(main_logo, use_container_width=False, width=320)  # 橫式 LOGO 顯示較大
 
     st.markdown(
         """
