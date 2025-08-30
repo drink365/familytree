@@ -26,235 +26,146 @@ def _label(p):
 
 # -------------------- Generation Layering --------------------
 
-
 def _compute_generations(tree):
-    """
-    Robust generation assignment:
-    - Spouses share the same generation.
-    - Children get generation = max(parents) + 1.
-    - Works with multiple marriages and partial data.
-    """
-    persons = dict(tree.get("persons", {}))
-    marriages = dict(tree.get("marriages", {}))
+    """Assign generation layers so that spouses share a rank and children are the next rank."""
+    persons = set(tree.get("persons", {}).keys())
+    marriages = tree.get("marriages", {})
 
-    # indices
-    spouse_of_mid = {mid: list(m.get("spouses", [])) for mid, m in marriages.items()}
-    children_of_mid = {mid: list(m.get("children", [])) for mid, m in marriages.items()}
-
-    # build parent sets per child
+    # Build indices
+    spouse_to_mids = {}
     parents_of = {}
-    for mid, sps in spouse_of_mid.items():
-        for c in children_of_mid.get(mid, []):
-            parents_of.setdefault(c, set()).update(sps)
+    for mid, m in marriages.items():
+        for s in m.get("spouses", []):
+            spouse_to_mids.setdefault(s, set()).add(mid)
+        for c in m.get("children", []):
+            parents_of.setdefault(c, set()).update(m.get("spouses", []))
 
-    # roots = persons without recorded parents
-    depth = {}
-    roots = [p for p in persons if p not in parents_of]
-    if not roots and persons:
-        # if all have parents (data partial), pick arbitrary person as root
-        roots = [next(iter(persons))]
-
+    # Roots: those without parents
     from collections import deque
+    depth = {}
     q = deque()
+
+    roots = [p for p in persons if p not in parents_of]
     for r in roots:
         depth[r] = 0
         q.append(r)
 
-    # BFS with repeated relaxations (because graphs can be loopy by marriages)
-    seen_loops = 0
-    while q and seen_loops < 100000:
+    # If no roots (cycle/only children recorded), seed with arbitrary node
+    if not q and persons:
+        anyp = next(iter(persons))
+        depth[anyp] = 0
+        q.append(anyp)
+
+    while q:
         p = q.popleft()
-        dp = depth[p]
+        d = depth[p]
 
-        # Spouses get same layer
-        for mid, sps in spouse_of_mid.items():
-            if p in sps:
-                for s in sps:
-                    if s not in depth or depth[s] != dp:
-                        if depth.get(s, dp) != dp:
-                            depth[s] = dp
-                            q.append(s)
+        # Spouses of p stay same layer
+        for mid in spouse_to_mids.get(p, []):
+            spouses = marriages.get(mid, {}).get("spouses", [])
+            # sync spouse depth
+            for s in spouses:
+                if s == p: 
+                    continue
+                if depth.get(s) != d:
+                    depth[s] = d
+                    q.append(s)
 
-                # Children of this marriage: depth = max(parents)+1
-                par_layers = [depth.get(s, dp) for s in sps]
-                if par_layers:
-                    cd = max(par_layers) + 1
-                    for c in children_of_mid.get(mid, []):
-                        if c not in depth or depth[c] < cd:
-                            depth[c] = cd
-                            q.append(c)
-        seen_loops += 1
+            # children placed one layer below parents
+            par_depths = [depth.get(s, d) for s in spouses if s in depth]
+            if par_depths:
+                cd = max(par_depths) + 1
+                for c in marriages.get(mid, {}).get("children", []):
+                    if depth.get(c, -10) < cd:
+                        depth[c] = cd
+                        q.append(c)
 
-    # Any leftover persons get closest reasonable depth 0
+    # Default any missing
     for p in persons:
         depth.setdefault(p, 0)
-
     return depth
 
 
+# -------------------- Graph Builder (layered) --------------------
+
+
 def _graph(tree):
-    """
-    家族樹繪製規則（符合：同一代橫向、配偶相鄰、子女在父母下方、兄弟姊妹可調順序）
-    """
-    from graphviz import Digraph
-
-    persons = tree.get("persons", {}) or {}
-    marriages = tree.get("marriages", {}) or {}
-    child_types = tree.get("child_types", {}) or {}
-
-    # 取得每個人的世代層（同一層會橫向排列）
-    try:
-        depth = _compute_generations(tree)
-    except Exception:
-        depth = {pid: 0 for pid in persons}
-
-    # 依層收集人員
-    gens = {}
-    for pid in persons:
-        g = depth.get(pid, 0)
-        gens.setdefault(g, []).append(pid)
-
-    # 為了穩定輸出，先固定每層內的初始順序（依建立順序/ID）
-    def pid_index(p):
-        try:
-            return int(str(p)[1:]) if str(p).startswith("P") else 10**9
-        except Exception:
-            return 10**9
-    for g in gens:
-        gens[g].sort(key=lambda p: (pid_index(p), persons.get(p,{}).get("name","")))
-
-    # 建立反查：父母層 -> 子女清單（用於排兄弟姊妹）
-    children_of_mar = {mid: list(m.get("children", [])) for mid, m in marriages.items()}
-    spouses_of_mar = {mid: list(m.get("spouses", [])) for mid, m in marriages.items()}
+    depth = _compute_generations(tree)
 
     g = Digraph("G", format="svg")
-    g.attr(rankdir="TB", nodesep="0.35", ranksep="0.7")
+    g.attr(rankdir="TB", nodesep="0.35", ranksep="0.6")
     g.attr("node", shape="box", style="rounded,filled", fillcolor="#f8fbff", color="#8aa5c8",
            fontname="Noto Sans CJK TC, Arial", fontsize="10")
     g.attr("edge", color="#7b8aa8")
 
-    # 先建立所有人物節點
-    def _label(p: dict) -> str:
-        name = p.get("name","?")
-        b = str(p.get("birth","")).strip()
-        d = str(p.get("death","")).strip()
-        years = ""
-        if b and d: years = f"{b}-{d}"
-        elif b: years = b
-        elif d: years = d
-        return f"{name}" + (f"\n{years}" if years else "")
+    # Persons grouped by generation
+    by_depth = {}
+    for pid in tree.get("persons", {}):
+        by_depth.setdefault(depth.get(pid, 0), []).append(pid)
 
-    for pid, pdata in persons.items():
-        gender = pdata.get("gender")
-        shape = "ellipse" if gender == "女" else "box"
-        g.node(pid, label=_label(pdata), shape=shape)
-
-    # --- 關鍵 1：同一代橫向（每層一個 rank=same 子圖 + 隱形鏈固定左右順序） ---
-    
-    # Create invisible anchors per generation to enforce strict vertical order
-    gen_levels = sorted(gens.keys())
-    anchors = []
-    for lv in gen_levels:
-        an = f"_GEN_ANCHOR_{lv}"
-        anchors.append(an)
-        # each anchor sits with its generation (rank=same)
-        with g.subgraph(name=f"rank_anchor_{lv}") as sg_a:
-            sg_a.attr(rank="same")
-            sg_a.node(an, label="", shape="point", width="0.01")
-
-    # chain anchors top→down to lock rank ordering
-    for i in range(len(anchors)-1):
-        g.edge(anchors[i], anchors[i+1], style="invis", weight="999", constraint="true")
-
-    for layer, nodes in sorted(gens.items(), key=lambda kv: kv[0]):
-        with g.subgraph(name=f"rank_gen_{layer}") as sg:
+    for d, nodes in sorted(by_depth.items()):
+        with g.subgraph(name=f"rank_{d}") as sg:
             sg.attr(rank="same")
-            prev = None
             for pid in nodes:
-                # 確保節點在此層被提及（Graphviz 會尊重同層排列）
-                sg.node(pid)
-                # 用 invis 高權重連成一條鏈，鎖住左右順序，減少交錯
-                if prev is not None:
-                    sg.edge(prev, pid, style="invis", weight="400")
-                prev = pid
+                gender = tree["persons"].get(pid, {}).get("gender")
+                shape = "ellipse" if gender == "F" else "box"
+                sg.node(pid, label=_label(tree["persons"][pid]), shape=shape)
 
-    # --- 關鍵 2：配偶相鄰（同層 + 中間婚姻點 + 可見/虛線婚姻邊） ---
-    for mid, m in marriages.items():
-        sps = spouses_of_mar.get(mid, [])
-        if not sps:
+    # Draw marriages: spouse edge (solid/dashed) and hidden mid node between spouses (for children)
+    for mid, m in tree.get("marriages", {}).items():
+        spouses = list(m.get("spouses", []))
+        if not spouses:
             continue
-        # 婚姻點：用作連接孩子的中繼
-        g.node(mid, label="", shape="point", width="0.01")
-
-        # 配偶與婚姻點同層（使用父母其一的層數）
-        if sps:
-            parent_layer = depth.get(sps[0], 0)
-
-            with g.subgraph(name=f"rank_mar_{mid}") as sg:
-                sg.attr(rank="same")
-                # 把配偶與 mid 拉在同一層，並用 invis 緊密相鄰
-                prev = None
-                order = list(dict.fromkeys(sps[:2]))  # 只保證前兩位相鄰（常見情境）
-                # 也把 mid 放中間，s1 - mid - s2
-                if len(order) == 1:
-                    chain = [order[0], mid]
-                elif len(order) >= 2:
-                    chain = [order[0], mid, order[1]]
-                else:
-                    chain = [mid]
-
-                for n in chain:
-                    sg.node(n)
-                    if prev is not None:
-                        sg.edge(prev, n, style="invis", weight="500")
-                    prev = n
-
-            # 可見婚姻關係（實線/虛線）
-            if len(sps) >= 2:
-                s1, s2 = sps[0], sps[1]
-                style = "dashed" if m.get("divorced") else "solid"
-                g.edge(s1, s2, dir="none", constraint="true", weight="250", style=style)
-
-            # 多配偶時，鄰接者相連，保持群聚
-            if len(sps) > 2:
-                for i in range(len(sps)-1):
-                    g.edge(sps[i], sps[i+1], dir="none", constraint="true", weight="120", style="solid")
-
-    # --- 關鍵 3：子女在父母下方 + 兄弟姊妹可固定左右順序 ---
-    #    子女都從 mid（婚姻點）往下連，兄弟姊妹用 invis 鏈固定左右
-    HIDE = {"生","bio","親生"}
-    for mid, kids in children_of_mar.items():
-        if not kids:
-            continue
-
-        # 以父母中的最大層 + 1 作為子女層
-        sps = spouses_of_mar.get(mid, [])
-        parent_layers = [depth.get(s, 0) for s in sps] or [0]
-        child_layer = max(parent_layers) + 1
-
-        # 將所有子女宣告在同一層（橫向排列）
-        with g.subgraph(name=f"rank_kids_{mid}") as sg:
+        # ensure rank: spouses + mid same layer
+        with g.subgraph(name=f"rank_mid_{mid}") as sg:
             sg.attr(rank="same")
-            prev = None
-            for cid in kids:
-                # 若原本 depth 計算不一致，這邊只強制 rank，不直接改 depth 字典
-                sg.node(cid)
-                if prev is not None:
-                    sg.edge(prev, cid, style="invis", weight="350")
-                prev = cid
+            # Place mid node (hidden point)
+            sg.node(mid, label="", shape="point", width="0.01")
 
-        # 將 mid -> child 的連線畫出來（可帶標籤）
-        ctype_map = child_types.get(mid, {}) or {}
-        for cid in kids:
-            lbl = (ctype_map.get(cid, "") or "").strip()
-            if lbl and lbl not in HIDE:
-                g.edge(mid, cid, label=lbl, constraint="true")
-            else:
-                g.edge(mid, cid, constraint="true")
+            # Create invisible edges to order: s1 -> mid -> s2
+            if len(spouses) >= 2:
+                s1, s2 = spouses[0], spouses[1]
+                sg.edge(s1, mid, style="invis", weight="200")
+                sg.edge(mid, s2, style="invis", weight="200")
+
+        # Visible horizontal line between first two spouses
+        if len(spouses) >= 2:
+            s1, s2 = spouses[0], spouses[1]
+            style = "dashed" if m.get("divorced") else "solid"
+            g.edge(s1, s2, dir="none", constraint="true", weight="200", style=style)
+
+        # For any additional spouses, connect them near mid with invisible ordering,
+        # and draw visible edges pairing sequentially to keep adjacency.
+        if len(spouses) > 2:
+            for i in range(1, len(spouses)-1):
+                a, b = spouses[i], spouses[i+1]
+                g.edge(a, b, dir="none", constraint="true", weight="150", style="solid")  # assume married
+
+        # Children edges
+        child_types = tree.get("child_types", {})
+        HIDE_LABELS = {"生", "bio", "親生"}
+        for c in m.get("children", []):
+            if c in tree.get("persons", {}):
+                ctype = (child_types.get(mid, {}) or {}).get(c, "")
+                lbl = "" if (ctype or "").strip() in HIDE_LABELS else ctype
+                if lbl:
+                    g.edge(mid, c, label=lbl)
+                else:
+                    g.edge(mid, c)
+        # Enforce sibling left-to-right order to reduce edge crossings
+        kids = list(m.get("children", []))
+        if len(kids) >= 2:
+            with g.subgraph() as kg:
+                kg.attr(rank="same")
+                for i in range(len(kids)-1):
+                    kg.edge(kids[i], kids[i+1], style="invis", weight="50", constraint="true")
+        
 
     return g
 
 
+
+# -------------------- Page Render --------------------
 def render():
     _init_state()
     st.title("🌳 家族樹")
@@ -341,34 +252,37 @@ def render():
                         t["child_types"].setdefault(mid, {})[child] = ctype
                         st.success("已新增子女")
 
-        # ②-1 子女排序（減少交錯）
-    with st.expander("②-1 子女排序（減少交錯）", expanded=False):
-        t = st.session_state.tree
-        marriages = t.get("marriages", {})
-        persons = t.get("persons", {})
-        if not marriages:
-            st.info("尚未建立婚姻關係")
-        else:
-            for mid, m in marriages.items():
-                kids = list(m.get("children", []))
-                if len(kids) < 2:
-                    continue
-                st.caption(f"婚姻 {mid}｜" + " × ".join(persons.get(pid, {}).get("name", pid) for pid in m.get("spouses", [])))
-                for idx, cid in enumerate(kids):
-                    ccol1, ccol2, ccol3, ccol4 = st.columns([4,1,1,1])
-                    ccol1.write(f"{idx+1}. {cid}｜{persons.get(cid,{}).get('name',cid)}")
-                    if ccol2.button("⬅️ 左移", key=f"kid_left_{mid}_{idx}") and idx>0:
-                        kids[idx-1], kids[idx] = kids[idx], kids[idx-1]
-                    if ccol3.button("➡️ 右移", key=f"kid_right_{mid}_{idx}") and idx < len(kids)-1:
-                        kids[idx], kids[idx+1] = kids[idx+1], kids[idx]
-                    if ccol4.button("⟲ 反轉", key=f"kid_rev_{mid}_{idx}"):
-                        kids = list(reversed(kids))
-                    # write-back after any click
-                    m["children"] = kids
-                st.divider()
-
+            st.divider()
+            st.markdown("**子女順序（可調整以減少交錯）**")
+            if mid:
+                kids = t["marriages"][mid].get("children", [])
+                if not kids:
+                    st.info("此婚姻目前沒有子女。")
+                else:
+                    for i, kid in enumerate(kids):
+                        cols = st.columns([6,1,1,1,1])
+                        cols[0].write(f"{i+1}. {kid}｜" + t["persons"].get(kid, {}).get("name","?"))
+                        if cols[1].button("↑", key=f"up_{mid}_{kid}") and i>0:
+                            kids[i-1], kids[i] = kids[i], kids[i-1]
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+                        if cols[2].button("↓", key=f"dn_{mid}_{kid}") and i < len(kids)-1:
+                            kids[i+1], kids[i] = kids[i], kids[i+1]
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+                        if cols[3].button("置頂", key=f"top_{mid}_{kid}") and i>0:
+                            moved = kids.pop(i)
+                            kids.insert(0, moved)
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+                        if cols[4].button("置底", key=f"bot_{mid}_{kid}") and i < len(kids)-1:
+                            moved = kids.pop(i)
+                            kids.append(moved)
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+    
     with st.expander("③ 家族樹視覺化", expanded=True):
-        st.graphviz_chart(_graph(t), use_container_width=True, height=900)
+        st.graphviz_chart(_graph(t))
 
 
     
