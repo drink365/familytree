@@ -352,7 +352,7 @@ def render():
                 st.divider()
 
     with st.expander("③ 家族樹視覺化", expanded=True):
-        st.graphviz_chart(_graph(t), use_container_width=True, height=900)
+        st.graphviz_chart(_graph(t)), use_container_width=True, height=900)
 
 
     
