@@ -469,12 +469,12 @@ def render():
                 st.caption("提示：此排序會把同層的『夫妻群（以其中一位配偶為錨點）』依序排列，適合把整個家族群向左/向右移動。搭配『同層排序』與『子女排序』可得到最佳視覺效果。")
     
     with st.expander("③ 家族樹視覺化", expanded=True):
-            st.graphviz_chart(_graph(t))
+        st.graphviz_chart(_graph(t))
     
     
         
     
-        with st.expander("④ 匯入 / 匯出", expanded=True):
+    with st.expander("④ 匯入 / 匯出", expanded=True):
             # 匯出
             st.download_button(
                 "⬇️ 下載 JSON",
