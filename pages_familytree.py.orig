@@ -90,13 +90,7 @@ def _compute_generations(tree):
 
 
 def _graph(tree):
-    """Render family tree with (1) spouses adjacent, (2) children below parents,
-    and (3) sibling order enforced to reduce crossings."""
-    from graphviz import Digraph
-
-    persons = tree.get("persons", {})
-    marriages = tree.get("marriages", {})
-    child_types = tree.get("child_types", {})
+    depth = _compute_generations(tree)
 
     g = Digraph("G", format="svg")
     g.attr(rankdir="TB", nodesep="0.35", ranksep="0.6")
@@ -104,73 +98,66 @@ def _graph(tree):
            fontname="Noto Sans CJK TC, Arial", fontsize="10")
     g.attr("edge", color="#7b8aa8")
 
-    # --- Add person nodes ---
-    def _label(p: dict) -> str:
-        name = p.get("name","?")
-        b = str(p.get("birth","")).strip()
-        d = str(p.get("death","")).strip()
-        years = ""
-        if b and d: years = f"{b}-{d}"
-        elif b: years = b
-        elif d: years = d
-        return f"{name}" + (f"\n{years}" if years else "")
+    # Persons grouped by generation
+    by_depth = {}
+    for pid in tree.get("persons", {}):
+        by_depth.setdefault(depth.get(pid, 0), []).append(pid)
 
-    for pid, pdata in persons.items():
-        gender = pdata.get("gender")
-        shape = "ellipse" if gender == "女" else "box"
-        g.node(pid, label=_label(pdata), shape=shape)
-
-    # --- Marriages: keep spouses adjacent via same-rank + invisible chain ---
-    for mid, m in marriages.items():
-        sps = list(m.get("spouses", []))
-        if not sps: 
-            continue
-        # an invisible anchor point between spouses for children edges
-        g.node(mid, label="", shape="point", width="0.01")
-
-        # keep spouses and mid on same rank for adjacency
-        with g.subgraph(name=f"cluster_{mid}") as sg:
+    for d, nodes in sorted(by_depth.items()):
+        with g.subgraph(name=f"rank_{d}") as sg:
             sg.attr(rank="same")
-            if len(sps) == 1:
-                sg.edge(sps[0], mid, style="invis", weight="300")
-            else:
-                # ensure adjacency: s1 -- mid -- s2 (invisible but weighted)
-                s1, s2 = sps[0], sps[1]
-                sg.edge(s1, mid, style="invis", weight="300")
-                sg.edge(mid, s2, style="invis", weight="300")
+            for pid in nodes:
+                gender = tree["persons"].get(pid, {}).get("gender")
+                shape = "ellipse" if gender == "F" else "box"
+                sg.node(pid, label=_label(tree["persons"][pid]), shape=shape)
 
-        # visible spouse link (solid for married, dashed for divorced)
-        if len(sps) >= 2:
-            s1, s2 = sps[0], sps[1]
+    # Draw marriages: spouse edge (solid/dashed) and hidden mid node between spouses (for children)
+    for mid, m in tree.get("marriages", {}).items():
+        spouses = list(m.get("spouses", []))
+        if not spouses:
+            continue
+        # ensure rank: spouses + mid same layer
+        with g.subgraph(name=f"rank_mid_{mid}") as sg:
+            sg.attr(rank="same")
+            # Place mid node (hidden point)
+            sg.node(mid, label="", shape="point", width="0.01")
+
+            # Create invisible edges to order: s1 -> mid -> s2
+            if len(spouses) >= 2:
+                s1, s2 = spouses[0], spouses[1]
+                sg.edge(s1, mid, style="invis", weight="200")
+                sg.edge(mid, s2, style="invis", weight="200")
+
+        # Visible horizontal line between first two spouses
+        if len(spouses) >= 2:
+            s1, s2 = spouses[0], spouses[1]
             style = "dashed" if m.get("divorced") else "solid"
             g.edge(s1, s2, dir="none", constraint="true", weight="200", style=style)
 
-        # If more than two spouses recorded, link neighbors so they sit together
-        if len(sps) > 2:
-            for i in range(len(sps)-1):
-                g.edge(sps[i], sps[i+1], dir="none", constraint="true", weight="120", style="solid")
+        # For any additional spouses, connect them near mid with invisible ordering,
+        # and draw visible edges pairing sequentially to keep adjacency.
+        if len(spouses) > 2:
+            for i in range(1, len(spouses)-1):
+                a, b = spouses[i], spouses[i+1]
+                g.edge(a, b, dir="none", constraint="true", weight="150", style="solid")  # assume married
 
-        # --- Children: force them under parents (via edges from mid) and keep sibling order ---
-        kids = list(m.get("children", []))
-        if not kids: 
-            continue
-
-        # Enforce left-to-right sibling order with invisible chain
-        for i in range(len(kids)-1):
-            g.edge(kids[i], kids[i+1], style="invis", weight="200")
-
-        # Draw edges mid -> child (with optional label like 生/繼等)
-        ctype_map = child_types.get(mid, {}) or {}
-        HIDE = {"生","bio","親生"}
-        for c in kids:
-            lbl = (ctype_map.get(c, "") or "").strip()
-            if lbl and lbl not in HIDE:
-                g.edge(mid, c, label=lbl, constraint="true")
-            else:
-                g.edge(mid, c, constraint="true")
+        # Children edges
+        child_types = tree.get("child_types", {})
+        HIDE_LABELS = {"生", "bio", "親生"}
+        for c in m.get("children", []):
+            if c in tree.get("persons", {}):
+                ctype = (child_types.get(mid, {}) or {}).get(c, "")
+                lbl = "" if (ctype or "").strip() in HIDE_LABELS else ctype
+                if lbl:
+                    g.edge(mid, c, label=lbl)
+                else:
+                    g.edge(mid, c)
 
     return g
 
+
+
+# -------------------- Page Render --------------------
 def render():
     _init_state()
     st.title("🌳 家族樹")
@@ -256,32 +243,6 @@ def render():
                         t["marriages"][mid]["children"].append(child)
                         t["child_types"].setdefault(mid, {})[child] = ctype
                         st.success("已新增子女")
-
-        # ②-1 子女排序（減少交錯）
-    with st.expander("②-1 子女排序（減少交錯）", expanded=False):
-        t = st.session_state.tree
-        marriages = t.get("marriages", {})
-        persons = t.get("persons", {})
-        if not marriages:
-            st.info("尚未建立婚姻關係")
-        else:
-            for mid, m in marriages.items():
-                kids = list(m.get("children", []))
-                if len(kids) < 2:
-                    continue
-                st.caption(f"婚姻 {mid}｜" + " × ".join(persons.get(pid, {}).get("name", pid) for pid in m.get("spouses", [])))
-                for idx, cid in enumerate(kids):
-                    ccol1, ccol2, ccol3, ccol4 = st.columns([4,1,1,1])
-                    ccol1.write(f"{idx+1}. {cid}｜{persons.get(cid,{}).get('name',cid)}")
-                    if ccol2.button("⬅️ 左移", key=f"kid_left_{mid}_{idx}") and idx>0:
-                        kids[idx-1], kids[idx] = kids[idx], kids[idx-1]
-                    if ccol3.button("➡️ 右移", key=f"kid_right_{mid}_{idx}") and idx < len(kids)-1:
-                        kids[idx], kids[idx+1] = kids[idx+1], kids[idx]
-                    if ccol4.button("⟲ 反轉", key=f"kid_rev_{mid}_{idx}"):
-                        kids = list(reversed(kids))
-                    # write-back after any click
-                    m["children"] = kids
-                st.divider()
 
     with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
