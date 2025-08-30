@@ -25,34 +25,69 @@ def _label(p):
     return f'{p.get("name","?")}' + (f"\n{years}" if years else "")
 
 # -------------------- Generation Layering --------------------
+
 def _compute_generations(tree):
+    """Assign generation layers so that spouses share a rank and children are the next rank."""
     persons = set(tree.get("persons", {}).keys())
     marriages = tree.get("marriages", {})
+
+    # Build indices
+    spouse_to_mids = {}
     parents_of = {}
     for mid, m in marriages.items():
+        for s in m.get("spouses", []):
+            spouse_to_mids.setdefault(s, set()).add(mid)
         for c in m.get("children", []):
             parents_of.setdefault(c, set()).update(m.get("spouses", []))
+
+    # Roots: those without parents
+    from collections import deque
+    depth = {}
+    q = deque()
+
     roots = [p for p in persons if p not in parents_of]
-    depth = {p: 0 for p in roots}
-    changed = True
-    iters = 0
-    while changed and iters < 10000:
-        changed = False
-        iters += 1
-        for mid, m in marriages.items():
-            par_depths = [depth[p] for p in m.get("spouses", []) if p in depth]
-            if not par_depths:
-                continue
-            next_depth = min(par_depths) + 1
-            for c in m.get("children", []):
-                if depth.get(c, -1) != next_depth:
-                    depth[c] = next_depth
-                    changed = True
+    for r in roots:
+        depth[r] = 0
+        q.append(r)
+
+    # If no roots (cycle/only children recorded), seed with arbitrary node
+    if not q and persons:
+        anyp = next(iter(persons))
+        depth[anyp] = 0
+        q.append(anyp)
+
+    while q:
+        p = q.popleft()
+        d = depth[p]
+
+        # Spouses of p stay same layer
+        for mid in spouse_to_mids.get(p, []):
+            spouses = marriages.get(mid, {}).get("spouses", [])
+            # sync spouse depth
+            for s in spouses:
+                if s == p: 
+                    continue
+                if depth.get(s) != d:
+                    depth[s] = d
+                    q.append(s)
+
+            # children placed one layer below parents
+            par_depths = [depth.get(s, d) for s in spouses if s in depth]
+            if par_depths:
+                cd = max(par_depths) + 1
+                for c in marriages.get(mid, {}).get("children", []):
+                    if depth.get(c, -10) < cd:
+                        depth[c] = cd
+                        q.append(c)
+
+    # Default any missing
     for p in persons:
         depth.setdefault(p, 0)
     return depth
 
+
 # -------------------- Graph Builder (layered) --------------------
+
 def _graph(tree):
     depth = _compute_generations(tree)
 
@@ -62,38 +97,46 @@ def _graph(tree):
            fontname="Noto Sans CJK TC, Arial", fontsize="10")
     g.attr("edge", color="#7b8aa8")
 
+    # Persons grouped by generation
     by_depth = {}
     for pid, p in tree.get("persons", {}).items():
         by_depth.setdefault(depth.get(pid, 0), []).append(pid)
 
     for d, nodes in sorted(by_depth.items()):
-        with g.subgraph(name=f"cluster_gen_{d}") as sg:
+        with g.subgraph(name=f"rank_{d}") as sg:
             sg.attr(rank="same")
             for pid in nodes:
-                shape = "ellipse" if tree["persons"].get(pid, {}).get("gender") == "F" else "box"
+                gender = tree["persons"].get(pid, {}).get("gender")
+                shape = "ellipse" if gender == "F" else "box"
                 sg.node(pid, label=_label(tree["persons"][pid]), shape=shape)
 
+    # Marriage nodes placed at the same rank as spouses
     for mid, m in tree.get("marriages", {}).items():
-        with g.subgraph(name=f"cluster_mid_{mid}") as sg:
+        # Determine rank from first known spouse
+        ranks = [depth.get(s, 0) for s in m.get("spouses", [])]
+        r = min(ranks) if ranks else 0
+        with g.subgraph(name=f"rank_mid_{mid}") as sg:
             sg.attr(rank="same")
             sg.node(mid, label="", shape="point", width="0.01")
+
         for s in m.get("spouses", []):
             if s in tree.get("persons", {}):
                 g.edge(s, mid, dir="none")
 
+    # Children edges (with optional labels)
     child_types = tree.get("child_types", {})
     HIDE_LABELS = {"生", "bio", "親生"}
     for mid, m in tree.get("marriages", {}).items():
         for c in m.get("children", []):
             if c in tree.get("persons", {}):
-                ctype = child_types.get(mid, {}).get(c, "")
+                ctype = (child_types.get(mid, {}) or {}).get(c, "")
                 lbl = "" if (ctype or "").strip() in HIDE_LABELS else ctype
                 if lbl:
                     g.edge(mid, c, label=lbl)
                 else:
                     g.edge(mid, c)
-
     return g
+
 
 # -------------------- Page Render --------------------
 def render():
@@ -106,7 +149,7 @@ def render():
     with st.expander("① 人物管理", expanded=True):
         cols = st.columns([2,1,1,1,1])
         name = cols[0].text_input("姓名 *", key="ft_name")
-        gender = cols[1].selectbox("性別", ["?","M","F"], index=0, key="ft_gender")
+        gender = cols[1].selectbox("性別", ["不確定","男","女"], index=0, key="ft_gender")
         birth = cols[2].text_input("出生年", key="ft_birth", placeholder="1970")
         death = cols[3].text_input("逝世年", key="ft_death", placeholder="")
         if cols[4].button("➕ 新增人物", key="btn_add_person", use_container_width=True):
@@ -114,7 +157,8 @@ def render():
                 st.warning("請輸入姓名")
             else:
                 pid = _new_id("P")
-                t["persons"][pid] = {"name": name.strip(), "gender": gender, "birth": birth.strip(), "death": death.strip()}
+                gender_code = {"男": "M", "女": "F"}.get(gender, "?")
+                t["persons"][pid] = {"name": name.strip(), "gender": gender_code, "birth": birth.strip(), "death": death.strip()}
                 st.success(f"已新增 {name}（{pid}）")
 
         if t["persons"]:
