@@ -9,6 +9,8 @@ def _init_state():
         st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
     if "gen_order" not in st.session_state:
         st.session_state.gen_order = {}
+    if "group_order" not in st.session_state:
+        st.session_state.group_order = {}
     for k in ("pid_counter","mid_counter"):
         if k not in st.session_state:
             st.session_state[k] = 1
@@ -186,7 +188,42 @@ def _graph(tree):
                     gg.attr(rank="same")
                     for i in range(len(order)-1):
                         gg.edge(order[i], order[i+1], style="invis", weight="80", constraint="true")
-return g
+
+    # ---- Couple-group ordering per generation ----
+    try:
+        group_order = st.session_state.get("group_order", {}) if hasattr(st, "session_state") else {}
+    except Exception:
+        group_order = {}
+    if group_order:
+        # Build mapping depth -> mids whose spouses are at that depth
+        depth_by_pid = depth  # already computed
+        for d_str, mids in group_order.items():
+            try:
+                d = int(d_str)
+            except Exception:
+                continue
+            # Filter valid mids present in tree
+            mids_valid = [mid for mid in mids if mid in marriages]
+            # Map each mid to an anchor spouse id (first spouse that exists at this depth; fallback to first existing spouse)
+            anchors = []
+            for mid in mids_valid:
+                spouses = marriages.get(mid, {}).get("spouses", [])
+                anchor = None
+                for s in spouses:
+                    if depth_by_pid.get(s) == d:
+                        anchor = s
+                        break
+                if anchor is None and spouses:
+                    anchor = spouses[0]
+                if anchor is not None and anchor in persons:
+                    anchors.append(anchor)
+            # Create invisible ordering edges among anchors
+            if len(anchors) >= 2:
+                with g.subgraph() as grp:
+                    grp.attr(rank="same")
+                    for i in range(len(anchors)-1):
+                        grp.edge(anchors[i], anchors[i+1], style="invis", weight="90", constraint="true")
+    return g
 
 
 
@@ -378,6 +415,59 @@ def render():
 
             st.caption("小提醒：此排序會讓同層人物依序靠在一起，適用於把「沒有父母記錄的人」排到特定親友旁邊（例如把『硯文』排到『榮惠』右側）。")
 
+
+    with st.expander("②-3 夫妻群排序（整代群組）", expanded=False):
+        depth_map = _compute_generations(t)
+        marriages = t.get("marriages", {})
+        persons = t.get("persons", {})
+        if not depth_map or not marriages:
+            st.info("請先建立人物與婚姻關係")
+        else:
+            gens = sorted(set(depth_map.values()))
+            def _glabel(d):
+                return f"第 {d} 層"
+            gsel = st.selectbox("選擇世代（以配偶所在層為準）", gens, format_func=_glabel, key="sel_group_layer")
+            # 收集該層的婚姻群（任一配偶在該層）
+            mids_in_layer = []
+            for mid, m in marriages.items():
+                spouses = m.get("spouses", [])
+                if any(depth_map.get(s)==gsel for s in spouses):
+                    mids_in_layer.append(mid)
+            if not mids_in_layer:
+                st.info("此層沒有可排序的夫妻群")
+            else:
+                # 目前順序：先採用使用者儲存的，剩下的按 mid 排
+                saved = list(st.session_state.group_order.get(str(gsel), []))
+                order = [mid for mid in saved if mid in mids_in_layer] + [mid for mid in mids_in_layer if mid not in saved]
+                # 顯示每個群組
+                def _mfmt(mid):
+                    sps = marriages.get(mid, {}).get("spouses", [])
+                    names = [persons.get(s,{}).get("name", s) for s in sps]
+                    kids = marriages.get(mid, {}).get("children", [])
+                    return f"{mid}｜" + (" × ".join(names) if names else "（未登記配偶）") + (f"｜子女{len(kids)}名" if kids else "")
+                for i, mid in enumerate(order):
+                    cols = st.columns([7,1,1,1,1])
+                    cols[0].write(f"{i+1}. {_mfmt(mid)}")
+                    if cols[1].button("↑", key=f"grp_up_{gsel}_{mid}") and i>0:
+                        order[i-1], order[i] = order[i], order[i-1]
+                        st.session_state.group_order[str(gsel)] = order
+                        st.rerun()
+                    if cols[2].button("↓", key=f"grp_dn_{gsel}_{mid}") and i < len(order)-1:
+                        order[i+1], order[i] = order[i], order[i+1]
+                        st.session_state.group_order[str(gsel)] = order
+                        st.rerun()
+                    if cols[3].button("置頂", key=f"grp_top_{gsel}_{mid}") and i>0:
+                        moved = order.pop(i)
+                        order.insert(0, moved)
+                        st.session_state.group_order[str(gsel)] = order
+                        st.rerun()
+                    if cols[4].button("置底", key=f"grp_bot_{gsel}_{mid}") and i < len(order)-1:
+                        moved = order.pop(i)
+                        order.append(moved)
+                        st.session_state.group_order[str(gsel)] = order
+                        st.rerun()
+                st.caption("提示：此排序會把同層的『夫妻群（以其中一位配偶為錨點）』依序排列，適合把整個家族群向左/向右移動。搭配『同層排序』與『子女排序』可得到最佳視覺效果。")
+    
 with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
 
