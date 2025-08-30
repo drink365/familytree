@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import json
-import copy
+from collections import deque
 from graphviz import Digraph
 
 # -------------------- 狀態初始化 --------------------
@@ -12,9 +12,6 @@ def _init_state():
         st.session_state.gen_order = {}
     if "group_order" not in st.session_state:
         st.session_state.group_order = {}
-    # 匯入前快照（用來復原）
-    if "__backup_tree__" not in st.session_state:
-        st.session_state.__backup_tree__ = None
     for k in ("pid_counter", "mid_counter"):
         if k not in st.session_state:
             st.session_state[k] = 1
@@ -27,30 +24,45 @@ def _next_mid():
     st.session_state.mid_counter += 1
     return f"M{st.session_state.mid_counter:03d}"
 
-# -------------------- 世代計算 --------------------
+# -------------------- 世代計算（拓撲法，穩定三層） --------------------
 def _compute_generations(tree):
+    """
+    以『父（任一配偶）→ 子』建圖，對所有人物做 Kahn 拓撲層級：
+    - 沒有父母的人 indegree=0，層級=0（祖父母輩）
+    - 每條父→子邊讓子女層級至少為父層+1
+    - 能正確傳遞到孫輩，得到 0/1/2… 多層
+    """
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
-    depth = {}
-    # 預設所有人層級為 0
-    for pid in persons:
-        depth.setdefault(pid, 0)
-    # 由上而下多輪鬆弛：子女層級至少為父母層 + 1
-    changed = True
-    guard = 0
-    while changed and guard < 100:
-        changed = False
-        guard += 1
-        for _, m in marriages.items():
-            sps = m.get("spouses", []) or []
-            kids = m.get("children", []) or []
-            parent_depth = 0
-            for s in sps:
-                parent_depth = max(parent_depth, depth.get(s, 0))
+
+    children_of = {pid: set() for pid in persons}
+    indeg = {pid: 0 for pid in persons}
+
+    for m in marriages.values():
+        sps = [s for s in m.get("spouses", []) if s in persons]
+        kids = [c for c in m.get("children", []) if c in persons]
+        for s in sps:
             for c in kids:
-                if depth.get(c, 0) < parent_depth + 1:
-                    depth[c] = parent_depth + 1
-                    changed = True
+                if c not in children_of[s]:
+                    children_of[s].add(c)
+                    indeg[c] += 1
+
+    depth = {pid: 0 for pid in persons}
+    q = deque([p for p in persons if indeg.get(p, 0) == 0])
+
+    # 若極端資料都不是 indeg=0（理論上不會），保底全部先入列
+    if not q and persons:
+        q = deque(list(persons.keys()))
+
+    while q:
+        u = q.popleft()
+        for v in children_of.get(u, []):
+            if depth[v] < depth[u] + 1:
+                depth[v] = depth[u] + 1
+            indeg[v] -= 1
+            if indeg[v] <= 0:
+                q.append(v)
+
     return depth
 
 # -------------------- 自動排版啟發式（Sugiyama/Barycenter 風格） --------------------
@@ -72,44 +84,35 @@ def _barycenter_order(nodes, pos_ref, tie_key=None):
     return [n for *_, n in bc]
 
 def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps=3):
-    """
-    回傳 (gen_order, group_order, tree)：
-    - 以出生年/姓名作初始排序
-    - 多輪 barycenter（由上而下 + 由下而上）壓交錯
-    - 夫妻群以該層錨點（配偶）在該層位置由左到右排序
-    可選：保留配偶現有左右、子女依出生年排序
-    """
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
     depth = _compute_generations(tree)
 
     # (0) 子女依出生年排序（可選）
     if sort_children_by_birth:
-        for _, m in marriages.items():
+        for m in marriages.values():
             kids = list(m.get("children", []))
-            kids_sorted = sorted(
-                kids,
+            kids.sort(
                 key=lambda k: (
                     _birth_year(persons.get(k, {})) is None,
                     _birth_year(persons.get(k, {})) or 9999,
                     persons.get(k, {}).get("name", ""),
-                ),
+                )
             )
-            m["children"] = kids_sorted
+            m["children"] = kids
 
     # (1) 配偶排序（若不保留，依出生年）
     if not preserve_spouse:
-        for _, m in marriages.items():
+        for m in marriages.values():
             sps = list(m.get("spouses", []))
-            sps_sorted = sorted(
-                sps,
+            sps.sort(
                 key=lambda s: (
                     _birth_year(persons.get(s, {})) is None,
                     _birth_year(persons.get(s, {})) or 9999,
                     persons.get(s, {}).get("name", ""),
-                ),
+                )
             )
-            m["spouses"] = sps_sorted
+            m["spouses"] = sps
 
     # (2) 初始每層排序（出生年、姓名）
     layers = {}
@@ -127,7 +130,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
     adj = {}
     for pid in persons:
         nbrs = set()
-        for _, m in marriages.items():
+        for m in marriages.values():
             if pid in m.get("spouses", []):
                 for c in m.get("children", []):
                     nbrs.add(c)
@@ -182,14 +185,14 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
 
     return gen_order, group_order, tree
 
-# -------------------- Graphviz 繪圖 --------------------
+# -------------------- Graphviz 繪圖（婚姻點與配偶同層、子女下一層） --------------------
 def _graph(tree):
     depth = _compute_generations(tree)
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
     g = Digraph("G", format="svg")
-    g.attr(rankdir="TB", splines="polyline", nodesep="0.2", ranksep="0.7")
+    g.attr(rankdir="TB", splines="polyline", nodesep="0.25", ranksep="0.8")
     g.attr("node", shape="box", style="rounded,filled", fillcolor="white",
            fontname="Noto Sans CJK TC", fontsize="11")
     g.attr("edge", fontname="Noto Sans CJK TC", fontsize="10")
@@ -209,23 +212,19 @@ def _graph(tree):
         # 夫妻與婚姻點「同一層」
         with g.subgraph() as sg:
             sg.attr(rank="same")
-            # 在同層子圖內「建立」婚姻節點（確保它屬於這個 rank）
             sg.node(mid, shape="point", width="0.01", height="0.01", label="")
-            # 夫妻靠近：以隱形邊串起來
             if len(spouses) >= 2:
                 for i in range(len(spouses) - 1):
                     sg.edge(spouses[i], spouses[i + 1],
                             style="invis", weight="150", constraint="true")
-            # 配偶 → 婚姻點：不影響分層（constraint=false），避免把婚姻點拉到上一層
             for s in spouses:
+                # 不影響垂直分層
                 sg.edge(s, mid, dir="none", weight="5", constraint="false")
-
-            # 兩位配偶再加一條隱形邊，穩定橫向位置
             if len(spouses) == 2:
                 s1, s2 = spouses[0], spouses[1]
                 sg.edge(s1, s2, style="invis", weight="200", constraint="true")
 
-        # 婚姻 → 子女：這條邊決定下一層；minlen 拉開垂直距離
+        # 婚姻 → 子女（決定下一層）
         if len(children) >= 2:
             with g.subgraph() as kg:
                 kg.attr(rank="same")
@@ -236,7 +235,6 @@ def _graph(tree):
             g.edge(mid, c, weight="3", minlen="1")
 
     # ---- 強制分層（依演算法算出的世代）----
-    # 這段把同一代的人放同一個 rank，保證至少會分出 0/1/2... 多層
     levels = sorted(set(depth.values()))
     for d in levels:
         members = [pid for pid, lv in depth.items() if lv == d]
@@ -632,7 +630,6 @@ def _ui_import_export(t):
                         try:
                             data = json.loads(file.getvalue().decode("utf-8"))
                             if isinstance(data, dict) and "persons" in data and "marriages" in data:
-                                st.session_state.__backup_tree__ = copy.deepcopy(st.session_state.tree)
                                 st.session_state.tree = data
                                 st.success("匯入成功！")
                                 st.rerun()  # 立刻刷新，讓上方區塊用新資料重繪
@@ -641,22 +638,12 @@ def _ui_import_export(t):
                         except Exception as e:
                             st.error(f"匯入失敗：{e}")
 
-            # 復原／清空
-            c3, c4 = st.columns([1, 1])
-            if c3.button("復原到匯入前", disabled=st.session_state.__backup_tree__ is None):
-                if st.session_state.__backup_tree__ is None:
-                    st.warning("沒有可復原的快照。")
-                else:
-                    st.session_state.tree = copy.deepcopy(st.session_state.__backup_tree__)
-                    st.success("已復原到匯入前的資料。")
-                    st.session_state.__backup_tree__ = None
-                    st.rerun()
-            with c4.expander("⚠️ 清空所有資料", expanded=False):
+            # 只保留「清空所有資料」
+            with st.expander("⚠️ 清空所有資料", expanded=False):
                 if st.button("我確定要清空（不可復原）"):
                     st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
                     st.session_state.gen_order = {}
                     st.session_state.group_order = {}
-                    st.session_state.__backup_tree__ = None
                     st.success("資料已清空")
                     st.rerun()
 
@@ -680,7 +667,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree autosuggest • r7")  # 版本戳記（確認載入新檔）
+    st.caption("familytree autosuggest • r8")  # 版本戳記（確認載入新檔）
 
 if __name__ == "__main__":
     st.set_page_config(page_title="家族樹", layout="wide")
