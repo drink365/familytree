@@ -95,6 +95,8 @@ def _compute_generations(tree):
 
 def _graph(tree):
     depth = _compute_generations(tree)
+    persons = tree.get("persons", {})
+    marriages = tree.get("marriages", {})
 
     g = Digraph("G", format="svg")
     g.attr(rankdir="TB", nodesep="0.35", ranksep="0.6")
@@ -131,11 +133,11 @@ def _graph(tree):
                 s1, s2 = spouses[0], spouses[1]
                 sg.edge(s1, mid, style="invis", weight="200")
                 sg.edge(mid, s2, style="invis", weight="200")
-                # ## SPOUSE_ORDER: enforce left-to-right spouse order to reduce crossings
+                # Spouse left-to-right ordering (invisible)
                 if len(spouses) >= 2:
                     for i in range(len(spouses)-1):
                         sg.edge(spouses[i], spouses[i+1], style="invis", weight="150", constraint="true")
-    
+        
 
         # Visible horizontal line between first two spouses
         if len(spouses) >= 2:
@@ -161,23 +163,22 @@ def _graph(tree):
                     g.edge(mid, c, label=lbl)
                 else:
                     g.edge(mid, c)
-        # Enforce sibling left-to-right order to reduce edge crossings
+        # Enforce sibling left-to-right order to reduce crossings
         kids = list(m.get("children", []))
         if len(kids) >= 2:
             with g.subgraph() as kg:
                 kg.attr(rank="same")
                 for i in range(len(kids)-1):
                     kg.edge(kids[i], kids[i+1], style="invis", weight="50", constraint="true")
-        
+    
 
     
-    # ---- Global same-generation ordering (manual) ----
+    # ---- Global same-generation ordering ----
     try:
         gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
     except Exception:
         gen_order = {}
     if gen_order:
-        # Build per-generation buckets
         gens = {}
         for pid, d in depth.items():
             gens.setdefault(d, []).append(pid)
@@ -195,35 +196,31 @@ def _graph(tree):
     except Exception:
         group_order = {}
     if group_order:
-        # Build mapping depth -> mids whose spouses are at that depth
-        depth_by_pid = depth  # already computed
         for d_str, mids in group_order.items():
             try:
                 d = int(d_str)
             except Exception:
                 continue
-            # Filter valid mids present in tree
             mids_valid = [mid for mid in mids if mid in marriages]
-            # Map each mid to an anchor spouse id (first spouse that exists at this depth; fallback to first existing spouse)
             anchors = []
             for mid in mids_valid:
                 spouses = marriages.get(mid, {}).get("spouses", [])
+                # anchor spouse is the first one in this layer; fallback to first spouse
                 anchor = None
                 for s in spouses:
-                    if depth_by_pid.get(s) == d:
+                    if depth.get(s) == d:
                         anchor = s
                         break
                 if anchor is None and spouses:
                     anchor = spouses[0]
                 if anchor is not None and anchor in persons:
                     anchors.append(anchor)
-            # Create invisible ordering edges among anchors
             if len(anchors) >= 2:
                 with g.subgraph() as grp:
                     grp.attr(rank="same")
                     for i in range(len(anchors)-1):
                         grp.edge(anchors[i], anchors[i+1], style="invis", weight="90", constraint="true")
-    return g
+return g
 
 
 
@@ -297,7 +294,8 @@ def render():
             # 離婚狀態
             if mid:
                 div_ck = st.checkbox("該婚姻已離婚？", value=bool(t["marriages"][mid].get("divorced", False)))
-                t["marriages"][mid]["divorced"] = bool(div_ck)
+
+            t["marriages"][mid]["divorced"] = bool(div_ck)
 
             st.markdown("**配偶順序（可調整）**")
             if mid:
@@ -327,6 +325,7 @@ def render():
                             t["marriages"][mid]["spouses"] = sp
                             st.rerun()
             st.divider()
+                    t["marriages"][mid]["divorced"] = bool(div_ck)
             if mid:
                 c1,c2,c3 = st.columns([2,1,1])
                 child = c1.selectbox(
@@ -373,49 +372,6 @@ def render():
                             st.rerun()
     
     
-
-    with st.expander("②-2 同層排序（跨家族移位｜解決無父母者定位）", expanded=False):
-        depth_map = _compute_generations(t)
-        if not depth_map:
-            st.info("請先建立至少一個人物與關係")
-        else:
-            gens = sorted(set(depth_map.values()))
-            def _gen_label(d):
-                count = sum(1 for _p in depth_map if depth_map[_p]==d)
-                return f"第 {d} 層（{count} 人）"
-            gen_sel = st.selectbox("選擇世代", gens, format_func=_gen_label, key="sel_gen_same_layer")
-            # Compose current order
-            all_in_layer = [p for p,d in depth_map.items() if d==gen_sel]
-            current = list(st.session_state.gen_order.get(str(gen_sel), []))
-            order = [p for p in current if p in all_in_layer] + [p for p in all_in_layer if p not in current]
-
-            # UI list with controls
-            for i, pid in enumerate(order):
-                nm = t["persons"].get(pid,{}).get("name", pid)
-                cols = st.columns([6,1,1,1,1])
-                cols[0].write(f"{i+1}. {pid}｜{nm}")
-                if cols[1].button("↑", key=f"gen_up_{gen_sel}_{pid}") and i>0:
-                    order[i-1], order[i] = order[i], order[i-1]
-                    st.session_state.gen_order[str(gen_sel)] = order
-                    st.rerun()
-                if cols[2].button("↓", key=f"gen_dn_{gen_sel}_{pid}") and i < len(order)-1:
-                    order[i+1], order[i] = order[i], order[i+1]
-                    st.session_state.gen_order[str(gen_sel)] = order
-                    st.rerun()
-                if cols[3].button("置頂", key=f"gen_top_{gen_sel}_{pid}") and i>0:
-                    moved = order.pop(i)
-                    order.insert(0, moved)
-                    st.session_state.gen_order[str(gen_sel)] = order
-                    st.rerun()
-                if cols[4].button("置底", key=f"gen_bot_{gen_sel}_{pid}") and i < len(order)-1:
-                    moved = order.pop(i)
-                    order.append(moved)
-                    st.session_state.gen_order[str(gen_sel)] = order
-                    st.rerun()
-
-            st.caption("小提醒：此排序會讓同層人物依序靠在一起，適用於把「沒有父母記錄的人」排到特定親友旁邊（例如把『硯文』排到『榮惠』右側）。")
-
-
     with st.expander("②-3 夫妻群排序（整代群組）", expanded=False):
         depth_map = _compute_generations(t)
         marriages = t.get("marriages", {})
@@ -427,7 +383,6 @@ def render():
             def _glabel(d):
                 return f"第 {d} 層"
             gsel = st.selectbox("選擇世代（以配偶所在層為準）", gens, format_func=_glabel, key="sel_group_layer")
-            # 收集該層的婚姻群（任一配偶在該層）
             mids_in_layer = []
             for mid, m in marriages.items():
                 spouses = m.get("spouses", [])
@@ -436,10 +391,8 @@ def render():
             if not mids_in_layer:
                 st.info("此層沒有可排序的夫妻群")
             else:
-                # 目前順序：先採用使用者儲存的，剩下的按 mid 排
                 saved = list(st.session_state.group_order.get(str(gsel), []))
                 order = [mid for mid in saved if mid in mids_in_layer] + [mid for mid in mids_in_layer if mid not in saved]
-                # 顯示每個群組
                 def _mfmt(mid):
                     sps = marriages.get(mid, {}).get("spouses", [])
                     names = [persons.get(s,{}).get("name", s) for s in sps]
@@ -466,63 +419,100 @@ def render():
                         order.append(moved)
                         st.session_state.group_order[str(gsel)] = order
                         st.rerun()
-                st.caption("提示：此排序會把同層的『夫妻群（以其中一位配偶為錨點）』依序排列，適合把整個家族群向左/向右移動。搭配『同層排序』與『子女排序』可得到最佳視覺效果。")
-    
-    with st.expander("③ 家族樹視覺化", expanded=True):
+                st.caption("提示：此排序會把同層的『夫妻群（以其中一位配偶為錨點）』依序排列，適合把整個家族群向左/向右移動。")
+
+    with st.expander("②-2 同層排序", expanded=False):
+        depth_map = _compute_generations(t)
+        if not depth_map:
+            st.info("請先建立至少一個人物與關係")
+        else:
+            gens = sorted(set(depth_map.values()))
+            def _gen_label(d):
+                count = sum(1 for _p in depth_map if depth_map[_p]==d)
+                return f"第 {d} 層（{count} 人）"
+            gen_sel = st.selectbox("選擇世代", gens, format_func=_gen_label, key="sel_gen_same_layer")
+            all_in_layer = [p for p,d in depth_map.items() if d==gen_sel]
+            current = list(st.session_state.gen_order.get(str(gen_sel), []))
+            order = [p for p in current if p in all_in_layer] + [p for p in all_in_layer if p not in current]
+
+            for i, pid in enumerate(order):
+                nm = t["persons"].get(pid,{}).get("name", pid)
+                cols = st.columns([6,1,1,1,1])
+                cols[0].write(f"{i+1}. {pid}｜{nm}")
+                if cols[1].button("↑", key=f"gen_up_{gen_sel}_{pid}") and i>0:
+                    order[i-1], order[i] = order[i], order[i-1]
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+                if cols[2].button("↓", key=f"gen_dn_{gen_sel}_{pid}") and i < len(order)-1:
+                    order[i+1], order[i] = order[i], order[i+1]
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+                if cols[3].button("置頂", key=f"gen_top_{gen_sel}_{pid}") and i>0:
+                    moved = order.pop(i)
+                    order.insert(0, moved)
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+                if cols[4].button("置底", key=f"gen_bot_{gen_sel}_{pid}") and i < len(order)-1:
+                    moved = order.pop(i)
+                    order.append(moved)
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+            st.caption("小提醒：此排序會讓同層人物依序靠在一起，適用於把「沒有父母記錄的人」排到特定親友旁邊。")
+with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
+
+
     
-    
-        
-    
+
     with st.expander("④ 匯入 / 匯出", expanded=True):
-            # 匯出
-            st.download_button(
-                "⬇️ 下載 JSON",
-                data=json.dumps(t, ensure_ascii=False, indent=2),
-                file_name="family_tree.json",
-                mime="application/json",
-                key="btn_dl_json",
-            )
-    
-            # 匯入（先上傳，再按「執行匯入」）
-            upl = st.file_uploader("選擇 JSON 檔", type=["json"], key="ft_upload_json")
-            do_import = st.button("⬆️ 執行匯入", use_container_width=True, key="btn_do_import")
-    
-            if do_import:
-                if upl is None:
-                    st.warning("請先選擇要匯入的 JSON 檔。")
-                else:
-                    try:
-                        raw = upl.getvalue()
-                        import hashlib
-                        md5 = hashlib.md5(raw).hexdigest()
-                        if st.session_state.get("ft_last_import_md5") == md5:
-                            st.info("此檔已匯入過。若要重新匯入，請先更改檔案內容或重新選擇檔案。")
-                        else:
-                            data = json.loads(raw.decode("utf-8"))
-                            if not isinstance(data, dict):
-                                raise ValueError("檔案格式錯誤（非 JSON 物件）")
-                            data.setdefault("persons", {})
-                            data.setdefault("marriages", {})
-                            data.setdefault("child_types", {})
-    
-                            # 重新設定計數器，避免新建 ID 衝突
-                            def _max_id(prefix, keys):
-                                mx = 0
-                                for k in keys:
-                                    if isinstance(k, str) and k.startswith(prefix):
-                                        try:
-                                            mx = max(mx, int(k[len(prefix):] or "0"))
-                                        except Exception:
-                                            pass
-                                return mx
-    
-                            st.session_state.tree = data
-                            st.session_state["ft_last_import_md5"] = md5
-                            st.session_state["pid_counter"] = _max_id("P", data["persons"].keys()) + 1
-                            st.session_state["mid_counter"] = _max_id("M", data["marriages"].keys()) + 1
-    
-                            st.session_state["ft_flash_msg"] = "已匯入"
-                            st.rerun()
-                    except Exception as e:
-                        st.error(f"匯入失敗：{e}")
+        # 匯出
+        st.download_button(
+            "⬇️ 下載 JSON",
+            data=json.dumps(t, ensure_ascii=False, indent=2),
+            file_name="family_tree.json",
+            mime="application/json",
+            key="btn_dl_json",
+        )
+
+        # 匯入（先上傳，再按「執行匯入」）
+        upl = st.file_uploader("選擇 JSON 檔", type=["json"], key="ft_upload_json")
+        do_import = st.button("⬆️ 執行匯入", use_container_width=True, key="btn_do_import")
+
+        if do_import:
+            if upl is None:
+                st.warning("請先選擇要匯入的 JSON 檔。")
+            else:
+                try:
+                    raw = upl.getvalue()
+                    import hashlib
+                    md5 = hashlib.md5(raw).hexdigest()
+                    if st.session_state.get("ft_last_import_md5") == md5:
+                        st.info("此檔已匯入過。若要重新匯入，請先更改檔案內容或重新選擇檔案。")
+                    else:
+                        data = json.loads(raw.decode("utf-8"))
+                        if not isinstance(data, dict):
+                            raise ValueError("檔案格式錯誤（非 JSON 物件）")
+                        data.setdefault("persons", {})
+                        data.setdefault("marriages", {})
+                        data.setdefault("child_types", {})
+
+                        # 重新設定計數器，避免新建 ID 衝突
+                        def _max_id(prefix, keys):
+                            mx = 0
+                            for k in keys:
+                                if isinstance(k, str) and k.startswith(prefix):
+                                    try:
+                                        mx = max(mx, int(k[len(prefix):] or "0"))
+                                    except Exception:
+                                        pass
+                            return mx
+
+                        st.session_state.tree = data
+                        st.session_state["ft_last_import_md5"] = md5
+                        st.session_state["pid_counter"] = _max_id("P", data["persons"].keys()) + 1
+                        st.session_state["mid_counter"] = _max_id("M", data["marriages"].keys()) + 1
+
+                        st.session_state["ft_flash_msg"] = "已匯入"
+                        st.rerun()
+                except Exception as e:
+                    st.error(f"匯入失敗：{e}")
