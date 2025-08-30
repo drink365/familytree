@@ -74,6 +74,44 @@ with st.sidebar:
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
+
+st.markdown(
+    """
+    <style>
+    /* ===== Mobile sidebar tuning ===== */
+    @media (max-width: 900px) {
+      section[data-testid="stSidebar"] {
+        padding-top: 6px !important;
+      }
+      section[data-testid="stSidebar"] .stButton > button {
+        padding: 8px 10px !important;
+        font-size: 0.95rem !important;
+        border-radius: 12px !important;
+        margin-bottom: 10px !important;
+      }
+      section[data-testid="stSidebar"] h2, 
+      section[data-testid="stSidebar"] h3 {
+        font-size: 1.05rem !important;
+        margin: 6px 0 4px 0 !important;
+      }
+      section[data-testid="stSidebar"] p {
+        font-size: 0.9rem !important;
+        line-height: 1.2rem !important;
+      }
+    }
+    @media (max-width: 480px) {
+      section[data-testid="stSidebar"] .stButton > button {
+        padding: 8px 10px !important;
+        font-size: 0.9rem !important;
+      }
+      section[data-testid="stSidebar"] p {
+        font-size: 0.85rem !important;
+      }
+    }
+    </style>
+    """, unsafe_allow_html=True
+)
+
 def nav_button(label: str, page_key: str, icon: str):
     if st.sidebar.button(f"{icon} {label}", use_container_width=True, key=f"nav_{page_key}"):
         navigate(page_key)
