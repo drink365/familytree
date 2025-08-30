@@ -1,12 +1,16 @@
 
 import streamlit as st, json
+
 from datetime import datetime
+
+def navigate(p):
+    st.session_state['page']=p
+
+
 st.set_page_config(page_title="影響力｜AI 傳承規劃平台", page_icon="logo2.png", layout="wide", initial_sidebar_state="expanded")
 if 'page' not in st.session_state:
     st.session_state['page']='home'
 page = st.session_state.get('page','home')
-_BRAND = json.load(open("brand.json", "r", encoding="utf-8"))
-BRAND_PRIMARY = _BRAND["PRIMARY"]; BRAND_BG = _BRAND["BG"]
 
 # === Sidebar Card-Style Nav (non-intrusive) ===
 st.sidebar.markdown("## 導覽")
@@ -16,6 +20,11 @@ def nav_card(label, page_key, icon):
     st.markdown("---")
 for label, key, icon in [("首頁","home","🏠"),("家族樹","familytree","🌳"),("法稅傳承","legacy","🏛️"),("稅務工具","tax","🧾"),("保單策略","policy","📦"),("價值觀探索","values","💬"),("關於我們","about","👩‍💼")]:
     nav_card(label, key, icon)
+
+
+_BRAND = json.load(open("brand.json", "r", encoding="utf-8"))
+BRAND_PRIMARY = _BRAND["PRIMARY"]; BRAND_BG = _BRAND["BG"]
+
 
 st.markdown("""
 <style>
