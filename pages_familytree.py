@@ -480,6 +480,46 @@ with st.expander("②-0 一鍵自動建議排序", expanded=False):
         st.success("已套用建議排序，您可再用 ②-1/②-2/②-3 做微調。")
         st.rerun()
 
+
+with st.expander("②-1 子女排序（每段婚姻的局部排序）", expanded=False):
+    if not t.get("marriages"):
+        st.info("目前沒有婚姻資料。")
+    else:
+        # 只列出有兩名以上子女的婚姻，才需要排序
+        candidates = [mid for mid,m in t["marriages"].items() if len(m.get("children", [])) >= 2]
+        if not candidates:
+            st.info("目前沒有需要排序的子女（每段婚姻的子女少於 2 位）。")
+        else:
+            def _fmt(mid):
+                sps = t["marriages"][mid].get("spouses", [])
+                names = [t["persons"].get(s,{}).get("name", s) for s in sps]
+                return f"{mid}｜" + (" × ".join(names) if names else "（未登記配偶）")
+            mid_sel = st.selectbox("選擇婚姻", candidates, format_func=_fmt, key="kid_sort_mid")
+            kids = list(t["marriages"][mid_sel].get("children", []))
+            for i, kid in enumerate(kids):
+                nm = t["persons"].get(kid,{}).get("name", kid)
+                cols = st.columns([6,1,1,1,1])
+                cols[0].write(f"{i+1}. {kid}｜{nm}")
+                if cols[1].button("↑", key=f"kid_up_{mid_sel}_{kid}") and i>0:
+                    kids[i-1], kids[i] = kids[i], kids[i-1]
+                    t["marriages"][mid_sel]["children"] = kids
+                    st.rerun()
+                if cols[2].button("↓", key=f"kid_dn_{mid_sel}_{kid}") and i < len(kids)-1:
+                    kids[i+1], kids[i] = kids[i], kids[i+1]
+                    t["marriages"][mid_sel]["children"] = kids
+                    st.rerun()
+                if cols[3].button("置頂", key=f"kid_top_{mid_sel}_{kid}") and i>0:
+                    moved = kids.pop(i)
+                    kids.insert(0, moved)
+                    t["marriages"][mid_sel]["children"] = kids
+                    st.rerun()
+                if cols[4].button("置底", key=f"kid_bot_{mid_sel}_{kid}") and i < len(kids)-1:
+                    moved = kids.pop(i)
+                    kids.append(moved)
+                    t["marriages"][mid_sel]["children"] = kids
+                    st.rerun()
+            st.caption("小提醒：兄弟姊妹維持相鄰、順序一致，有助於減少交錯。")
+
 with st.expander("②-2 同層排序", expanded=False):
     depth_map = _compute_generations(t)
     if not depth_map:
@@ -623,3 +663,4 @@ with st.expander("②-3 夫妻群排序（整代群組）", expanded=False):
                         st.rerun()
                 except Exception as e:
                     st.error(f"匯入失敗：{e}")
+    st.caption("familytree autosuggest • 2025-08-30 11:12 r4")
