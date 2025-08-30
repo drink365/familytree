@@ -49,7 +49,7 @@ with st.sidebar:
     # 左側固定顯示 logo2.png（若不存在則退回 LOGO_PATH）
     sidebar_logo = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
     if sidebar_logo:
-        st.image(sidebar_logo, use_container_width=False, width=160)
+        st.image(sidebar_logo, use_container_width=False, width=80)
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -96,12 +96,10 @@ st.markdown(
 
 # -------------------- Pages --------------------
 def render_home():
-    # 置中顯示首頁橫式 Logo（logo.png，寬 200）
+    # 首頁 LOGO：橫式置左顯示（logo.png，寬 200）
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo:
-        c1, c2, c3 = st.columns([1,2,1])
-        with c2:
-            st.image(main_logo, use_container_width=False, width=200)
+        st.image(main_logo, use_container_width=False, width=200)
 
     TAGLINE = "說清楚，做得到"
     SUBLINE = "把傳承變簡單。"
