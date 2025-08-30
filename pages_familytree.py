@@ -1,19 +1,20 @@
 import json
-from collections import defaultdict, deque
-from typing import Dict, List, Set
+from typing import Dict, List
 
 import streamlit as st
 from graphviz import Digraph
 
 # =============================
-# pages_familytree.py — 分代清楚、不交錯（婚姻節點 + 自動世代計算 + render()）
+# pages_familytree.py — 強制分層（世代一定分開）
 # =============================
-# - 以 Graphviz dot 的分層排版，並加入「世代(rank)」約束，強化父母在上、子女在下。
-# - 配偶以水平線相連（婚姻節點），子女從婚姻節點垂直往下延伸。
-# - 支援多段婚姻；以 crossing-minimization + rank 約束儘量減少交錯。
-# - 內建 JSON 匯入/匯出與匿名示範資料。
+# 方式：
+# 1) 仍採「婚姻節點」：配偶水平、子女由婚姻點往下。
+# 2) 以 **不可見父母→子女邊**（style=invis, constraint=true, weight 高, minlen>=2）
+#    強制 Graphviz 在層級上把父母放在子女之上；
+#    同時 mnode→child 邊也保留 constraint=true，讓子女往下落位。
+# 3) 不再依賴事前計算世代；任何資料都會正確分層。
 
-# ---------- 匿名示範資料（你可改為自己的匯入資料） ---------- #
+# ---------- 匿名示範資料（可改為你的匯入資料） ---------- #
 DEMO_FAMILY: Dict = {
     "people": {
         "p1": {"name": "人甲", "gender": "M"},
@@ -41,7 +42,6 @@ FILL_MALE = "#F7FBFF"
 FILL_FEMALE = "#F3F6FF"
 
 
-# ---------- 輔助：性別正規化 ---------- #
 def normalize_gender(val: str) -> str:
     v = (val or "").strip().lower()
     if v in ("f", "female", "女", "女性"):
@@ -49,67 +49,7 @@ def normalize_gender(val: str) -> str:
     return "M"
 
 
-# ---------- 計算世代（層級） ---------- #
-# 規則：
-# - 若某人沒有父母（未出現在任何 children）→ 視為根（世代=0）。
-# - 子女的世代 = min(父母世代) + 1（若有多段婚姻，取最小以保持保守層級）。
-
-def compute_generations(family: Dict) -> Dict[str, int]:
-    marriages: List[Dict] = family.get("marriages", [])
-
-    parents_of: Dict[str, Set[str]] = defaultdict(set)  # child -> {parent ids}
-    all_people: Set[str] = set(family.get("people", {}).keys())
-
-    for m in marriages:
-        spouses = m.get("spouses", [])
-        children = m.get("children", [])
-        if len(spouses) == 2:
-            a, b = spouses
-            for c in children:
-                parents_of[c].update([a, b])
-
-    children_all = set(parents_of.keys())
-    # roots: never a child in any marriage
-    roots = sorted(list(all_people - children_all))
-
-    gen: Dict[str, int] = {p: 0 for p in roots}
-
-    # 建立親子圖（有向：parent -> child）
-    graph: Dict[str, List[str]] = defaultdict(list)
-    indeg: Dict[str, int] = defaultdict(int)
-
-    for c, parents in parents_of.items():
-        for p in parents:
-            graph[p].append(c)
-            indeg[c] += 1
-            all_people.update([p, c])
-
-    # 對未出現在任何邊上的人也要在 gen 給初值
-    for p in all_people:
-        gen.setdefault(p, 0)
-
-    # 拓撲式 BFS：從 roots 往下推層級
-    q = deque(roots)
-    visited = set(roots)
-    while q:
-        u = q.popleft()
-        for v in graph.get(u, []):
-            # v 可能有兩個父母，取更小的父母層級 + 1
-            new_g = gen[u] + 1
-            if v not in gen:
-                gen[v] = new_g
-            else:
-                gen[v] = min(gen[v], new_g)
-            if v not in visited:
-                visited.add(v)
-                q.append(v)
-
-    return gen
-
-
-# ---------- 建圖（套用世代 rank） ---------- #
-
-def build_graph(family: Dict, nodesep: float = 0.5, ranksep: float = 0.9, ortho: bool = True) -> Digraph:
+def build_graph(family: Dict, nodesep: float = 0.5, ranksep: float = 1.0, ortho: bool = True) -> Digraph:
     g = Digraph("FamilyTree", graph_attr=dict(
         rankdir="TB",
         nodesep=str(nodesep),
@@ -125,28 +65,14 @@ def build_graph(family: Dict, nodesep: float = 0.5, ranksep: float = 0.9, ortho:
     people = family.get("people", {})
     marriages: List[Dict] = family.get("marriages", [])
 
-    # 計算每個人的世代
-    generations = compute_generations(family)
-    # 將人依世代分組
-    level_people: Dict[int, List[str]] = defaultdict(list)
-    for pid in people.keys():
-        level_people[generations.get(pid, 0)].append(pid)
-
-    # 先把所有人物節點畫好
+    # 1) 人物節點
     for pid, info in people.items():
         name = info.get("name", pid)
         gender = normalize_gender(info.get("gender", ""))
         fill = FILL_FEMALE if gender == "F" else FILL_MALE
         g.node(pid, label=name, fillcolor=fill)
 
-    # 依世代建立 rank=same 子圖，強制同代同層
-    for lvl, ids in sorted(level_people.items()):
-        with g.subgraph(name=f"cluster_lvl_{lvl}") as s:
-            s.attr(rank="same")
-            for pid in ids:
-                s.node(pid)
-
-    # 婚姻節點：放在配偶所在世代（取較小的那一方），以維持水平
+    # 2) 婚姻 + 子女
     for i, m in enumerate(marriages):
         spouses = m.get("spouses", [])
         children = m.get("children", [])
@@ -156,28 +82,27 @@ def build_graph(family: Dict, nodesep: float = 0.5, ranksep: float = 0.9, ortho:
         mid = m.get("id") or f"m{i+1}"
         mnode = f"_m_{mid}"
 
-        level = min(generations.get(a, 0), generations.get(b, 0))
-
-        # 婚姻點本身（小圓點）
+        # 婚姻節點（小圓點）
         g.node(mnode, shape="point", width="0.02", height="0.02", label="", color="#6E7E8A", penwidth="1.2")
-        # 使婚姻點也在該層
-        with g.subgraph(name=f"cluster_mar_{mid}") as s:
-            s.attr(rank="same")
-            s.node(mnode)
 
-        # 用隱形邊固定左右順序，讓 a - mnode - b 並排
+        # 讓 a, mnode, b 在同層（水平配偶線）
         with g.subgraph(name=f"cluster_spouse_{mid}") as s:
             s.attr(rank="same")
-            s.edge(a, mnode, style="invis", weight="100", constraint="false")
-            s.edge(mnode, b, style="invis", weight="100", constraint="false")
+            # 用隱形邊固定順序 a - m - b（不影響分層）
+            s.edge(a, mnode, style="invis", weight="50", constraint="false")
+            s.edge(mnode, b, style="invis", weight="50", constraint="false")
 
-        # 真實的配偶線（水平）
-        g.edge(a, mnode, weight="6", constraint="false")
-        g.edge(b, mnode, weight="6", constraint="false")
+        # 真實配偶線（保持水平；不參與分層）
+        g.edge(a, mnode, weight="4", constraint="false")
+        g.edge(b, mnode, weight="4", constraint="false")
 
-        # 子女自婚姻點往下
+        # 子女由婚姻節點往下（參與分層、最少一階）
         for c in children:
-            g.edge(mnode, c, weight="3")
+            g.edge(mnode, c, weight="6", constraint="true", minlen="1")
+            # 關鍵：加「不可見父母→子女」邊，強制父母在子女之上
+            # 這兩條邊只用來約束層級，不顯示
+            g.edge(a, c, style="invis", constraint="true", weight="100", minlen="2")
+            g.edge(b, c, style="invis", constraint="true", weight="100", minlen="2")
 
     return g
 
@@ -206,9 +131,9 @@ def _import_family_from_uploader(key: str = "family_upload") -> Dict:
 # ---------- 主渲染 ---------- #
 
 def render():
-    st.markdown("## ③ 家族樹視覺化（分代清楚 / 減少交錯）")
+    st.markdown("## ③ 家族樹視覺化（強制分層 / 配偶水平 / 子女垂直）")
 
-    # 取得家族資料（優先用 session_state）
+    # 取得資料（優先用 session_state）
     if "family" not in st.session_state or not st.session_state.get("family"):
         st.session_state["family"] = DEMO_FAMILY
     family: Dict = st.session_state.get("family", DEMO_FAMILY)
@@ -240,8 +165,8 @@ def render():
         _export_family_download_btn(family)
 
         st.subheader("版面設定")
-        nodesep = st.slider("同層距離 nodesep", 0.2, 1.5, 0.5, 0.1)
-        ranksep = st.slider("世代間距 ranksep", 0.4, 2.0, 0.9, 0.1)
+        nodesep = st.slider("同層距離 nodesep", 0.2, 2.0, 0.5, 0.1)
+        ranksep = st.slider("層距 ranksep", 0.4, 2.5, 1.0, 0.1)
         ortho = st.checkbox("直角連線 (splines=ortho)", value=True)
 
     # 畫圖
@@ -262,10 +187,10 @@ def render():
               ]
             }
             ```
-            - **配偶水平連線**：在兩人之間建立小圓點「婚姻節點」，線不再往上彎。
-            - **子女垂直向下**：所有子女從婚姻節點往下延伸，層次清楚。
-            - **世代固定**：系統自動計算世代，將同代放在同一層，能夠明顯降低交錯。
-            - **再婚/多婚姻**：同一人可出現在多筆 `marriages` 的 `spouses` 中。
+            - **強制分層**：以不可見的「父母→子女」邊（`style=invis, constraint=true, minlen>=2`）確保父母在上、子女在下。
+            - **配偶水平**：以婚姻節點連接配偶，線條不再上彎。
+            - **子女垂直**：所有子女自婚姻節點往下延伸。
+            - 支援再婚/多婚姻。
             """
         )
 
