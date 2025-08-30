@@ -130,17 +130,14 @@ def _ensure_adjacent_inside(lst, a, b):
     if abs(ia - ib) == 1:
         return
     lst.pop(ib)
-    ia = lst.index(a)  # a 的位置可能因 pop 而變動
+    ia = lst.index(a)
     lst.insert(ia + 1, b)
 
 def _are_clusters_adjacent(cluster_ids, ca, cb):
     return ca in cluster_ids and cb in cluster_ids and abs(cluster_ids.index(ca) - cluster_ids.index(cb)) == 1
 
 def _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors):
-    """
-    嘗試在不破壞既有鄰接的前提下，讓群 ca 與 cb 成為鄰居；成功/已相鄰回 True。
-    若無法（兩側都鎖死），回 False，讓呼叫端決定是否強制。
-    """
+    """不破壞已鎖定鄰接時，盡量讓 ca、cb 相鄰；若無法則回 False。"""
     if ca == cb or ca not in cluster_ids or cb not in cluster_ids:
         return False
     ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
@@ -152,7 +149,7 @@ def _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors):
     right_locked = (ia + 1 < len(cluster_ids) and cluster_ids[ia + 1] in placed_neighbors[ca])
 
     if left_locked and right_locked:
-        return False  # 交給強制策略
+        return False
 
     prefer_side = "left" if ib < ia else "right"
     if prefer_side == "left" and left_locked:
@@ -160,7 +157,6 @@ def _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors):
     if prefer_side == "right" and right_locked:
         prefer_side = "left"
 
-    # 把 cb 抽出插到 ca 的 prefer_side
     cluster_ids.pop(ib)
     if ib < ia:
         ia -= 1
@@ -171,7 +167,7 @@ def _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors):
     return True
 
 def _force_clusters_adjacent(cluster_ids, ca, cb):
-    """不顧鎖定，強制把 cb 移到 ca 旁邊（選較近側），保證相鄰。"""
+    """強制把 cb 移到 ca 旁，保證相鄰。"""
     if ca == cb or ca not in cluster_ids or cb not in cluster_ids:
         return
     ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
@@ -187,10 +183,8 @@ def _force_clusters_adjacent(cluster_ids, ca, cb):
 
 def _stable_cluster_order(d, clusters, marriages, persons):
     """
-    以「既有群序」為基底，將「新群」依父母錨點插入，避免整層重排。
-    回傳 cluster_ids。
+    以「既有群序」為基底，僅將「新群」依父母錨點插入，避免整層重排。
     """
-    # 取上一版本此層的群序（由 gen_order[d] 推回群）
     prior = st.session_state.gen_order.get(str(d), [])
     prior_cluster_seq = []
     seen = set()
@@ -200,17 +194,13 @@ def _stable_cluster_order(d, clusters, marriages, persons):
             prior_cluster_seq.append(cid)
             seen.add(cid)
 
-    # 目前存在的群
     now_ids = list(clusters.keys())
-
-    # 先保留既有群的相對順序
     base = [cid for cid in prior_cluster_seq if cid in now_ids]
     existing = set(base)
 
-    # 計算父母錨點（在上一層的位置平均）
     parent_pos = {p: i for i, p in enumerate(st.session_state.gen_order.get(str(d - 1), []))}
     def anchor(cid):
-        if not cid.startswith("M"):  # orphans
+        if not cid.startswith("M"):
             return float("inf")
         m = marriages.get(cid)
         if not m:
@@ -218,22 +208,17 @@ def _stable_cluster_order(d, clusters, marriages, persons):
         pts = [parent_pos.get(s) for s in (m.get("spouses", []) or []) if parent_pos.get(s) is not None]
         return sum(pts)/len(pts) if pts else float("inf")
 
-    # 將新群依錨點插入（使用穩定插入，不打亂 base 內既有相對序）
     new_ids = [cid for cid in now_ids if cid not in existing]
     new_ids.sort(key=lambda cid: anchor(cid))
     for nid in new_ids:
         a = anchor(nid)
-        # 找到第一個 anchor 大於等於 a 的位置插入；若都小於 → append
         placed = False
         for i, cid in enumerate(base):
             if anchor(cid) >= a:
-                base.insert(i, nid)
-                placed = True
-                break
+                base.insert(i, nid); placed = True; break
         if not placed:
             base.append(nid)
 
-    # 若這一層本來就沒有 prior，退回到 anchors 的排序（穩定）
     if not prior_cluster_seq:
         base = sorted(now_ids, key=lambda cid: (anchor(cid), cid))
 
@@ -241,18 +226,16 @@ def _stable_cluster_order(d, clusters, marriages, persons):
 
 def _apply_rules(tree, focus_child=None):
     """
-    規則保證：
-      1) 建立婚姻後，同層配偶必相鄰（僅在群內調整到邊界，不打散手足群）
-      2) 同父母的小孩固定成群（sibling cluster）
-      3) 新增子女：無論其配偶是否有父母，兩個家庭先靠攏，夫妻放在兩群交界
-      4) 全層婚姻兩階段：先防拆靠攏；再強制靠攏補救，確保每對配偶都相鄰
-      5) 新群採「穩定插入」，避免既有群被重排（解決你看到忠義被擠到中間）
+    1) 建立婚姻→配偶相鄰（不打散同父母子女群）
+    2) 同父母子女成群
+    3) 新增子女→如其配偶存在，兩家庭靠攏，夫妻放在兩群交界
+    4) 全層婚姻：防拆靠攏 → 強制靠攏補救
+    5) 群序使用「穩定插入」避免既有群被重排
     """
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
     depth     = _compute_generations(tree)
 
-    # 各層的人
     layers = {}
     for pid, d in depth.items():
         layers.setdefault(d, []).append(pid)
@@ -263,13 +246,11 @@ def _apply_rules(tree, focus_child=None):
     for d in range(0, maxd + 1):
         members = sorted(layers.get(d, []), key=lambda x: _base_key(x, persons))
 
-        # ---- A. 形成手足群（cluster）
-        clusters = {}  # cid -> [pids]
+        clusters = {}
         for p in members:
             cid = _cluster_id_of(p, d, marriages)
             clusters.setdefault(cid, []).append(p)
 
-        # 群內排序：基本排序 + 同群配偶相鄰
         for cid, lst in clusters.items():
             lst.sort(key=lambda x: _base_key(x, persons))
             for mid, m in marriages.items():
@@ -277,13 +258,9 @@ def _apply_rules(tree, focus_child=None):
                 if len(sps) >= 2:
                     _ensure_adjacent_inside(lst, sps[0], sps[1])
 
-        # ---- B. 取群序（穩定插入版本）
         cluster_ids = _stable_cluster_order(d, clusters, marriages, persons)
-
-        # 鄰接鎖定表
         placed_neighbors = defaultdict(set)
 
-        # ---- C. 新增子女 → 讓兩群靠攏並把夫妻放交界（不管配偶是否有父母）
         if focus_child and depth.get(focus_child) == d:
             for s in _spouses_of(focus_child, marriages):
                 ca = _cluster_id_of(focus_child, d, marriages)
@@ -301,7 +278,6 @@ def _apply_rules(tree, focus_child=None):
                     _move_to_back(clusters[cb], s)
                     _move_to_front(clusters[ca], focus_child)
 
-        # ---- D. 全層婚姻：先防拆靠攏，再強制靠攏補救
         cross_pairs = []
         for mid, m in marriages.items():
             sps = [s for s in (m.get("spouses", []) or []) if depth.get(s) == d]
@@ -315,9 +291,8 @@ def _apply_rules(tree, focus_child=None):
             ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
             gap = abs(ia - ib) - 1
             cross_pairs.append((gap, ca, cb, a, b))
-        cross_pairs.sort(key=lambda x: x[0])  # gap 小者優先
+        cross_pairs.sort(key=lambda x: x[0])
 
-        # 防拆靠攏
         for _, ca, cb, a, b in cross_pairs:
             if not _are_clusters_adjacent(cluster_ids, ca, cb):
                 ok = _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors)
@@ -331,7 +306,6 @@ def _apply_rules(tree, focus_child=None):
                 _move_to_back(clusters[cb], b)
                 _move_to_front(clusters[ca], a)
 
-        # 強制靠攏補救
         for _, ca, cb, a, b in cross_pairs:
             if not _are_clusters_adjacent(cluster_ids, ca, cb):
                 _force_clusters_adjacent(cluster_ids, ca, cb)
@@ -343,13 +317,11 @@ def _apply_rules(tree, focus_child=None):
                 _move_to_back(clusters[cb], b)
                 _move_to_front(clusters[ca], a)
 
-        # ---- E. 拍扁成層序列
         final_list = []
         for cid in cluster_ids:
             final_list.extend(clusters[cid])
         gen_order[str(d)] = final_list
 
-    # 產生 group_order（沿用同一份 depth）
     group_order = {}
     for d, order in gen_order.items():
         d_int = int(d)
@@ -359,7 +331,6 @@ def _apply_rules(tree, focus_child=None):
             sps = m.get("spouses", []) or []
             anchor = None
             for s in sps:
-                # 找同層的其中一位當錨點
                 if _compute_generations(tree).get(s) == d_int:
                     anchor = s; break
             if anchor is None and sps:
@@ -391,14 +362,12 @@ def _graph(tree):
            fontname="Noto Sans CJK TC", fontsize="11")
     g.attr("edge", fontname="Noto Sans CJK TC", fontsize="10")
 
-    # 人物節點
     for pid, p in persons.items():
         nm = p.get("name", pid)
         by = p.get("birth", "")
         label = nm + (f"\n{by}" if by else "")
         g.node(pid, label=label)
 
-    # 各層順序
     layers = {}
     for pid, d in depth.items():
         layers.setdefault(d, []).append(pid)
@@ -412,7 +381,6 @@ def _graph(tree):
             per_layer = sorted(nodes, key=lambda x: _base_key(x, persons))
         per_layer_order[d] = per_layer
 
-    # 婚姻與子女：婚姻點當中線，子女自中線往下
     for mid, m in marriages.items():
         sps  = m.get("spouses", []) or []
         kids = m.get("children", []) or []
@@ -455,14 +423,12 @@ def _graph(tree):
                 g.edge(anchor, c, style="invis", weight="120", minlen="1", constraint="true")
                 g.edge(mid, c, weight="3", minlen="1")
 
-    # 強制同層 rank
     for d, members in layers.items():
         with g.subgraph() as same:
             same.attr(rank="same")
             for pid in members:
                 same.node(pid)
 
-    # 同層穩定鏈（保持橫向順序）
     for d, order in per_layer_order.items():
         if len(order) >= 2:
             with g.subgraph() as gg:
@@ -473,7 +439,7 @@ def _graph(tree):
     return g
 
 # =========================================================
-# 4) UI：人物／婚姻（建立或變更時自動套規則）
+# 4) UI：人物／婚姻（每筆婚姻一個 form，提交更穩定）
 # =========================================================
 def _person_form(t):
     st.subheader("① 人物管理")
@@ -517,6 +483,8 @@ def _person_form(t):
 
 def _marriage_form(t):
     st.subheader("② 婚姻關係")
+
+    # 新增婚姻（單獨一個表單）
     with st.form("add_marriage", clear_on_submit=True):
         c = st.columns(4)
         s1 = c[0].selectbox("配偶 A", [""]+list(t["persons"].keys()),
@@ -530,30 +498,65 @@ def _marriage_form(t):
             else:
                 mid = _next_mid()
                 t["marriages"][mid]={"spouses":[s1,s2],"children":[]}
-                _apply_rules(t)  # 立即把配偶相鄰
+                _apply_rules(t)
                 st.success(f"已新增婚姻：{mid}（已自動把配偶排為相鄰）")
                 st.rerun()
 
+    # 管理婚姻（每一筆各有自己的 form → 修正『加入子女沒反應』）
     if t["marriages"]:
         with st.expander("婚姻清單（點開管理）", expanded=False):
+            def _who_is_parent_of(child_pid):
+                for mmid, mm in t["marriages"].items():
+                    if child_pid in (mm.get("children") or []):
+                        return mmid
+                return None
+
             for mid, m in t["marriages"].items():
                 sps = m.get("spouses",[])
                 kids= m.get("children",[])
                 title = " × ".join([t["persons"].get(s,{}).get("name",s) for s in sps]) or "（未登記配偶）"
                 st.markdown(f"**{mid}**｜{title}｜子女 {len(kids)}")
-                cc = st.columns([5,3,2,2])
-                kid = cc[0].selectbox("新增子女", [""]+list(t["persons"].keys()),
-                                      format_func=lambda x: t["persons"].get(x,{}).get("name",x) if x else "",
-                                      key=f"k_{mid}")
-                if cc[1].button("加入子女", key=f"addk_{mid}") and kid:
-                    if kid not in m["children"]:
-                        m["children"].append(kid)
-                        _apply_rules(t, focus_child=kid)  # 靠攏配偶家庭＋交界相鄰
-                        st.rerun()
-                if cc[2].button("清空子女", key=f"clr_{mid}"):
-                    m["children"]=[]; _apply_rules(t); st.rerun()
-                if cc[3].button("刪除此婚姻", key=f"del_{mid}"):
-                    del t["marriages"][mid]; _apply_rules(t); st.rerun()
+
+                with st.form(f"mar_{mid}", clear_on_submit=True):
+                    c = st.columns([5,3,2,2])
+                    kid = c[0].selectbox(
+                        "新增子女",
+                        [""]+list(t["persons"].keys()),
+                        format_func=lambda x: t["persons"].get(x,{}).get("name",x) if x else "",
+                        key=f"k_{mid}",
+                    )
+                    add_btn  = c[1].form_submit_button("加入子女")
+                    clr_btn  = c[2].form_submit_button("清空子女")
+                    del_btn  = c[3].form_submit_button("刪除此婚姻")
+
+                if add_btn:
+                    if not kid:
+                        st.warning("請先選擇要加入的子女")
+                    else:
+                        exists_mid = _who_is_parent_of(kid)
+                        if exists_mid and exists_mid != mid:
+                            nm = t["persons"].get(kid,{}).get("name",kid)
+                            st.warning(f"「{nm}」已是 {exists_mid} 的子女，無法同時屬於兩組父母。")
+                        else:
+                            if kid not in m.setdefault("children", []):
+                                m["children"].append(kid)
+                                _apply_rules(t, focus_child=kid)
+                                st.success("已加入子女")
+                                st.rerun()
+                            else:
+                                st.info("此人已在此婚姻的子女清單中。")
+
+                if clr_btn:
+                    m["children"]=[]
+                    _apply_rules(t)
+                    st.success("已清空子女")
+                    st.rerun()
+
+                if del_btn:
+                    del t["marriages"][mid]
+                    _apply_rules(t)
+                    st.success("已刪除此婚姻")
+                    st.rerun()
 
 # =========================================================
 # 5) 視覺化 & 匯入/匯出
@@ -614,7 +617,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree • rules v6 (stable cluster insertion + adjacency)")
+    st.caption("familytree • rules v7 (per-marriage form + stable insertion)")
 
 if __name__ == "__main__":
     render()
