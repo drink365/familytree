@@ -88,6 +88,7 @@ def _compute_generations(tree):
 
 # -------------------- Graph Builder (layered) --------------------
 
+
 def _graph(tree):
     depth = _compute_generations(tree)
 
@@ -99,7 +100,7 @@ def _graph(tree):
 
     # Persons grouped by generation
     by_depth = {}
-    for pid, p in tree.get("persons", {}).items():
+    for pid in tree.get("persons", {}):
         by_depth.setdefault(depth.get(pid, 0), []).append(pid)
 
     for d, nodes in sorted(by_depth.items()):
@@ -110,23 +111,39 @@ def _graph(tree):
                 shape = "ellipse" if gender == "F" else "box"
                 sg.node(pid, label=_label(tree["persons"][pid]), shape=shape)
 
-    # Marriage nodes placed at the same rank as spouses
+    # Draw marriages: spouse edge (solid/dashed) and hidden mid node between spouses (for children)
     for mid, m in tree.get("marriages", {}).items():
-        # Determine rank from first known spouse
-        ranks = [depth.get(s, 0) for s in m.get("spouses", [])]
-        r = min(ranks) if ranks else 0
+        spouses = list(m.get("spouses", []))
+        if not spouses:
+            continue
+        # ensure rank: spouses + mid same layer
         with g.subgraph(name=f"rank_mid_{mid}") as sg:
             sg.attr(rank="same")
+            # Place mid node (hidden point)
             sg.node(mid, label="", shape="point", width="0.01")
 
-        for s in m.get("spouses", []):
-            if s in tree.get("persons", {}):
-                g.edge(s, mid, dir="none")
+            # Create invisible edges to order: s1 -> mid -> s2
+            if len(spouses) >= 2:
+                s1, s2 = spouses[0], spouses[1]
+                sg.edge(s1, mid, style="invis", weight="200")
+                sg.edge(mid, s2, style="invis", weight="200")
 
-    # Children edges (with optional labels)
-    child_types = tree.get("child_types", {})
-    HIDE_LABELS = {"生", "bio", "親生"}
-    for mid, m in tree.get("marriages", {}).items():
+        # Visible horizontal line between first two spouses
+        if len(spouses) >= 2:
+            s1, s2 = spouses[0], spouses[1]
+            style = "dashed" if m.get("divorced") else "solid"
+            g.edge(s1, s2, dir="none", constraint="true", weight="200", style=style)
+
+        # For any additional spouses, connect them near mid with invisible ordering,
+        # and draw visible edges pairing sequentially to keep adjacency.
+        if len(spouses) > 2:
+            for i in range(1, len(spouses)-1):
+                a, b = spouses[i], spouses[i+1]
+                g.edge(a, b, dir="none", constraint="true", weight="150", style="solid")  # assume married
+
+        # Children edges
+        child_types = tree.get("child_types", {})
+        HIDE_LABELS = {"生", "bio", "親生"}
         for c in m.get("children", []):
             if c in tree.get("persons", {}):
                 ctype = (child_types.get(mid, {}) or {}).get(c, "")
@@ -135,7 +152,9 @@ def _graph(tree):
                     g.edge(mid, c, label=lbl)
                 else:
                     g.edge(mid, c)
+
     return g
+
 
 
 # -------------------- Page Render --------------------
@@ -149,7 +168,7 @@ def render():
     with st.expander("① 人物管理", expanded=True):
         cols = st.columns([2,1,1,1,1])
         name = cols[0].text_input("姓名 *", key="ft_name")
-        gender = cols[1].selectbox("性別", ["不確定","男","女"], index=0, key="ft_gender")
+        gender = cols[1].selectbox("性別", ["男","女"], index=0, key="ft_gender")
         birth = cols[2].text_input("出生年", key="ft_birth", placeholder="1970")
         death = cols[3].text_input("逝世年", key="ft_death", placeholder="")
         if cols[4].button("➕ 新增人物", key="btn_add_person", use_container_width=True):
@@ -191,7 +210,7 @@ def render():
                     st.warning("請選擇兩位不同人物")
                 else:
                     mid = _new_id("M")
-                    t["marriages"][mid] = {"spouses": [a,b], "children": []}
+                    t["marriages"][mid] = {"spouses": [a,b], "children": [], "divorced": False}
                     t["child_types"][mid] = {}
                     st.success(f"已建立婚姻 {mid}")
 
@@ -202,6 +221,10 @@ def render():
                 return f"{x}｜" + " × ".join(names) if names else f"{x}｜（尚無配偶）"
 
             mid = st.selectbox("選擇婚姻以新增子女", list(t["marriages"].keys()), format_func=safe_format_marriage)
+            # 離婚狀態
+            if mid:
+                div_ck = st.checkbox("該婚姻已離婚？", value=bool(t["marriages"][mid].get("divorced", False)))
+                t["marriages"][mid]["divorced"] = bool(div_ck)
             if mid:
                 c1,c2,c3 = st.columns([2,1,1])
                 child = c1.selectbox(
