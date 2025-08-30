@@ -90,10 +90,13 @@ st.markdown(
 )
 
 # -------------------- Pages --------------------
+
 def render_home():
-    if LOGO_PATH:
-        st.image(LOGO_PATH, width=180)
-        st.write("")
+    # 首頁 LOGO：優先用 logo.png，若不存在再用 logo2.png
+    main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
+    if main_logo:
+        st.image(main_logo, use_column_width=False, width=320)  # 橫式 LOGO 顯示較大
+
     st.markdown(
         """
         ### 10 分鐘完成高資產家族 10 年的傳承規劃
@@ -101,9 +104,10 @@ def render_home():
         專業 × 快速 × 可信任｜整合法稅、保單策略與價值觀，幫助顧問有效成交、幫助家庭安心決策。
         """.strip()
     )
+
     st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
 
-def _safe_import_and_render(module_name: str):
+    def _safe_import_and_render(module_name: str):
     try:
         mod = __import__(module_name, fromlist=['render'])
         if hasattr(mod, "render"):
