@@ -74,7 +74,13 @@ with st.sidebar:
             )
         except Exception:
             st.image(sidebar_logo, use_container_width=False, width=72)
-    st.caption("《影響力》AI 傳承規劃平台")
+    st.markdown('<div class="gfo-caption">《影響力》AI 傳承規劃平台</div>', unsafe_allow_html=True)
+    st.markdown("""
+    <style>
+    .gfo-caption { text-align:center; color: rgba(75,85,99,0.9); font-size: 0.9rem; }
+    @media (max-width: 900px) { .gfo-caption { font-size: 0.85rem; } }
+    </style>
+    """, unsafe_allow_html=True)
     st.markdown("---")
 
 
