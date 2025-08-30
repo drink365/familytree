@@ -23,6 +23,7 @@ def load_brand():
 _BRAND = load_brand()
 BRAND_PRIMARY = _BRAND.get("PRIMARY", "#D33B2C")
 LOGO_PATH = _BRAND.get("LOGO_SQUARE") or "logo2.png"
+SHOW_SIDEBAR_LOGO = bool(_BRAND.get("SHOW_SIDEBAR_LOGO", False))
 
 # fallback 檢查
 if not os.path.exists(LOGO_PATH):
@@ -44,12 +45,14 @@ page = get_page_from_query()
 
 # -------------------- Sidebar --------------------
 
+
 with st.sidebar:
     st.markdown("## 導覽")
-    # 只在「非首頁」顯示側邊欄 Logo；首頁不顯示，避免與主視覺重複
-    sidebar_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
-    if sidebar_logo and page != "home":
-        st.image(sidebar_logo, use_container_width=False, width=140)  # 小尺寸、降低存在感
+    # 為了全站一致，預設不顯示側邊欄 Logo（可在 brand.json 設 SHOW_SIDEBAR_LOGO=true 重新開啟）
+    if SHOW_SIDEBAR_LOGO:
+        sidebar_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
+        if sidebar_logo:
+            st.image(sidebar_logo, use_container_width=False, width=140)
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -95,23 +98,30 @@ st.markdown(
 )
 
 # -------------------- Pages --------------------
+
 def render_home():
-    # 首頁 LOGO：優先用 logo.png，若不存在再用 LOGO_PATH
+    # 置中顯示首頁 Logo
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo:
-        st.image(main_logo, use_container_width=False, width=280)  # 橫式 LOGO 顯示較大
+        c1, c2, c3 = st.columns([1,2,1])
+        with c2:
+            st.image(main_logo, use_container_width=False, width=280)
+
+    # 標題與文案
+    TAGLINE = "說清楚，做得到"
+    SUBLINE = "把傳承變簡單。"
 
     st.markdown(
-        """
+        f"""
         ### 10 分鐘完成高資產家族 10 年的傳承規劃
 
-        專業 × 快速 × 可信任｜整合法稅、保單策略與價值觀，幫助顧問有效成交、幫助家庭安心決策。
+        {TAGLINE}｜{SUBLINE}
         """.strip()
     )
-
     st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
 
 def _safe_import_and_render(module_name: str):
+(module_name: str):
     try:
         mod = __import__(module_name, fromlist=['render'])
         if hasattr(mod, "render"):
@@ -143,9 +153,5 @@ else:
 st.markdown("""
 <style>
 /* 側邊欄 Logo 視覺降階（灰階 + 降低亮度與透明度） */
-section[data-testid="stSidebar"] img {
-  filter: grayscale(100%) brightness(0.92);
-  opacity: 0.85;
-}
 </style>
 """, unsafe_allow_html=True)
