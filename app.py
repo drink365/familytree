@@ -18,7 +18,7 @@ def load_brand():
     try:
         return json.load(open("brand.json", "r", encoding="utf-8"))
     except Exception:
-        return {"PRIMARY": "#D33B2C", "BG": "#F7FAFC", "LOGO_SQUARE": "logo2.png"}
+        return {"PRIMARY": "#D33B2C", "BG": "#F7FAFC", "LOGO_SQUARE": "logo2.png", "SHOW_SIDEBAR_LOGO": False}
 
 _BRAND = load_brand()
 BRAND_PRIMARY = _BRAND.get("PRIMARY", "#D33B2C")
@@ -27,7 +27,7 @@ SHOW_SIDEBAR_LOGO = bool(_BRAND.get("SHOW_SIDEBAR_LOGO", False))
 
 # fallback 檢查
 if not os.path.exists(LOGO_PATH):
-    LOGO_PATH = "logo2.png" if os.path.exists("logo2.png") else ("logo.png" if os.path.exists("logo.png") else None)
+    LOGO_PATH = "logo.png" if os.path.exists("logo.png") else ("logo2.png" if os.path.exists("logo2.png") else None)
 
 # -------------------- Router --------------------
 def navigate(key: str):
@@ -44,15 +44,15 @@ def get_page_from_query() -> str:
 page = get_page_from_query()
 
 # -------------------- Sidebar --------------------
-
-
 with st.sidebar:
     st.markdown("## 導覽")
-    # 為了全站一致，預設不顯示側邊欄 Logo（可在 brand.json 設 SHOW_SIDEBAR_LOGO=true 重新開啟）
+
+    # 預設不顯示側邊欄 Logo，保持全站一致；如需顯示可在 brand.json 設 SHOW_SIDEBAR_LOGO=true
     if SHOW_SIDEBAR_LOGO:
         sidebar_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
         if sidebar_logo:
             st.image(sidebar_logo, use_container_width=False, width=140)
+
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -73,7 +73,7 @@ for label, key, icon in [
 
 # 側欄按鈕樣式
 st.markdown(
-    '''
+    """
     <style>
     section[data-testid="stSidebar"] .stButton > button {
         width: 100%;
@@ -93,12 +93,11 @@ st.markdown(
         box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
     }
     </style>
-    ''',
+    """,
     unsafe_allow_html=True,
 )
 
 # -------------------- Pages --------------------
-
 def render_home():
     # 置中顯示首頁 Logo
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
@@ -107,7 +106,6 @@ def render_home():
         with c2:
             st.image(main_logo, use_container_width=False, width=280)
 
-    # 標題與文案
     TAGLINE = "說清楚，做得到"
     SUBLINE = "把傳承變簡單。"
 
@@ -118,10 +116,10 @@ def render_home():
         {TAGLINE}｜{SUBLINE}
         """.strip()
     )
+
     st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
 
 def _safe_import_and_render(module_name: str):
-(module_name: str):
     try:
         mod = __import__(module_name, fromlist=['render'])
         if hasattr(mod, "render"):
@@ -148,10 +146,3 @@ elif page == "about":
     _safe_import_and_render("pages_about")
 else:
     render_home()
-
-
-st.markdown("""
-<style>
-/* 側邊欄 Logo 視覺降階（灰階 + 降低亮度與透明度） */
-</style>
-""", unsafe_allow_html=True)
