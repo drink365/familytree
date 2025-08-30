@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-import streamlit as st, json
+import streamlit as st
+import json
 from graphviz import Digraph
 
-# -------------------- 基礎資料結構 & 狀態 --------------------
+# -------------------- 狀態初始化 --------------------
 def _init_state():
     if "tree" not in st.session_state:
         st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
@@ -27,31 +28,28 @@ def _compute_generations(tree):
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
     depth = {}
-    # 先把有父母者標上父母層 + 1
-    # 同時確保所有人都存在於 depth
+    # 預設所有人層級為 0
     for pid in persons:
         depth.setdefault(pid, 0)
-    # 多輪鬆弛：由上而下把子女層級拉高
+    # 由上而下多輪鬆弛：子女層級至少為父母層 + 1
     changed = True
-    loop_guard = 0
-    while changed and loop_guard < 100:
+    guard = 0
+    while changed and guard < 100:
         changed = False
-        loop_guard += 1
+        guard += 1
         for mid, m in marriages.items():
             sps = m.get("spouses", [])
             kids = m.get("children", [])
-            # 該婚姻的父母層次取目前已知的最大層
             parent_depth = 0
             for s in sps:
                 parent_depth = max(parent_depth, depth.get(s, 0))
-            # 子女至少在父母層 + 1
             for c in kids:
                 if depth.get(c, 0) < parent_depth + 1:
                     depth[c] = parent_depth + 1
                     changed = True
     return depth
 
-# -------------------- 自動排版啟發式（Sugiyama / Barycenter 風格） --------------------
+# -------------------- 自動排版啟發式（Sugiyama/Barycenter 風格） --------------------
 def _birth_year(p):
     try:
         v = p.get("birth", "")
@@ -61,7 +59,7 @@ def _birth_year(p):
 
 def _barycenter_order(nodes, pos_ref, tie_key=None):
     """
-    依鄰居的平均位置（barycenter）排序，減少交錯；沒有鄰居者放在後面。
+    依鄰居平均位置（barycenter）排序，沒有鄰居的視為無限大（排後面）。
     """
     bc = []
     for i, n in enumerate(nodes):
@@ -75,8 +73,8 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
     """
     回傳 (gen_order, group_order, tree)：
     - 以出生年/姓名作初始排序
-    - 多輪 barycenter（由上而下、由下而上）
-    - 夫妻群以錨點（該層配偶）在該層的相對位置排序
+    - 多輪 barycenter（由上而下 + 由下而上）壓交錯
+    - 夫妻群以該層錨點（配偶）在該層的位置由左到右排序
     可選：保留配偶現有左右、子女依出生年排序
     """
     persons = tree.get("persons", {})
@@ -97,7 +95,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
             )
             m["children"] = kids_sorted
 
-    # (1) 配偶排序（可選：若不保留，則依出生年）
+    # (1) 配偶排序（若不保留，依出生年）
     if not preserve_spouse:
         for mid, m in marriages.items():
             sps = list(m.get("spouses", []))
@@ -123,7 +121,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
             return (by, persons.get(n, {}).get("name", ""))
         gen_order[str(d)] = sorted(nodes, key=tie)
 
-    # (3) 建 adjacency：父母<->子女（跨層）、配偶（同層不在此）
+    # (3) 建 adjacency：父母<->子女（跨層）
     adj = {}
     for pid in persons:
         nbrs = set()
@@ -162,7 +160,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
                 tie_key=lambda n: (_birth_year(persons.get(n, {})) or 9999, persons.get(n, {}).get("name", "")),
             )
 
-    # (5) 夫妻群排序（以該層錨點配偶在該層位置由左到右）
+    # (5) 夫妻群排序（以該層錨點位置從左到右）
     group_order = {}
     for d, nodes in layers.items():
         ord_nodes = gen_order[str(d)]
@@ -197,7 +195,7 @@ def _graph(tree):
     for pid, p in persons.items():
         nm = p.get("name", pid)
         by = p.get("birth", "")
-        label = nm + (f"\\n{by}" if by else "")
+        label = nm + (f"\n{by}" if by else "")
         g.node(pid, label=label)
 
     # 婚姻節點與連線
@@ -205,35 +203,31 @@ def _graph(tree):
         spouses = m.get("spouses", [])
         children = m.get("children", [])
 
-        # 婚姻為一個小節點（點）當連接器
+        # 婚姻連接器
         g.node(mid, shape="point", width="0.01", height="0.01", label="")
 
-        # 夫妻 → 婚姻
+        # 夫妻 → 婚姻（同層靠近）
         with g.subgraph() as sg:
             sg.attr(rank="same")
-            # 夫妻彼此靠近：隱形連線
             if len(spouses) >= 2:
                 for i in range(len(spouses) - 1):
                     sg.edge(spouses[i], spouses[i + 1], style="invis", weight="150", constraint="true")
             for s in spouses:
                 sg.edge(s, mid, dir="none", weight="5")
-            # 父母節點彼此之間再加一條隱形邊，增加穩定度
             if len(spouses) == 2:
                 s1, s2 = spouses[0], spouses[1]
                 sg.edge(s1, s2, style="invis", weight="200")
 
-        # 子女 ← 婚姻
-        # 兄弟姊妹彼此之間的隱形排序（維持一束，減少交錯）
+        # 子女 ← 婚姻（同層相鄰）
         if len(children) >= 2:
             with g.subgraph() as kg:
                 kg.attr(rank="same")
                 for i in range(len(children) - 1):
                     kg.edge(children[i], children[i + 1], style="invis", weight="50", constraint="true")
-
         for c in children:
             g.edge(mid, c, weight="3")
 
-    # ---- 全域的同層排序（使用者人工 ②-2） ----
+    # ---- 全域同層排序（②-2） ----
     try:
         gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
     except Exception:
@@ -250,7 +244,7 @@ def _graph(tree):
                     for i in range(len(seq) - 1):
                         gg.edge(seq[i], seq[i + 1], style="invis", weight="80", constraint="true")
 
-    # ---- 夫妻群排序（使用者人工 ②-3） ----
+    # ---- 夫妻群排序（②-3） ----
     try:
         group_order = st.session_state.get("group_order", {}) if hasattr(st, "session_state") else {}
     except Exception:
@@ -282,7 +276,7 @@ def _graph(tree):
 
     return g
 
-# -------------------- UI：人物與婚姻維護 --------------------
+# -------------------- UI：人物與婚姻 --------------------
 def _person_form(t):
     st.subheader("① 人物資料")
     with st.form("add_person", clear_on_submit=True):
@@ -301,7 +295,6 @@ def _person_form(t):
                     t["persons"][pid]["birth"] = birth.strip()
                 st.success(f"已新增人物：{pid}｜{name}")
 
-    # 簡單清單
     if t["persons"]:
         with st.expander("人物清單（點開檢視）", expanded=False):
             for pid, p in t["persons"].items():
@@ -309,7 +302,6 @@ def _person_form(t):
                 cols[0].write(f"{pid}｜{p.get('name','')}")
                 cols[1].write(p.get("birth", ""))
                 if cols[2].button("刪除", key=f"del_p_{pid}"):
-                    # 同步從婚姻裡拿掉
                     for mid in list(t["marriages"].keys()):
                         m = t["marriages"][mid]
                         if pid in m.get("spouses", []):
@@ -349,6 +341,7 @@ def _marriage_form(t):
                 sps = m.get("spouses", [])
                 kids = m.get("children", [])
                 st.markdown(f"**{mid}** ｜ " + " × ".join(t['persons'].get(s, {}).get("name", s) for s in sps))
+
                 # 增加子女
                 cols = st.columns([5, 4, 3])
                 kid = cols[0].selectbox("選擇子女", [""] + list(t["persons"].keys()), format_func=lambda x: t["persons"].get(x, {}).get("name", x) if x else "", key=f"kid_{mid}")
@@ -393,9 +386,32 @@ def _marriage_form(t):
                             t["marriages"][mid]["spouses"] = sps
                             st.rerun()
 
-                # 顯示該婚姻的子女
-                if kids:
-                    st.write("子女： " + "、".join(t["persons"].get(k, {}).get("name", k) for k in kids))
+                # （可選）當下這段婚姻的子女排序
+                if len(kids) >= 2:
+                    st.caption("子女順序（此婚姻）")
+                    for i, kid in enumerate(kids):
+                        nm = t["persons"].get(kid, {}).get("name", kid)
+                        r = st.columns([6, 1, 1, 1, 1])
+                        r[0].write(f"{i+1}. {kid}｜{nm}")
+                        if r[1].button("↑", key=f"mid_up_{mid}_{kid}") and i > 0:
+                            kids[i - 1], kids[i] = kids[i], kids[i - 1]
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+                        if r[2].button("↓", key=f"mid_dn_{mid}_{kid}") and i < len(kids) - 1:
+                            kids[i + 1], kids[i] = kids[i], kids[i + 1]
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+                        if r[3].button("置頂", key=f"mid_top_{mid}_{kid}") and i > 0:
+                            moved = kids.pop(i)
+                            kids.insert(0, moved)
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+                        if r[4].button("置底", key=f"mid_bot_{mid}_{kid}") and i < len(kids) - 1:
+                            moved = kids.pop(i)
+                            kids.append(moved)
+                            t["marriages"][mid]["children"] = kids
+                            st.rerun()
+
                 st.divider()
 
 # -------------------- UI：排序工具 --------------------
@@ -544,7 +560,7 @@ def _ui_autosuggest(t):
             st.success("已套用建議排序，您可再用 ②-1/②-2/②-3 做微調。")
             st.rerun()
 
-# -------------------- 視覺化 & 匯入匯出 --------------------
+# -------------------- 視覺化 & 匯入/匯出 --------------------
 def _ui_visualize(t):
     with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
@@ -552,29 +568,40 @@ def _ui_visualize(t):
 def _ui_import_export(t):
     with st.expander("④ 匯入 / 匯出", expanded=False):
         c1, c2 = st.columns(2)
-        if c1.button("匯出 JSON"):
+
+        # 匯出：直接提供下載
+        with c1:
             st.download_button(
                 "下載 familytree.json",
                 data=json.dumps(t, ensure_ascii=False, indent=2),
                 file_name="familytree.json",
                 mime="application/json",
             )
-        uploaded = c2.file_uploader("匯入 JSON", type=["json"])
-        if uploaded is not None:
-            try:
-                data = json.load(uploaded)
-                if isinstance(data, dict) and "persons" in data and "marriages" in data:
-                    st.session_state.tree = data
-                    st.success("匯入成功")
-                    st.rerun()
-                else:
-                    st.warning("JSON 結構不正確。")
-            except Exception as e:
-                st.error(f"匯入失敗：{e}")
+
+        # 匯入：使用 form（選檔 → 按「套用匯入」才寫入），避免一選就套用與無限重跑
+        with c2:
+            with st.form("import_form", clear_on_submit=True):
+                file = st.file_uploader("選擇 JSON 檔", type=["json"], key="import_file")
+                submitted = st.form_submit_button("套用匯入")
+                if submitted:
+                    if file is None:
+                        st.warning("請先選擇檔案")
+                    else:
+                        try:
+                            data = json.load(file)
+                            if isinstance(data, dict) and "persons" in data and "marriages" in data:
+                                st.session_state.tree = data
+                                st.success("匯入成功！資料已套用。")
+                                # 不呼叫 st.rerun()；form 提交會自動重新執行一次，且 clear_on_submit 會清空檔案，避免閃爍
+                            else:
+                                st.warning("JSON 結構不正確，需包含 persons 與 marriages。")
+                        except Exception as e:
+                            st.error(f"匯入失敗：{e}")
 
 # -------------------- 進入點 --------------------
 def render():
     _init_state()
+    st.title("家族樹")  # 頁面大標題
     t = st.session_state.tree
 
     # ① 人物 / ② 婚姻
@@ -591,7 +618,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree autosuggest • r4")
+    st.caption("familytree autosuggest • r5")  # 版本戳記（用來確認載入的是新檔）
 
 if __name__ == "__main__":
     st.set_page_config(page_title="家族樹", layout="wide")
