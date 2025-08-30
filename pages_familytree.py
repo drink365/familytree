@@ -3,6 +3,141 @@
 import streamlit as st, json
 from graphviz import Digraph
 
+# -------------------- Auto Layout Heuristics --------------------
+def _birth_year(p):
+    try:
+        v = p.get("birth", "")
+        return int(str(v).strip()[:4]) if v else None
+    except Exception:
+        return None
+
+def _neighbors_in_layer(pid, depth, marriages, layer):
+    """Return neighbors of a person in the specified layer: parents/spouses/children projected onto that layer."""
+    neigh = set()
+    d_me = depth.get(pid, 0)
+    # spouses (same layer)
+    for mid, m in marriages.items():
+        if pid in m.get("spouses", []):
+            for s in m.get("spouses", []):
+                if s != pid and depth.get(s, -1) == layer:
+                    neigh.add(s)
+            # parents (above) and children (below)
+            for c in m.get("children", []):
+                if depth.get(c, -1) == layer:
+                    neigh.add(c)
+    # parents of pid live one layer above; we project them only if they exist on target layer
+    # (skipped as parent links are via marriages; covered by children side for that layer)
+    return list(neigh)
+
+def _barycenter_order(nodes, pos_ref, tie_key=None):
+    """Sort nodes by the average position of their neighbors; fallback to tie_key and original order."""
+    bc = []
+    for i, n in enumerate(nodes):
+        neigh_pos = [pos_ref.get(v) for v in pos_ref.get("__adj__", {}).get(n, []) if v in pos_ref]
+        if neigh_pos:
+            score = sum(neigh_pos) / len(neigh_pos)
+        else:
+            score = float("inf")
+        bc.append((score, tie_key(n) if tie_key else None, i, n))
+    bc.sort(key=lambda x: (x[0], x[1] if x[1] is not None else 0, x[2]))
+    return [n for *_, n in bc]
+
+def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps=3):
+    """Compute suggested gen_order & group_order; optionally reorder children/spouses."""
+    persons = tree.get("persons", {})
+    marriages = tree.get("marriages", {})
+    depth = _compute_generations(tree)
+
+    # 0) Optionally reorder children by birth year within each marriage
+    if sort_children_by_birth:
+        for mid, m in marriages.items():
+            kids = list(m.get("children", []))
+            kids_sorted = sorted(kids, key=lambda k: (_birth_year(persons.get(k, {})) is None, _birth_year(persons.get(k, {})) or 9999, persons.get(k, {}).get("name","")))
+            m["children"] = kids_sorted
+
+    # 1) Optionally reorder spouses by birth year (if not preserving existing order)
+    if not preserve_spouse:
+        for mid, m in marriages.items():
+            sps = list(m.get("spouses", []))
+            sps_sorted = sorted(sps, key=lambda s: (_birth_year(persons.get(s, {})) is None, _birth_year(persons.get(s, {})) or 9999, persons.get(s, {}).get("name","")))
+            m["spouses"] = sps_sorted
+
+    # 2) Initial per-layer ordering by (family cluster hint, birth year, name)
+    layers = {}
+    for pid in persons:
+        d = depth.get(pid, 0)
+        layers.setdefault(d, []).append(pid)
+    gen_order = {}
+    for d, nodes in layers.items():
+        def tie(n):
+            by = _birth_year(persons.get(n, {})) or 9999
+            return (by, persons.get(n, {}).get("name",""))
+        gen_order[str(d)] = sorted(nodes, key=tie)
+
+    # 3) Barycenter sweeps (top-down then bottom-up) to reduce crossings
+    maxd = max(layers.keys()) if layers else 0
+    for _ in range(sweeps):
+        # Build neighbor adjacency for reference to previous layer
+        # For each layer, compute position map from current ordering
+        pos = {}
+        for d in layers:
+            order = gen_order[str(d)]
+            for idx, pid in enumerate(order):
+                pos[pid] = idx
+        # Precompute adjacencies (neighbors in adjacent layers)
+        pos["__adj__"] = {}
+        for pid in persons:
+            adj = set()
+            # parents/spouses/children neighbors across layers via marriages
+            for mid, m in marriages.items():
+                if pid in m.get("spouses", []):
+                    # children on next layer
+                    for c in m.get("children", []):
+                        adj.add(c)
+                if pid in m.get("children", []):
+                    # link to both parents
+                    for s in m.get("spouses", []):
+                        adj.add(s)
+            pos["__adj__"][pid] = list(adj)
+
+        # top-down
+        for d in range(1, maxd+1):
+            prev_order = gen_order[str(d-1)]
+            prev_pos = {pid:i for i,pid in enumerate(prev_order)}
+            prev_pos["__adj__"] = pos["__adj__"]
+            cur_nodes = gen_order[str(d)]
+            gen_order[str(d)] = _barycenter_order(cur_nodes, prev_pos, tie_key=lambda n: (_birth_year(persons.get(n, {})) or 9999, persons.get(n,{}).get("name","")))
+        # bottom-up
+        for d in range(maxd-1, -1, -1):
+            nxt_order = gen_order[str(d+1)] if str(d+1) in gen_order else []
+            nxt_pos = {pid:i for i,pid in enumerate(nxt_order)}
+            nxt_pos["__adj__"] = pos["__adj__"]
+            cur_nodes = gen_order[str(d)]
+            gen_order[str(d)] = _barycenter_order(cur_nodes, nxt_pos, tie_key=lambda n: (_birth_year(persons.get(n, {})) or 9999, persons.get(n,{}).get("name","")))
+
+    # 4) Couple-group order per layer: anchor by first spouse encountered in that layer, ordered by barycenter of anchors
+    group_order = {}
+    for d, nodes in layers.items():
+        anchors = []
+        for mid, m in marriages.items():
+            sps = m.get("spouses", [])
+            # find first spouse in this layer
+            anchor = None
+            for s in sps:
+                if depth.get(s) == d:
+                    anchor = s
+                    break
+            if anchor:
+                anchors.append((anchor, mid))
+        # order anchors by position in final gen order for this layer
+        ord_nodes = gen_order[str(d)]
+        posmap = {pid:i for i,pid in enumerate(ord_nodes)}
+        anchors_sorted = sorted(anchors, key=lambda x: posmap.get(x[0], 1e9))
+        group_order[str(d)] = [mid for _, mid in anchors_sorted]
+
+    return gen_order, group_order, tree
+
+
 # -------------------- State & Helpers --------------------
 def _init_state():
     if "tree" not in st.session_state:
@@ -458,6 +593,18 @@ def render():
                     st.session_state.gen_order[str(gen_sel)] = order
                     st.rerun()
             st.caption("小提醒：此排序會讓同層人物依序靠在一起，適用於把「沒有父母記錄的人」排到特定親友旁邊。")
+
+    with st.expander("②-0 一鍵自動建議排序", expanded=False):
+        c1,c2 = st.columns(2)
+        preserve_sp = c1.checkbox("保留配偶現有順序", value=True, help="取消勾選則會依出生年排序配偶（若有資料）。")
+        sort_kids = c2.checkbox("子女依出生年排序", value=True)
+        if st.button("⚙️ 生成建議排序並套用", type="primary"):
+            gen_order, group_order, new_tree = _auto_layout(t, preserve_spouse=preserve_sp, sort_children_by_birth=sort_kids, sweeps=3)
+            st.session_state.gen_order = gen_order
+            st.session_state.group_order = group_order
+            st.session_state.tree = new_tree
+            st.success("已套用建議排序，您可再用 ②-1/②-2/②-3 做微調。")
+            st.rerun()
 with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
 
