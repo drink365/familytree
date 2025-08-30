@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
-import json
+import json, copy
 from graphviz import Digraph
 
 # -------------------- 狀態初始化 --------------------
@@ -11,6 +11,9 @@ def _init_state():
         st.session_state.gen_order = {}
     if "group_order" not in st.session_state:
         st.session_state.group_order = {}
+    # 匯入前快照（用來復原）
+    if "__backup_tree__" not in st.session_state:
+        st.session_state.__backup_tree__ = None
     for k in ("pid_counter", "mid_counter"):
         if k not in st.session_state:
             st.session_state[k] = 1
@@ -58,9 +61,7 @@ def _birth_year(p):
         return None
 
 def _barycenter_order(nodes, pos_ref, tie_key=None):
-    """
-    依鄰居平均位置（barycenter）排序，沒有鄰居的視為無限大（排後面）。
-    """
+    """依鄰居平均位置（barycenter）排序，沒有鄰居的視為無限大（排後面）。"""
     bc = []
     for i, n in enumerate(nodes):
         neigh_pos = [pos_ref.get(v) for v in pos_ref.get("__adj__", {}).get(n, []) if v in pos_ref]
@@ -188,7 +189,8 @@ def _graph(tree):
 
     g = Digraph("G", format="svg")
     g.attr(rankdir="TB", splines="polyline", nodesep="0.2", ranksep="0.6")
-    g.attr("node", shape="box", style="rounded,filled", fillcolor="white", fontname="Noto Sans CJK TC", fontsize="11")
+    g.attr("node", shape="box", style="rounded,filled", fillcolor="white",
+           fontname="Noto Sans CJK TC", fontsize="11")
     g.attr("edge", fontname="Noto Sans CJK TC", fontsize="10")
 
     # 人物節點
@@ -200,10 +202,10 @@ def _graph(tree):
 
     # 婚姻節點與連線
     for mid, m in marriages.items():
-        spouses = m.get("spouses", [])
-        children = m.get("children", [])
+        spouses = m.get("spouses", []) or []
+        children = m.get("children", []) or []
 
-        # 婚姻連接器
+        # 婚姻為一個小節點（點）當連接器
         g.node(mid, shape="point", width="0.01", height="0.01", label="")
 
         # 夫妻 → 婚姻（同層靠近）
@@ -227,6 +229,16 @@ def _graph(tree):
         for c in children:
             g.edge(mid, c, weight="3")
 
+    # ---- 強制分層：同一代放同一 rank（避免誤併層，只顯示兩層的情況）----
+    levels = sorted(set(depth.values()))
+    for d in levels:
+        members = [pid for pid, lv in depth.items() if lv == d]
+        if members:
+            with g.subgraph() as same:
+                same.attr(rank="same")
+                for pid in members:
+                    same.node(pid)
+
     # ---- 全域同層排序（②-2） ----
     try:
         gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
@@ -237,7 +249,8 @@ def _graph(tree):
         for pid, d in depth.items():
             gens.setdefault(d, []).append(pid)
         for d, people in gens.items():
-            seq = [p for p in gen_order.get(str(d), []) if p in people] + [p for p in people if p not in gen_order.get(str(d), [])]
+            seq = [p for p in gen_order.get(str(d), []) if p in people] + \
+                  [p for p in people if p not in gen_order.get(str(d), [])]
             if len(seq) >= 2:
                 with g.subgraph() as gg:
                     gg.attr(rank="same")
@@ -323,8 +336,10 @@ def _marriage_form(t):
     st.subheader("② 婚姻關係")
     with st.form("add_marriage", clear_on_submit=True):
         cols = st.columns(4)
-        s1 = cols[0].selectbox("配偶 A", [""] + list(t["persons"].keys()), format_func=lambda x: t["persons"].get(x, {}).get("name", x) if x else "")
-        s2 = cols[1].selectbox("配偶 B", [""] + list(t["persons"].keys()), format_func=lambda x: t["persons"].get(x, {}).get("name", x) if x else "")
+        s1 = cols[0].selectbox("配偶 A", [""] + list(t["persons"].keys()),
+                               format_func=lambda x: t["persons"].get(x, {}).get("name", x) if x else "")
+        s2 = cols[1].selectbox("配偶 B", [""] + list(t["persons"].keys()),
+                               format_func=lambda x: t["persons"].get(x, {}).get("name", x) if x else "")
         mid_hint = cols[2].text_input("自訂婚姻代號（可留空）")
         ok = cols[3].form_submit_button("新增婚姻")
         if ok:
@@ -338,13 +353,21 @@ def _marriage_form(t):
     if t["marriages"]:
         with st.expander("婚姻清單（點開管理）", expanded=False):
             for mid, m in t["marriages"].items():
-                sps = m.get("spouses", [])
-                kids = m.get("children", [])
-                st.markdown(f"**{mid}** ｜ " + " × ".join(t['persons'].get(s, {}).get("name", s) for s in sps))
+                sps = m.get("spouses", []) or []
+                kids = m.get("children", []) or []
+
+                # 標題：婚姻ID｜配偶姓名 × 配偶姓名｜子女N名
+                names = [t["persons"].get(s, {}).get("name", s) for s in sps]
+                title = f"**{mid}** ｜ " + (" × ".join(names) if names else "（未登記配偶）")
+                if kids:
+                    title += f"｜子女{len(kids)}名"
+                st.markdown(title)
 
                 # 增加子女
                 cols = st.columns([5, 4, 3])
-                kid = cols[0].selectbox("選擇子女", [""] + list(t["persons"].keys()), format_func=lambda x: t["persons"].get(x, {}).get("name", x) if x else "", key=f"kid_{mid}")
+                kid = cols[0].selectbox("選擇子女", [""] + list(t["persons"].keys()),
+                                        format_func=lambda x: t["persons"].get(x, {}).get("name", x) if x else "",
+                                        key=f"kid_{mid}")
                 addk = cols[1].button("新增子女", key=f"addk_{mid}")
                 clear = cols[2].button("清空子女", key=f"clr_{mid}")
                 if addk and kid:
@@ -578,7 +601,7 @@ def _ui_import_export(t):
                 mime="application/json",
             )
 
-        # 匯入：使用 form（選檔 → 按「套用匯入」才寫入），避免一選就套用與無限重跑
+        # 匯入：使用 form（選檔 → 按「套用匯入」才寫入），並自動建立匯入前快照可復原
         with c2:
             with st.form("import_form", clear_on_submit=True):
                 file = st.file_uploader("選擇 JSON 檔", type=["json"], key="import_file")
@@ -590,13 +613,33 @@ def _ui_import_export(t):
                         try:
                             data = json.load(file)
                             if isinstance(data, dict) and "persons" in data and "marriages" in data:
+                                # 建立快照 → 寫入 → 顯示成功（不 rerun，避免閃爍）
+                                st.session_state.__backup_tree__ = copy.deepcopy(st.session_state.tree)
                                 st.session_state.tree = data
-                                st.success("匯入成功！資料已套用。")
-                                # 不呼叫 st.rerun()；form 提交會自動重新執行一次，且 clear_on_submit 會清空檔案，避免閃爍
+                                st.success("匯入成功！可用下方的『復原到匯入前』回復。")
                             else:
                                 st.warning("JSON 結構不正確，需包含 persons 與 marriages。")
                         except Exception as e:
                             st.error(f"匯入失敗：{e}")
+
+            # 復原/清空
+            c3, c4 = st.columns([1,1])
+            if c3.button("復原到匯入前", disabled=st.session_state.__backup_tree__ is None):
+                if st.session_state.__backup_tree__ is None:
+                    st.warning("沒有可復原的快照。")
+                else:
+                    st.session_state.tree = copy.deepcopy(st.session_state.__backup_tree__)
+                    st.success("已復原到匯入前的資料。")
+                    st.session_state.__backup_tree__ = None
+                    st.rerun()
+            with c4.expander("⚠️ 清空所有資料", expanded=False):
+                if st.button("我確定要清空（不可復原）"):
+                    st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
+                    st.session_state.gen_order = {}
+                    st.session_state.group_order = {}
+                    st.session_state.__backup_tree__ = None
+                    st.success("資料已清空")
+                    st.rerun()
 
 # -------------------- 進入點 --------------------
 def render():
@@ -618,7 +661,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree autosuggest • r5")  # 版本戳記（用來確認載入的是新檔）
+    st.caption("familytree autosuggest • r6")  # 版本戳記（確認載入新檔）
 
 if __name__ == "__main__":
     st.set_page_config(page_title="家族樹", layout="wide")
