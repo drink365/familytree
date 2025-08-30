@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # pages_familytree.py
 #
-# Streamlit 家族樹（配偶相鄰；配偶之間畫單一水平直線；婚姻點隱藏只用來連子女）
+# Streamlit 家族樹（配偶相鄰、配偶水平線、婚姻點隱藏且僅用 invis 邊定位）
 
 from __future__ import annotations
 import json
@@ -49,7 +49,7 @@ def _base_key(pid: str, persons: Dict[str, dict]) -> Tuple:
 
 
 # ---------------------------
-# 世代計算（先全部第 0 層，再由上往下推）
+# 世代計算
 # ---------------------------
 def _compute_generations(tree: Dict) -> Dict[str, int]:
     persons   = tree.get("persons", {})
@@ -111,7 +111,7 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
     def _pick_primary_spouse(p: str, d: int) -> Optional[str]:
         cands = []
         for m in marriages.values():
-            sps = m.get("spouses", []) or []
+            sps = m.get("spouses") or []
             if p in sps:
                 for s in sps:
                     if s != p and depth.get(s) == d:
@@ -148,7 +148,7 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
 
 
 # ---------------------------
-# Graphviz（配偶水平線 + 婚姻點隱藏）
+# Graphviz（配偶水平線 + 婚姻點用 invis 邊定位）
 # ---------------------------
 def _graph(tree: Dict):
     persons   = tree.get("persons", {})
@@ -160,7 +160,7 @@ def _graph(tree: Dict):
         "G",
         graph_attr={
             "rankdir": "TB",           # 上→下
-            "splines": "polyline",     # 直線/折線，穩定
+            "splines": "polyline",     # 稳定直線/折線
             "nodesep": "0.45",
             "ranksep": "0.85",
             "fontname": "Noto Sans CJK TC, Helvetica, Arial",
@@ -169,7 +169,7 @@ def _graph(tree: Dict):
     g.attr("node", shape="rounded", fontsize="12",
            fontname="Noto Sans CJK TC, Helvetica, Arial")
 
-    # 同層 subgraph + 隱形邊固定左右順序
+    # 同層 subgraph + 隱形串邊固定左右順序
     maxd = max(depth.values()) if depth else 0
     for d in range(0, maxd + 1):
         with g.subgraph(name=f"rank_{d}") as sg:
@@ -179,43 +179,41 @@ def _graph(tree: Dict):
                 label = persons.get(pid, {}).get("name", pid)
                 sg.node(pid, label)
             for i in range(len(order) - 1):
-                sg.edge(order[i], order[i + 1], style="invis", weight="100")
+                sg.edge(order[i], order[i + 1], style="invis", weight="200")
 
-    # 放婚姻點（完全隱藏），用透明定位邊把婚姻點夾在兩配偶中間
+    # 婚姻點（隱藏）+ 配偶水平線
     for mid, m in marriages.items():
-        sps = m.get("spouses", []) or []
+        sps = m.get("spouses") or []
         if not sps:
             continue
         d = min(depth.get(s, 0) for s in sps)
         mnode = f"{mid}_pt"
 
         with g.subgraph(name=f"rank_{d}") as sg:
-            # 婚姻點隱藏（仍可連子女）
+            # 婚姻點完全隱藏（仍可當作子女錨點）
             sg.node(mnode, "", shape="point", width="0.02", height="0.02", style="invis")
 
             if len(sps) >= 2:
                 left, right = sps[0], sps[1]
 
-                # 透明定位邊（絕對看不見）
-                sg.edge(left,  mnode, color="transparent", penwidth="0", weight="300")
-                sg.edge(mnode, right, color="transparent", penwidth="0", weight="300")
+                # 用「隱形邊」把婚姻點夾在兩配偶中間（參與佈局，不會被畫出）
+                sg.edge(left,  mnode, style="invis", weight="300")
+                sg.edge(mnode, right, style="invis", weight="300")
 
-                # 配偶之間真正的水平線（強制端點）
+                # 只畫一條真正的配偶水平線（不參與佈局）
                 g.edge(left, right,
                        dir="none",
                        constraint="false",
-                       minlen="0",
                        weight="0",
-                       penwidth="1.6",
-                       tailport="e",
-                       headport="w")
+                       penwidth="1.6")
             elif len(sps) == 1:
-                sg.edge(sps[0], mnode, color="transparent", penwidth="0", weight="300")
+                # 單一配偶時，只用隱形邊維持婚姻點位置
+                sg.edge(sps[0], mnode, style="invis", weight="300")
 
     # 子女：婚姻點 ➜ 子女
     for mid, m in marriages.items():
-        sps  = m.get("spouses", []) or []
-        kids = m.get("children", []) or []
+        sps  = m.get("spouses") or []
+        kids = m.get("children") or []
         if not sps:
             continue
         mnode = f"{mid}_pt"
@@ -279,7 +277,7 @@ def _ui_marriages(tree: Dict):
 
     # 管理婚姻
     for mid, m in marriages.items():
-        sps = m.get("spouses", []) or []
+        sps = m.get("spouses") or []
         with st.expander(f"{mid} 婚姻（點開管理）", expanded=False):
             st.caption(" × ".join(persons.get(p, {}).get("name", p) for p in sps) or "（尚未設定配偶）")
 
@@ -324,7 +322,7 @@ def _ui_graph(tree: Dict):
 
 
 # ---------------------------
-# UI：匯入／匯出（避免匯入後閃爍）
+# UI：匯入／匯出
 # ---------------------------
 def _ui_io(tree: Dict):
     st.markdown("### ④ 匯入 / 匯出")
@@ -338,7 +336,7 @@ def _ui_io(tree: Dict):
         mime="application/json",
     )
 
-    # 匯入（選檔不自動套用）
+    # 匯入（選檔不自動套用，避免閃爍）
     up = c2.file_uploader("選擇 JSON", type=["json"], key=st.session_state.uploader_key)
     if up is not None:
         st.caption(f"已選檔：{up.name}")
