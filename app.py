@@ -45,14 +45,31 @@ page = get_page_from_query()
 
 # -------------------- Sidebar --------------------
 
+
+
 with st.sidebar:
     st.markdown("## 導覽")
     sidebar_logo = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
     if sidebar_logo:
-        st.image(sidebar_logo, use_container_width=False, width=72)
+        s1, s2, s3 = st.columns([1,1,1])
+        with s2:
+            st.image(sidebar_logo, use_container_width=False, width=72)
+        # 自適應尺寸：桌機 72px，<=1200px 用 64px，<=900px 用 56px
         st.markdown(
-            "<style>section[data-testid='stSidebar'] img {display:block; margin: 6px auto;}</style>",
-            unsafe_allow_html=True,
+            """
+            <style>
+            section[data-testid='stSidebar'] img {
+                display: block; margin: 6px auto;
+                width: 72px !important; height: auto !important;
+            }
+            @media (max-width: 1200px) {
+                section[data-testid='stSidebar'] img { width: 64px !important; }
+            }
+            @media (max-width: 900px) {
+                section[data-testid='stSidebar'] img { width: 56px !important; }
+            }
+            </style>
+            """, unsafe_allow_html=True
         )
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
