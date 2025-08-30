@@ -7,6 +7,8 @@ from graphviz import Digraph
 def _init_state():
     if "tree" not in st.session_state:
         st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
+    if "gen_order" not in st.session_state:
+        st.session_state.gen_order = {}
     for k in ("pid_counter","mid_counter"):
         if k not in st.session_state:
             st.session_state[k] = 1
@@ -166,7 +168,25 @@ def _graph(tree):
                     kg.edge(kids[i], kids[i+1], style="invis", weight="50", constraint="true")
         
 
-    return g
+    
+    # ---- Global same-generation ordering (manual) ----
+    try:
+        gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
+    except Exception:
+        gen_order = {}
+    if gen_order:
+        # Build per-generation buckets
+        gens = {}
+        for pid, d in depth.items():
+            gens.setdefault(d, []).append(pid)
+        for d, people in gens.items():
+            order = [p for p in gen_order.get(str(d), []) if p in people] + [p for p in people if p not in gen_order.get(str(d), [])]
+            if len(order) >= 2:
+                with g.subgraph() as gg:
+                    gg.attr(rank="same")
+                    for i in range(len(order)-1):
+                        gg.edge(order[i], order[i+1], style="invis", weight="80", constraint="true")
+return g
 
 
 
@@ -315,7 +335,50 @@ def render():
                             t["marriages"][mid]["children"] = kids
                             st.rerun()
     
-    with st.expander("③ 家族樹視覺化", expanded=True):
+    
+
+    with st.expander("②-2 同層排序（跨家族移位｜解決無父母者定位）", expanded=False):
+        depth_map = _compute_generations(t)
+        if not depth_map:
+            st.info("請先建立至少一個人物與關係")
+        else:
+            gens = sorted(set(depth_map.values()))
+            def _gen_label(d):
+                count = sum(1 for _p in depth_map if depth_map[_p]==d)
+                return f"第 {d} 層（{count} 人）"
+            gen_sel = st.selectbox("選擇世代", gens, format_func=_gen_label, key="sel_gen_same_layer")
+            # Compose current order
+            all_in_layer = [p for p,d in depth_map.items() if d==gen_sel]
+            current = list(st.session_state.gen_order.get(str(gen_sel), []))
+            order = [p for p in current if p in all_in_layer] + [p for p in all_in_layer if p not in current]
+
+            # UI list with controls
+            for i, pid in enumerate(order):
+                nm = t["persons"].get(pid,{}).get("name", pid)
+                cols = st.columns([6,1,1,1,1])
+                cols[0].write(f"{i+1}. {pid}｜{nm}")
+                if cols[1].button("↑", key=f"gen_up_{gen_sel}_{pid}") and i>0:
+                    order[i-1], order[i] = order[i], order[i-1]
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+                if cols[2].button("↓", key=f"gen_dn_{gen_sel}_{pid}") and i < len(order)-1:
+                    order[i+1], order[i] = order[i], order[i+1]
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+                if cols[3].button("置頂", key=f"gen_top_{gen_sel}_{pid}") and i>0:
+                    moved = order.pop(i)
+                    order.insert(0, moved)
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+                if cols[4].button("置底", key=f"gen_bot_{gen_sel}_{pid}") and i < len(order)-1:
+                    moved = order.pop(i)
+                    order.append(moved)
+                    st.session_state.gen_order[str(gen_sel)] = order
+                    st.rerun()
+
+            st.caption("小提醒：此排序會讓同層人物依序靠在一起，適用於把「沒有父母記錄的人」排到特定親友旁邊（例如把『硯文』排到『榮惠』右側）。")
+
+with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
 
 
