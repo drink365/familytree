@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import json
-from collections import deque
+from collections import deque, Counter
 from graphviz import Digraph
 
 # =========================================================
@@ -28,14 +28,13 @@ def _next_mid():
     return f"M{st.session_state.mid_counter:03d}"
 
 # =========================================================
-# 1) 分層（一定會有三層：祖/父母/子）
-#    規則：配偶同層；子女在父母下一層（反覆鬆弛直到穩定）
+# 1) 分層（配偶同層；子女下一層；反覆鬆弛）
 # =========================================================
 def _compute_generations(tree):
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # 初值：父→子建圖，做一輪拓撲層級
+    # 初值：父→子建圖，一輪拓撲層級
     children_of = {pid: set() for pid in persons}
     indeg       = {pid: 0   for pid in persons}
     for m in marriages.values():
@@ -83,10 +82,7 @@ def _compute_generations(tree):
     return depth
 
 # =========================================================
-# 2) 佈局啟發式（按鈕：自動減少交錯）
-#    - 同層初排：出生年、姓名
-#    - 多輪 barycenter（上下各掃一遍）
-#    - 產生 gen_order / group_order 寫回 session
+# 2) 佈局啟發式用小工具
 # =========================================================
 def _year(person):
     try:
@@ -95,82 +91,186 @@ def _year(person):
     except Exception:
         return None
 
-def _bary(nodes, pos_ref, adj, persons):
-    scored = []
-    for i, n in enumerate(nodes):
-        ns = [pos_ref.get(v) for v in adj.get(n, []) if v in pos_ref]
-        s  = sum(ns)/len(ns) if ns else float("inf")
-        y  = _year(persons.get(n, {}))
-        scored.append((s, (y is None, y if y is not None else 9999, persons.get(n,{}).get("name","")), i, n))
-    scored.sort(key=lambda x: (x[0], x[1], x[2]))
-    return [n for *_, n in scored]
+def _spouses_of(pid, marriages):
+    """回傳 pid 的配偶清單（可能多段婚姻，去重）。"""
+    seen, res = set(), []
+    for m in marriages.values():
+        sps = m.get("spouses", []) or []
+        if pid in sps:
+            for s in sps:
+                if s != pid and s not in seen:
+                    seen.add(s); res.append(s)
+    return res
 
-def _auto_layout(tree, sweeps=3):
+def _parents_mid_of(pid, marriages):
+    """回傳 pid 的『父母那段婚姻 mid』；找不到回 None。"""
+    for mid, m in marriages.items():
+        if pid in (m.get("children", []) or []):
+            return mid
+    return None
+
+def _enforce_spouse_adjacency(order, marriages, layer, depth):
+    """
+    在同一層 order 內，讓所有『同層夫妻』緊鄰（盡量小幅移動）。
+    """
+    pos = {p: i for i, p in enumerate(order)}
+    changed, guard = True, 0
+    while changed and guard < 50:
+        changed = False
+        guard += 1
+        for m in marriages.values():
+            sps = [s for s in (m.get("spouses", []) or []) if depth.get(s) == layer]
+            if len(sps) < 2:
+                continue
+            a, b = sps[0], sps[1]
+            if a not in pos or b not in pos:
+                continue
+            ia, ib = pos[a], pos[b]
+            if abs(ia - ib) == 1:
+                continue
+            # 把較右的移到較左者旁（右側）
+            if ia < ib:
+                mover, anchor, target = b, a, pos[a] + 1
+            else:
+                mover, anchor, target = a, b, pos[b] + 1
+            order.pop(pos[mover])
+            if pos[mover] < target:
+                target -= 1
+            order.insert(target, mover)
+            pos = {p: i for i, p in enumerate(order)}
+            changed = True
+    return order
+
+# =========================================================
+# 3) 自動減少交錯（按鈕會呼叫）
+#    barycenter 多輪掃描 + 強化：
+#    A) 夫妻緊鄰；B) 兄弟姊妹群兩端推開跨家庭橋節點
+# =========================================================
+def _auto_layout(tree, sweeps=4):
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
     depth     = _compute_generations(tree)
 
-    # 建同層列表
+    # 依層分組
     layers = {}
     for pid, d in depth.items():
         layers.setdefault(d, []).append(pid)
 
-    # 初始排序（出生年/姓名）
-    gen_order = {}
-    for d, nodes in layers.items():
-        def k(n):
-            y = _year(persons.get(n, {}))
-            return (y is None, y if y is not None else 9999, persons.get(n,{}).get("name",""))
-        gen_order[str(d)] = sorted(nodes, key=k)
+    # 初始順序：出生年/姓名
+    def base_key(n):
+        y = _year(persons.get(n, {}))
+        return (y is None, y if y is not None else 9999, persons.get(n, {}).get("name", ""))
 
-    # 構圖：跨層鄰居（父母↔子女 / 子女↔父母）
-    adj = {pid:set() for pid in persons}
+    gen_order = {str(d): sorted(nodes, key=base_key) for d, nodes in layers.items()}
+
+    # 父母<->子女鄰接
+    adj = {pid: set() for pid in persons}
     for m in marriages.values():
         sps  = m.get("spouses", []) or []
         kids = m.get("children", []) or []
         for s in sps:
             for c in kids:
-                adj[s].add(c)
-                adj[c].add(s)
+                adj[s].add(c); adj[c].add(s)
 
+    # 多輪 barycenter 掃描
     maxd = max(layers.keys()) if layers else 0
-    for _ in range(sweeps):
-        # top→down
-        for d in range(1, maxd+1):
-            prev = gen_order[str(d-1)]
-            ref  = {p:i for i,p in enumerate(prev)}
-            cur  = gen_order[str(d)]
-            gen_order[str(d)] = _bary(cur, ref, adj, persons)
-        # bottom→up
-        for d in range(maxd-1, -1, -1):
-            nxt = gen_order[str(d+1)]
-            ref = {p:i for i,p in enumerate(nxt)}
-            cur = gen_order[str(d)]
-            gen_order[str(d)] = _bary(cur, ref, adj, persons)
+    def _bary(nodes, refpos):
+        scored = []
+        for i, n in enumerate(nodes):
+            neigh = [refpos.get(v) for v in adj.get(n, []) if v in refpos]
+            s = sum(neigh) / len(neigh) if neigh else float("inf")
+            scored.append((s, base_key(n), i, n))
+        scored.sort(key=lambda x: (x[0], x[1], x[2]))
+        return [n for *_, n in scored]
 
-    # 產生夫妻群排序（以該層配偶的出現順序）
+    for _ in range(sweeps):
+        # top → down
+        for d in range(1, maxd + 1):
+            ref = {p: i for i, p in enumerate(gen_order[str(d - 1)])}
+            gen_order[str(d)] = _bary(gen_order[str(d)], ref)
+        # bottom → up
+        for d in range(maxd - 1, -1, -1):
+            ref = {p: i for i, p in enumerate(gen_order[str(d + 1)])}
+            gen_order[str(d)] = _bary(gen_order[str(d)], ref)
+
+    # 強化 A：夫妻緊鄰（防止單身夾在夫妻中間）
+    for d in layers:
+        gen_order[str(d)] = _enforce_spouse_adjacency(gen_order[str(d)], marriages, d, depth)
+
+    # 強化 B：兄弟姊妹兩端推開「跨家庭橋節點」
+    pos_by_layer = {d: {p: i for i, p in enumerate(gen_order[str(d)])} for d in layers}
+    for pmid, pm in marriages.items():
+        kids = [k for k in (pm.get("children", []) or []) if k in persons]
+        if not kids:
+            continue
+        d = Counter(depth.get(k, 0) for k in kids).most_common(1)[0][0]
+        order = gen_order.get(str(d), [])
+        if not order:
+            continue
+
+        pos = {p: i for i, p in enumerate(order)}
+        kids_in_order = [k for k in order if k in kids]
+        if len(kids_in_order) < 2:
+            continue
+
+        group_center = sum(pos[k] for k in kids_in_order) / len(kids_in_order)
+
+        left_bridge, right_bridge, middle = [], [], []
+        for k in kids_in_order:
+            spouse_list = _spouses_of(k, marriages)
+            best_parent_center = None
+            for sp in spouse_list:
+                p_mid = _parents_mid_of(sp, marriages)
+                if not p_mid:
+                    continue
+                parent_spouses = marriages[p_mid].get("spouses", []) or []
+                ref_layer = d - 1
+                refpos = pos_by_layer.get(ref_layer, {})
+                pts = [refpos.get(pp) for pp in parent_spouses if refpos.get(pp) is not None]
+                if pts:
+                    center = sum(pts) / len(pts)
+                    best_parent_center = center
+                    break
+            if best_parent_center is None:
+                middle.append(k)
+            elif best_parent_center < group_center:
+                left_bridge.append(k)
+            else:
+                right_bridge.append(k)
+
+        if left_bridge or right_bridge:
+            left_bridge  = [x for x in kids_in_order if x in left_bridge]
+            middle       = [x for x in kids_in_order if x in middle]
+            right_bridge = [x for x in kids_in_order if x in right_bridge]
+            new_sub = left_bridge + middle + right_bridge
+            it = iter(new_sub)
+            order = [next(it) if p in kids_in_order else p for p in order]
+            gen_order[str(d)] = order
+            pos_by_layer[d] = {p: i for i, p in enumerate(order)}  # 更新
+
+    # 生成夫妻群排序（供 ②-3 使用）
     group_order = {}
     for d, nodes in layers.items():
-        pos = {p:i for i,p in enumerate(gen_order[str(d)])}
-        mids=[]
-        for mid,m in marriages.items():
-            sps = m.get("spouses",[])
-            anchor=None
+        pos = {p: i for i, p in enumerate(gen_order[str(d)])}
+        mids = []
+        for mid, m in marriages.items():
+            sps = m.get("spouses", []) or []
+            anchor = None
             for s in sps:
-                if depth.get(s)==d:
-                    anchor=s;break
+                if depth.get(s) == d:
+                    anchor = s; break
             if anchor is None and sps:
-                anchor=sps[0]
+                anchor = sps[0]
             if anchor in pos:
                 mids.append((pos[anchor], mid))
         if mids:
             mids.sort()
-            group_order[str(d)] = [mid for _,mid in mids]
+            group_order[str(d)] = [mid for _, mid in mids]
 
     return gen_order, group_order
 
 # =========================================================
-# 3) Graphviz（夫妻同層；婚姻點在中線；子女從中線往下）
+# 4) Graphviz（夫妻同層；婚姻點在中線；子女從中線往下）
 # =========================================================
 def _graph(tree):
     depth     = _compute_generations(tree)
@@ -190,7 +290,7 @@ def _graph(tree):
         label = nm + (f"\n{by}" if by else "")
         g.node(pid, label=label)
 
-    # 每層列表 + 預設順序
+    # 每層列表 + 預設順序（出生年/姓名）
     layers = {}
     for pid, d in depth.items():
         layers.setdefault(d, []).append(pid)
@@ -199,9 +299,7 @@ def _graph(tree):
         y = _year(persons.get(pid, {}))
         return (y is None, y if y is not None else 9999, persons.get(pid,{}).get("name",""))
 
-    per_layer_order = {}
-    for d, nodes in layers.items():
-        per_layer_order[d] = sorted(nodes, key=_base_key)
+    per_layer_order = {d: sorted(nodes, key=_base_key) for d, nodes in layers.items()}
 
     # 使用者 ②-2 覆蓋
     if st.session_state.get("gen_order"):
@@ -278,14 +376,13 @@ def _graph(tree):
                 d = int(d_str)
             except Exception:
                 continue
-            # 找出每個婚姻在該層的「錨點配偶」
             anchors=[]
             for mid in [m for m in mids if m in marriages]:
                 sps = marriages[mid].get("spouses", [])
                 anchor=None
                 for s in sps:
                     if depth.get(s)==d:
-                        anchor=s;break
+                        anchor=s; break
                 if anchor is None and sps:
                     anchor=sps[0]
                 anchors.append(anchor)
@@ -299,7 +396,7 @@ def _graph(tree):
     return g
 
 # =========================================================
-# 4) UI：基本資料
+# 5) UI：基本資料
 # =========================================================
 def _person_form(t):
     st.subheader("① 人物管理")
@@ -394,13 +491,13 @@ def _marriage_form(t):
                             x=kids.pop(i); kids.append(x); st.rerun()
 
 # =========================================================
-# 5) UI：排序工具 + 一鍵自動減交錯
+# 6) UI：排序工具 + 一鍵自動減交錯
 # =========================================================
 def _ui_autoreduce(t):
     with st.expander("②-0 一鍵自動減少交錯（建議）", expanded=False):
-        st.caption("說明：以父母↔子女的 barycenter 佈局做多輪微調，再搭配夫妻群排序，通常能明顯降低交錯。")
+        st.caption("說明：以父母↔子女的 barycenter 佈局多輪微調，並強制『夫妻緊鄰』與『跨家庭孩子推到手足兩端』。")
         if st.button("⚙️ 自動減少交錯", type="primary"):
-            gen_order, group_order = _auto_layout(t, sweeps=3)
+            gen_order, group_order = _auto_layout(t, sweeps=5)
             st.session_state.gen_order = gen_order
             st.session_state.group_order = group_order
             st.success("已套用建議排序，若需要可再用 ②-2 / ②-3 微調。")
@@ -463,7 +560,7 @@ def _ui_group_reorder(t):
                 x=order.pop(i); order.append(x); st.session_state.group_order[str(gsel)]=order; st.rerun()
 
 # =========================================================
-# 6) 視覺化 & 匯入/匯出
+# 7) 視覺化 & 匯入/匯出
 # =========================================================
 def _ui_visualize(t):
     with st.expander("③ 家族樹視覺化", expanded=True):
@@ -507,7 +604,7 @@ def _ui_import_export(t):
                 st.rerun()
 
 # =========================================================
-# 7) 入口
+# 8) 入口
 # =========================================================
 def render():
     _init_state()
@@ -517,14 +614,14 @@ def render():
     _person_form(t)
     _marriage_form(t)
 
-    _ui_autoreduce(t)        # ← 新增：一鍵自動減少交錯
+    _ui_autoreduce(t)        # ← 一鍵自動減少交錯
     _ui_same_layer_reorder(t)
     _ui_group_reorder(t)
 
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree • r9")
+    st.caption("familytree • r10")
 
 if __name__ == "__main__":
     st.set_page_config(page_title="家族樹", layout="wide")
