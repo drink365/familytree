@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 import streamlit as st, json
 from graphviz import Digraph
@@ -21,31 +22,24 @@ def _label(p):
     if p.get("birth"): y.append(str(p["birth"]))
     if p.get("death"): y.append(str(p["death"]))
     years = "-".join(y)
-    return f'{p.get("name","?")}' + (f"\\n{years}" if years else "")
+    return f'{p.get("name","?")}' + (f"\n{years}" if years else "")
 
 # -------------------- Generation Layering --------------------
 def _compute_generations(tree):
-    """Return dict depth[pid] = generation (0,1,2,...). Roots(no parents)=0."""
     persons = set(tree.get("persons", {}).keys())
     marriages = tree.get("marriages", {})
-    # child -> parents
     parents_of = {}
     for mid, m in marriages.items():
         for c in m.get("children", []):
             parents_of.setdefault(c, set()).update(m.get("spouses", []))
-
-    # roots = persons who are never a child
     roots = [p for p in persons if p not in parents_of]
     depth = {p: 0 for p in roots}
-
-    # BFS/DP propagate depths; iterate until stable
     changed = True
     iters = 0
-    while changed and iters < 10_000:
+    while changed and iters < 10000:
         changed = False
         iters += 1
         for mid, m in marriages.items():
-            # each child depth = min(parents depth)+1 (if any parent has depth)
             par_depths = [depth[p] for p in m.get("spouses", []) if p in depth]
             if not par_depths:
                 continue
@@ -54,7 +48,6 @@ def _compute_generations(tree):
                 if depth.get(c, -1) != next_depth:
                     depth[c] = next_depth
                     changed = True
-    # any remaining unconnected persons stay at 0
     for p in persons:
         depth.setdefault(p, 0)
     return depth
@@ -69,13 +62,10 @@ def _graph(tree):
            fontname="Noto Sans CJK TC, Arial", fontsize="10")
     g.attr("edge", color="#7b8aa8")
 
-    # 1) Person nodes
-    # group nodes by depth for rank=same
     by_depth = {}
     for pid, p in tree.get("persons", {}).items():
         by_depth.setdefault(depth.get(pid, 0), []).append(pid)
 
-    # add subgraphs to force horizontal alignment by generation
     for d, nodes in sorted(by_depth.items()):
         with g.subgraph(name=f"cluster_gen_{d}") as sg:
             sg.attr(rank="same")
@@ -83,24 +73,16 @@ def _graph(tree):
                 shape = "ellipse" if tree["persons"].get(pid, {}).get("gender") == "F" else "box"
                 sg.node(pid, label=_label(tree["persons"][pid]), shape=shape)
 
-    # 2) Marriage nodes (points) – place with parents' rank
-    # we create all mids now (rank same as parents; if unknown, leave default)
     for mid, m in tree.get("marriages", {}).items():
-        # choose a parent depth to align the marriage node
-        parent_depths = [depth.get(p, 0) for p in m.get("spouses", [])]
-        pd = min(parent_depths) if parent_depths else 0
         with g.subgraph(name=f"cluster_mid_{mid}") as sg:
             sg.attr(rank="same")
             sg.node(mid, label="", shape="point", width="0.01")
-
-        # connect spouses to marriage point
         for s in m.get("spouses", []):
             if s in tree.get("persons", {}):
                 g.edge(s, mid, dir="none")
 
-    # 3) Child edges – children belong to next depth layer naturally
     child_types = tree.get("child_types", {})
-    HIDE_LABELS = {"生", "bio", "親生"}  # treat these as empty labels
+    HIDE_LABELS = {"生", "bio", "親生"}
     for mid, m in tree.get("marriages", {}).items():
         for c in m.get("children", []):
             if c in tree.get("persons", {}):
@@ -121,7 +103,6 @@ def render():
 
     t = st.session_state.tree
 
-    # === ① 人物管理 ===
     with st.expander("① 人物管理", expanded=True):
         cols = st.columns([2,1,1,1,1])
         name = cols[0].text_input("姓名 *", key="ft_name")
@@ -136,7 +117,6 @@ def render():
                 t["persons"][pid] = {"name": name.strip(), "gender": gender, "birth": birth.strip(), "death": death.strip()}
                 st.success(f"已新增 {name}（{pid}）")
 
-        # 刪除人物
         if t["persons"]:
             pid_del = st.selectbox(
                 "選擇人物以刪除（可選）",
@@ -154,7 +134,6 @@ def render():
                     del t["persons"][pid_del]
                     st.success("已刪除")
 
-    # === ② 婚姻關係 ===
     with st.expander("② 婚姻關係", expanded=True):
         people = list(t["persons"].keys())
         if not people:
@@ -172,7 +151,6 @@ def render():
                     t["child_types"][mid] = {}
                     st.success(f"已建立婚姻 {mid}")
 
-        # === 子女管理 ===
         if t["marriages"]:
             def safe_format_marriage(x):
                 spouses = t["marriages"].get(x, {}).get("spouses", [])
@@ -196,11 +174,9 @@ def render():
                         t["child_types"].setdefault(mid, {})[child] = ctype
                         st.success("已新增子女")
 
-    # === ③ 家族樹視覺化 ===
     with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
 
-    # === ④ 匯入 / 匯出 ===
     with st.expander("④ 匯入 / 匯出", expanded=False):
         col1,col2 = st.columns(2)
         col1.download_button("⬇️ 下載 JSON", data=json.dumps(t, ensure_ascii=False, indent=2),
