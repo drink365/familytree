@@ -2,7 +2,11 @@
 # pages_familytree.py
 #
 # 家族樹（Streamlit + Graphviz）
-# 佈局重點：以「小孩為單位」把配偶織入，保證配偶相鄰、同父母子女不被外人打斷。
+# 重點：
+# 1) 配偶一定相鄰（在同層、同群內強制相鄰）
+# 2) 同父母子女必定成群，不被外人插隊
+# 3) 匯入 JSON 需要按「套用匯入」才會覆寫，避免無限 rerun 閃爍
+# 4) Graphviz：婚姻點放入配偶所在層的子圖，並以隱形邊夾在兩配偶中間，避免長弧線
 
 from __future__ import annotations
 import json
@@ -58,6 +62,7 @@ def _cluster_id_of(pid: str, d: int, marriages: Dict[str, dict]) -> str:
 
 
 def _ensure_adjacent_inside(lst: List[str], a: str, b: str):
+    """把 a 與 b 在 list 中強制相鄰（不調整其它元素的相對順序）"""
     if a not in lst or b not in lst:
         return
     ia, ib = lst.index(a), lst.index(b)
@@ -86,10 +91,11 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
         if pid not in child_of:
             depth[pid] = 0
 
+    # 傳播
     for _ in range(120):
         changed = False
 
-        # 同婚姻配偶同層
+        # 同一婚姻的配偶同層
         for m in marriages.values():
             sps = m.get("spouses", []) or []
             known = [depth[s] for s in sps if s in depth]
@@ -105,15 +111,14 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
             sps = m.get("spouses", []) or []
             kids = m.get("children", []) or []
             pd = [depth[s] for s in sps if s in depth]
-            if not pd:
-                continue
-            d = min(pd) + 1
-            for c in kids:
-                if depth.get(c) != d:
-                    depth[c] = d
-                    changed = True
+            if pd:
+                d = min(pd) + 1
+                for c in kids:
+                    if depth.get(c) != d:
+                        depth[c] = d
+                        changed = True
 
-        # 由小孩推父母層（最小孩子層 - 1）
+        # 由孩子回推父母（孩子最淺層 - 1）
         for m in marriages.values():
             sps = m.get("spouses", []) or []
             kids = m.get("children", []) or []
@@ -128,12 +133,12 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
         if not changed:
             break
 
-    # 補 0
+    # 填 0
     for pid in persons.keys():
         if pid not in depth:
             depth[pid] = 0
 
-    # 平移到 >= 0
+    # 平移到非負
     min_d = min(depth.values()) if depth else 0
     if min_d < 0:
         for k in depth:
@@ -189,8 +194,8 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
     gen_order: Dict[str, List[str]] = {}
     maxd = max(layers.keys()) if layers else 0
 
-    # 取得「同層主要配偶」
     def _pick_primary_spouse(p: str, d: int) -> Optional[str]:
+        """挑同層最合適配偶（有父母者優先、再比基本 key）"""
         cands = []
         for m in marriages.values():
             sps = m.get("spouses", []) or []
@@ -203,7 +208,7 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
 
         def kk(s):
             pm = _parents_mid_of(s, marriages)
-            return (pm is None, _base_key(s, persons))  # 有父母優先
+            return (pm is None, _base_key(s, persons))  # 有父母者優先
         cands.sort(key=kk)
         return cands[0]
 
@@ -216,7 +221,7 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
             cid = _cluster_id_of(p, d, marriages)
             clusters.setdefault(cid, []).append(p)
 
-        # 群內排序，並確保群內同層配偶相鄰（孤兒群）
+        # 群內穩定排序 + 確保群內同層配偶相鄰
         for cid, lst in clusters.items():
             lst.sort(key=lambda x: _base_key(x, persons))
             for m in marriages.values():
@@ -227,13 +232,12 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
         # 群序
         base_cluster_order = _stable_cluster_order(d, clusters, marriages, persons)
 
-        # 小孩單位輸出
+        # 以「單位」（[人] 或 [人,配偶]）輸出，保證夫妻相鄰
         placed = set()
         final: List[str] = []
 
         for cid in base_cluster_order:
             lst = [p for p in clusters[cid] if p not in placed]
-
             units: List[List[str]] = []
             for p in lst:
                 if p in placed:
@@ -283,27 +287,28 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
 
 
 # -----------------------------
-# Graphviz 視覺化
+# Graphviz 視覺化（修正婚姻點長弧線問題）
 # -----------------------------
 def _graph(tree: Dict):
-    persons = tree.get("persons", {})
+    persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
     gen_order = st.session_state.get("gen_order", {})
-    depth = _compute_generations(tree)
+    depth     = _compute_generations(tree)
 
     g = Digraph(
         "G",
         graph_attr={
             "rankdir": "TB",
-            "splines": "true",
+            "splines": "polyline",  # 讓線較直，避免過度彎曲
             "nodesep": "0.40",
             "ranksep": "0.80",
             "fontname": "Noto Sans CJK TC, Helvetica, Arial",
         },
     )
-    g.attr("node", shape="rounded", fontsize="12", fontname="Noto Sans CJK TC, Helvetica, Arial")
+    g.attr("node", shape="rounded", fontsize="12",
+           fontname="Noto Sans CJK TC, Helvetica, Arial")
 
-    # 每層 rank=same + 隱形邊固定左右順序
+    # 先建立各層的 rank 子圖，放人物，並用隱形邊固定左右順序
     maxd = max(depth.values()) if depth else 0
     for d in range(0, maxd + 1):
         with g.subgraph(name=f"cluster_rank_{d}") as sg:
@@ -315,17 +320,29 @@ def _graph(tree: Dict):
             for i in range(len(order) - 1):
                 sg.edge(order[i], order[i + 1], style="invis", weight="100")
 
-    # 婚姻點 + 子女
+    # 把婚姻點加入「配偶所在層」的子圖，並以隱形邊夾在兩配偶之間
     for mid, m in marriages.items():
         sps = m.get("spouses", []) or []
+        if not sps:
+            continue
+        d = min(depth.get(s, 0) for s in sps)
+        mnode = f"{mid}_pt"
+        with g.subgraph(name=f"cluster_rank_{d}") as sg:
+            sg.node(mnode, "", shape="point", width="0.02", height="0.02")
+            if len(sps) >= 2:
+                left, right = sps[0], sps[1]
+                sg.edge(left,  mnode, style="invis", weight="200")
+                sg.edge(mnode, right, style="invis", weight="200")
+
+    # 真實邊：配偶↔婚姻點（不影響佈局），婚姻點→子女（正常）
+    for mid, m in marriages.items():
+        sps  = m.get("spouses", []) or []
         kids = m.get("children", []) or []
         if not sps:
             continue
-
         mnode = f"{mid}_pt"
-        g.node(mnode, "", shape="point", width="0.02", height="0.02")
         for s in sps:
-            g.edge(s, mnode, dir="none", weight="10")
+            g.edge(s, mnode, dir="none", weight="2", constraint="false")
         for c in kids:
             g.edge(mnode, c, arrowhead="normal")
 
@@ -339,9 +356,9 @@ def _ui_persons(tree: Dict):
     st.markdown("### ① 人物管理")
     with st.form("person_form", clear_on_submit=True):
         col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
-        name = col1.text_input("姓名 *")
+        name   = col1.text_input("姓名 *")
         gender = col2.selectbox("性別", ["男", "女", ""])
-        by = col3.number_input("出生年", min_value=0, max_value=9999, value=0, step=1)
+        by     = col3.number_input("出生年", min_value=0, max_value=9999, value=0, step=1)
         submitted = col4.form_submit_button("＋ 新增人物")
         if submitted:
             if not name.strip():
@@ -363,7 +380,7 @@ def _ui_persons(tree: Dict):
 def _ui_marriages(tree: Dict):
     st.markdown("### ② 婚姻與子女")
 
-    persons = tree["persons"]
+    persons   = tree["persons"]
     marriages = tree["marriages"]
 
     # 建立婚姻
@@ -372,10 +389,12 @@ def _ui_marriages(tree: Dict):
         ppl = [(p["name"], pid) for pid, p in persons.items()]
         ppl.sort()
         s1 = col1.selectbox(
-            "配偶 A", options=[""] + [pid for _, pid in ppl], format_func=lambda x: "" if not x else persons[x]["name"]
+            "配偶 A", options=[""] + [pid for _, pid in ppl],
+            format_func=lambda x: "" if not x else persons[x]["name"]
         )
         s2 = col2.selectbox(
-            "配偶 B", options=[""] + [pid for _, pid in ppl], format_func=lambda x: "" if not x else persons[x]["name"]
+            "配偶 B", options=[""] + [pid for _, pid in ppl],
+            format_func=lambda x: "" if not x else persons[x]["name"]
         )
         ok = col3.form_submit_button("＋ 建立婚姻")
         if ok:
@@ -399,10 +418,12 @@ def _ui_marriages(tree: Dict):
                 with st.form(f"kid_{mid}", clear_on_submit=True):
                     col1, col2 = st.columns([5, 1])
                     candidates = [
-                        pid for pid in persons.keys() if _parents_mid_of(pid, marriages) in (None, mid)
+                        pid for pid in persons.keys()
+                        if _parents_mid_of(pid, marriages) in (None, mid)
                     ]  # 不讓一人掛多組父母
                     sel = col1.selectbox(
-                        "新增子女", options=[""] + candidates, format_func=lambda x: "" if not x else persons[x]["name"]
+                        "新增子女", options=[""] + candidates,
+                        format_func=lambda x: "" if not x else persons[x]["name"]
                     )
                     ok = col2.form_submit_button("加入子女")
                     if ok:
@@ -436,7 +457,7 @@ def _ui_graph(tree: Dict):
 
 
 # -----------------------------
-# UI：匯入 / 匯出（修正「匯入後一直閃」）
+# UI：匯入 / 匯出（防止匯入後「一直閃」）
 # -----------------------------
 def _ui_io(tree: Dict):
     st.markdown("### ④ 匯入 / 匯出")
@@ -450,7 +471,7 @@ def _ui_io(tree: Dict):
         mime="application/json",
     )
 
-    # 選檔（僅選擇，不自動套用）
+    # 只「選檔」，不自動套用
     up = col2.file_uploader("選擇 JSON 檔", type=["json"], key=st.session_state.uploader_key)
 
     if up is not None:
@@ -464,7 +485,7 @@ def _ui_io(tree: Dict):
                     st.session_state.family = data
                     _apply_rules(st.session_state.family)
                     st.success("匯入成功！")
-                    # 重建 uploader（清除選檔狀態），避免 rerun 後再次觸發
+                    # 重新產生 key 清空 uploader，避免 rerun 後又再觸發
                     st.session_state.uploader_key = f"upload_{uuid.uuid4().hex[:6]}"
                     st.rerun()
             except Exception as e:
