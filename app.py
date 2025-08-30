@@ -46,13 +46,10 @@ page = get_page_from_query()
 # -------------------- Sidebar --------------------
 with st.sidebar:
     st.markdown("## 導覽")
-
-    # 預設不顯示側邊欄 Logo，保持全站一致；如需顯示可在 brand.json 設 SHOW_SIDEBAR_LOGO=true
-    if SHOW_SIDEBAR_LOGO:
-        sidebar_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
-        if sidebar_logo:
-            st.image(sidebar_logo, use_container_width=False, width=140)
-
+    # 左側固定顯示 logo2.png（若不存在則退回 LOGO_PATH）
+    sidebar_logo = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
+    if sidebar_logo:
+        st.image(sidebar_logo, use_container_width=False, width=160)
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -99,12 +96,25 @@ st.markdown(
 
 # -------------------- Pages --------------------
 def render_home():
-    # 置中顯示首頁 Logo
+    # 置中顯示首頁橫式 Logo（logo.png，寬 200）
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo:
         c1, c2, c3 = st.columns([1,2,1])
         with c2:
-            st.image(main_logo, use_container_width=False, width=280)
+            st.image(main_logo, use_container_width=False, width=200)
+
+    TAGLINE = "說清楚，做得到"
+    SUBLINE = "把傳承變簡單。"
+
+    st.markdown(
+        f"""
+        ### 10 分鐘完成高資產家族 10 年的傳承規劃
+
+        {TAGLINE}｜{SUBLINE}
+        """.strip()
+    )
+
+    st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
 
     TAGLINE = "說清楚，做得到"
     SUBLINE = "把傳承變簡單。"
