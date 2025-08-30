@@ -38,6 +38,25 @@ st.markdown("""
   .subtitle {{ font-size: 18px; color: #334155; margin-bottom: 24px; }}
   header[data-testid="stHeader"] {{ background: transparent; }}
   .footer {{ color:#6b7280; font-size:13px; margin-top: 20px; }}
+
+/* === Sidebar Navigation Buttons === */
+section[data-testid="stSidebar"] .stButton > button {
+    width: 100%;
+    background-color: #ffffff !important;
+    color: #1f2937 !important;
+    border: 1px solid #e5e7eb !important;
+    border-radius: 10px !important;
+    padding: 8px 12px !important;
+    margin-bottom: 8px !important;
+    font-weight: 600 !important;
+    text-align: left !important;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+    background-color: #f3f4f6 !important;
+    border-color: #cbd5e1 !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 def navigate(key: str): st.query_params.update({"page": key}); st.rerun()
