@@ -164,13 +164,32 @@ st.markdown(
 
 # -------------------- Pages --------------------
 
-def render_home():
-    # 首頁 LOGO：橫式置左顯示（logo.png，寬 200）
-    main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
-    if main_logo:
-        st.image(main_logo, use_container_width=False, width=200)
 
-    TAGLINE = "說清楚，做得到"
+def render_home():
+    # 首頁 LOGO：以 base64 方式嵌入，避免縮放模糊；置左顯示，寬 200
+    main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
+    if main_logo_path:
+        import base64
+        b64 = base64.b64encode(open(main_logo_path, "rb").read()).decode("utf-8")
+        st.markdown(
+            f"""
+            <div class="gfo-hero-logo-wrap">
+                <img src="data:image/png;base64,{b64}" class="gfo-hero-logo" alt="logo">
+            </div>
+            """, unsafe_allow_html=True
+        )
+        st.markdown(
+            """
+            <style>
+            .gfo-hero-logo-wrap { display:block; }
+            .gfo-hero-logo { width: 200px !important; height: auto !important; image-rendering: -webkit-optimize-contrast; }
+            @media (max-width: 900px) {
+                .gfo-hero-logo { width: 180px !important; }
+            }
+            </style>
+            """, unsafe_allow_html=True
+        )
+    TAGLINE =  "說清楚，做得到"
     SUBLINE = "把傳承變簡單。"
 
     st.markdown(
