@@ -3,112 +3,10 @@
 import streamlit as st, json
 from graphviz import Digraph
 
-# -------------------- Auto Layout Heuristics --------------------
-def _birth_year(p):
-    try:
-        v = p.get("birth", "")
-        return int(str(v).strip()[:4]) if v else None
-    except Exception:
-        return None
-
-def _barycenter_order(nodes, pos_ref, tie_key=None):
-    bc = []
-    for i, n in enumerate(nodes):
-        neigh_pos = [pos_ref.get(v) for v in pos_ref.get("__adj__", {}).get(n, []) if v in pos_ref]
-        score = sum(neigh_pos) / len(neigh_pos) if neigh_pos else float("inf")
-        bc.append((score, tie_key(n) if tie_key else None, i, n))
-    bc.sort(key=lambda x: (x[0], x[1] if x[1] is not None else 0, x[2]))
-    return [n for *_, n in bc]
-
-def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps=3):
-    persons = tree.get("persons", {})
-    marriages = tree.get("marriages", {})
-    depth = _compute_generations(tree)
-
-    # Optionally reorder children by birth year
-    if sort_children_by_birth:
-        for mid, m in marriages.items():
-            kids = list(m.get("children", []))
-            kids_sorted = sorted(kids, key=lambda k: (_birth_year(persons.get(k, {})) is None, _birth_year(persons.get(k, {})) or 9999, persons.get(k, {}).get("name","")))
-            m["children"] = kids_sorted
-
-    # Optionally reorder spouses by birth year
-    if not preserve_spouse:
-        for mid, m in marriages.items():
-            sps = list(m.get("spouses", []))
-            sps_sorted = sorted(sps, key=lambda s: (_birth_year(persons.get(s, {})) is None, _birth_year(persons.get(s, {})) or 9999, persons.get(s, {}).get("name","")))
-            m["spouses"] = sps_sorted
-
-    # Initial per-layer ordering by birth year/name
-    layers = {}
-    for pid in persons:
-        d = depth.get(pid, 0)
-        layers.setdefault(d, []).append(pid)
-    gen_order = {}
-    for d, nodes in layers.items():
-        def tie(n):
-            by = _birth_year(persons.get(n, {})) or 9999
-            return (by, persons.get(n, {}).get("name",""))
-        gen_order[str(d)] = sorted(nodes, key=tie)
-
-    # Build adjacency for barycenter sweeps
-    adj = {}
-    for pid in persons:
-        nbrs = set()
-        for mid, m in marriages.items():
-            if pid in m.get("spouses", []):
-                for c in m.get("children", []):
-                    nbrs.add(c)
-            if pid in m.get("children", []):
-                for s in m.get("spouses", []):
-                    nbrs.add(s)
-        adj[pid] = list(nbrs)
-
-    maxd = max(layers.keys()) if layers else 0
-    for _ in range(sweeps):
-        # top-down
-        for d in range(1, maxd+1):
-            prev = gen_order[str(d-1)]
-            prev_pos = {pid:i for i,pid in enumerate(prev)}
-            prev_pos["__adj__"] = adj
-            cur = gen_order[str(d)]
-            gen_order[str(d)] = _barycenter_order(cur, prev_pos, tie_key=lambda n: (_birth_year(persons.get(n, {})) or 9999, persons.get(n,{}).get("name","")))
-        # bottom-up
-        for d in range(maxd-1, -1, -1):
-            nxt = gen_order[str(d+1)] if str(d+1) in gen_order else []
-            nxt_pos = {pid:i for i,pid in enumerate(nxt)}
-            nxt_pos["__adj__"] = adj
-            cur = gen_order[str(d)]
-            gen_order[str(d)] = _barycenter_order(cur, nxt_pos, tie_key=lambda n: (_birth_year(persons.get(n, {})) or 9999, persons.get(n,{}).get("name","")))
-
-    # Couple-group order per layer by anchor position
-    group_order = {}
-    for d, nodes in layers.items():
-        anchors = []
-        ord_nodes = gen_order[str(d)]
-        posmap = {pid:i for i,pid in enumerate(ord_nodes)}
-        for mid, m in marriages.items():
-            sps = m.get("spouses", [])
-            anchor = None
-            for s in sps:
-                if depth.get(s) == d:
-                    anchor = s
-                    break
-            if anchor is not None:
-                anchors.append((posmap.get(anchor, 10**9), mid))
-        anchors.sort()
-        group_order[str(d)] = [mid for _, mid in anchors]
-    return gen_order, group_order, tree
-
-
 # -------------------- State & Helpers --------------------
 def _init_state():
     if "tree" not in st.session_state:
         st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
-    if "gen_order" not in st.session_state:
-        st.session_state.gen_order = {}
-    if "group_order" not in st.session_state:
-        st.session_state.group_order = {}
     for k in ("pid_counter","mid_counter"):
         if k not in st.session_state:
             st.session_state[k] = 1
@@ -193,8 +91,6 @@ def _compute_generations(tree):
 
 def _graph(tree):
     depth = _compute_generations(tree)
-    persons = tree.get("persons", {})
-    marriages = tree.get("marriages", {})
 
     g = Digraph("G", format="svg")
     g.attr(rankdir="TB", nodesep="0.35", ranksep="0.6")
@@ -231,10 +127,6 @@ def _graph(tree):
                 s1, s2 = spouses[0], spouses[1]
                 sg.edge(s1, mid, style="invis", weight="200")
                 sg.edge(mid, s2, style="invis", weight="200")
-                # --- spouse left-to-right invisible ordering ---
-                if len(spouses) >= 2:
-                    for i in range(len(spouses)-1):
-                        sg.edge(spouses[i], spouses[i+1], style="invis", weight="150", constraint="true")
 
         # Visible horizontal line between first two spouses
         if len(spouses) >= 2:
@@ -261,62 +153,6 @@ def _graph(tree):
                 else:
                     g.edge(mid, c)
 
-# --- sibling invisible ordering to reduce crossings ---
-kids = list(m.get("children", []))
-if len(kids) >= 2:
-    with g.subgraph() as kg:
-        kg.attr(rank="same")
-        for i in range(len(kids)-1):
-            kg.edge(kids[i], kids[i+1], style="invis", weight="50", constraint="true")
-
-
-
-    # ---- Global same-generation ordering (manual) ----
-    try:
-        gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
-    except Exception:
-        gen_order = {}
-    if gen_order:
-        gens = {}
-        for pid, d in depth.items():
-            gens.setdefault(d, []).append(pid)
-        for d, people in gens.items():
-            seq = [p for p in gen_order.get(str(d), []) if p in people] + [p for p in people if p not in gen_order.get(str(d), [])]
-            if len(seq) >= 2:
-                with g.subgraph() as gg:
-                    gg.attr(rank="same")
-                    for i in range(len(seq)-1):
-                        gg.edge(seq[i], seq[i+1], style="invis", weight="80", constraint="true")
-
-    # ---- Couple-group ordering per generation (manual) ----
-    try:
-        group_order = st.session_state.get("group_order", {}) if hasattr(st, "session_state") else {}
-    except Exception:
-        group_order = {}
-    if group_order:
-        for d_str, mids in group_order.items():
-            try:
-                d = int(d_str)
-            except Exception:
-                continue
-            mids_valid = [mid for mid in mids if mid in marriages]
-            anchors = []
-            for mid in mids_valid:
-                sps = marriages.get(mid, {}).get("spouses", [])
-                anchor = None
-                for s in sps:
-                    if depth.get(s) == d:
-                        anchor = s
-                        break
-                if anchor is None and sps:
-                    anchor = sps[0]
-                if anchor is not None and anchor in persons:
-                    anchors.append(anchor)
-            if len(anchors) >= 2:
-                with g.subgraph() as grp:
-                    grp.attr(rank="same")
-                    for i in range(len(anchors)-1):
-                        grp.edge(anchors[i], anchors[i+1], style="invis", weight="90", constraint="true")
     return g
 
 
@@ -392,36 +228,6 @@ def render():
             if mid:
                 div_ck = st.checkbox("該婚姻已離婚？", value=bool(t["marriages"][mid].get("divorced", False)))
                 t["marriages"][mid]["divorced"] = bool(div_ck)
-            
-            
-            st.markdown("**配偶順序（可調整）**")
-            if mid:
-                sp = t["marriages"][mid].get("spouses", [])
-                if len(sp) <= 1:
-                    st.info("此婚姻目前只有一位配偶。")
-                else:
-                    for i, sid in enumerate(sp):
-                        cols = st.columns([6,1,1,1,1])
-                        cols[0].write(f"{i+1}. {sid}｜" + t["persons"].get(sid, {}).get("name","?"))
-                        if cols[1].button("↑", key=f"sp_up_{mid}_{sid}") and i>0:
-                            sp[i-1], sp[i] = sp[i], sp[i-1]
-                            t["marriages"][mid]["spouses"] = sp
-                            st.rerun()
-                        if cols[2].button("↓", key=f"sp_dn_{mid}_{sid}") and i < len(sp)-1:
-                            sp[i+1], sp[i] = sp[i], sp[i+1]
-                            t["marriages"][mid]["spouses"] = sp
-                            st.rerun()
-                        if cols[3].button("置頂", key=f"sp_top_{mid}_{sid}") and i>0:
-                            moved = sp.pop(i)
-                            sp.insert(0, moved)
-                            t["marriages"][mid]["spouses"] = sp
-                            st.rerun()
-                        if cols[4].button("置底", key=f"sp_bot_{mid}_{sid}") and i < len(sp)-1:
-                            moved = sp.pop(i)
-                            sp.append(moved)
-                            t["marriages"][mid]["spouses"] = sp
-                            st.rerun()
-            st.divider()
             if mid:
                 c1,c2,c3 = st.columns([2,1,1])
                 child = c1.selectbox(
@@ -438,138 +244,11 @@ def render():
                         t["child_types"].setdefault(mid, {})[child] = ctype
                         st.success("已新增子女")
 
-st.divider()
-st.markdown("**子女順序（可調整以減少交錯）**")
-if mid:
-    kids = t["marriages"][mid].get("children", [])
-    if not kids:
-        st.info("此婚姻目前沒有子女。")
-    else:
-        for i, kid in enumerate(kids):
-            cols = st.columns([6,1,1,1,1])
-            cols[0].write(f"{i+1}. {kid}｜" + t["persons"].get(kid, {}).get("name","?"))
-            if cols[1].button("↑", key=f"up_{mid}_{kid}") and i>0:
-                kids[i-1], kids[i] = kids[i], kids[i-1]
-                t["marriages"][mid]["children"] = kids
-                st.rerun()
-            if cols[2].button("↓", key=f"dn_{mid}_{kid}") and i < len(kids)-1:
-                kids[i+1], kids[i] = kids[i], kids[i+1]
-                t["marriages"][mid]["children"] = kids
-                st.rerun()
-            if cols[3].button("置頂", key=f"top_{mid}_{kid}") and i>0:
-                moved = kids.pop(i)
-                kids.insert(0, moved)
-                t["marriages"][mid]["children"] = kids
-                st.rerun()
-            if cols[4].button("置底", key=f"bot_{mid}_{kid}") and i < len(kids)-1:
-                moved = kids.pop(i)
-                kids.append(moved)
-                t["marriages"][mid]["children"] = kids
-                st.rerun()
-
-    
-with st.expander("②-0 一鍵自動建議排序", expanded=False):
-    c1,c2 = st.columns(2)
-    preserve_sp = c1.checkbox("保留配偶現有順序", value=True, help="取消勾選則會依出生年排序配偶（若有資料）。")
-    sort_kids = c2.checkbox("子女依出生年排序", value=True)
-    if st.button("⚙️ 生成建議排序並套用", type="primary"):
-        gen_order, group_order, new_tree = _auto_layout(t, preserve_spouse=preserve_sp, sort_children_by_birth=sort_kids, sweeps=3)
-        st.session_state.gen_order = gen_order
-        st.session_state.group_order = group_order
-        st.session_state.tree = new_tree
-        st.success("已套用建議排序，您可再用 ②-1/②-2/②-3 做微調。")
-        st.rerun()
-
-with st.expander("②-2 同層排序", expanded=False):
-    depth_map = _compute_generations(t)
-    if not depth_map:
-        st.info("請先建立至少一個人物與關係")
-    else:
-        gens = sorted(set(depth_map.values()))
-        def _gen_label(d):
-            count = sum(1 for _p in depth_map if depth_map[_p]==d)
-            return f"第 {d} 層（{count} 人）"
-        gen_sel = st.selectbox("選擇世代", gens, format_func=_gen_label, key="sel_gen_same_layer")
-        all_in_layer = [p for p,d in depth_map.items() if d==gen_sel]
-        current = list(st.session_state.gen_order.get(str(gen_sel), []))
-        order = [p for p in current if p in all_in_layer] + [p for p in all_in_layer if p not in current]
-
-        for i, pid in enumerate(order):
-            nm = t["persons"].get(pid,{}).get("name", pid)
-            cols = st.columns([6,1,1,1,1])
-            cols[0].write(f"{i+1}. {pid}｜{nm}")
-            if cols[1].button("↑", key=f"gen_up_{gen_sel}_{pid}") and i>0:
-                order[i-1], order[i] = order[i], order[i-1]
-                st.session_state.gen_order[str(gen_sel)] = order
-                st.rerun()
-            if cols[2].button("↓", key=f"gen_dn_{gen_sel}_{pid}") and i < len(order)-1:
-                order[i+1], order[i] = order[i], order[i+1]
-                st.session_state.gen_order[str(gen_sel)] = order
-                st.rerun()
-            if cols[3].button("置頂", key=f"gen_top_{gen_sel}_{pid}") and i>0:
-                moved = order.pop(i)
-                order.insert(0, moved)
-                st.session_state.gen_order[str(gen_sel)] = order
-                st.rerun()
-            if cols[4].button("置底", key=f"gen_bot_{gen_sel}_{pid}") and i < len(order)-1:
-                moved = order.pop(i)
-                order.append(moved)
-                st.session_state.gen_order[str(gen_sel)] = order
-                st.rerun()
-
-with st.expander("②-3 夫妻群排序（整代群組）", expanded=False):
-    depth_map = _compute_generations(t)
-    marriages = t.get("marriages", {})
-    persons = t.get("persons", {})
-    if not depth_map or not marriages:
-        st.info("請先建立人物與婚姻關係")
-    else:
-        gens = sorted(set(depth_map.values()))
-        def _glabel(d):
-            return f"第 {d} 層"
-        gsel = st.selectbox("選擇世代（以配偶所在層為準）", gens, format_func=_glabel, key="sel_group_layer")
-        mids_in_layer = []
-        for mid, m in marriages.items():
-            spouses = m.get("spouses", [])
-            if any(depth_map.get(s)==gsel for s in spouses):
-                mids_in_layer.append(mid)
-        if not mids_in_layer:
-            st.info("此層沒有可排序的夫妻群")
-        else:
-            saved = list(st.session_state.group_order.get(str(gsel), []))
-            order = [mid for mid in saved if mid in mids_in_layer] + [mid for mid in mids_in_layer if mid not in saved]
-            def _mfmt(mid):
-                sps = marriages.get(mid, {}).get("spouses", [])
-                names = [persons.get(s,{}).get("name", s) for s in sps]
-                kids = marriages.get(mid, {}).get("children", [])
-                return f"{mid}｜" + (" × ".join(names) if names else "（未登記配偶）") + (f"｜子女{len(kids)}名" if kids else "")
-            for i, mid in enumerate(order):
-                cols = st.columns([7,1,1,1,1])
-                cols[0].write(f"{i+1}. {_mfmt(mid)}")
-                if cols[1].button("↑", key=f"grp_up_{gsel}_{mid}") and i>0:
-                    order[i-1], order[i] = order[i], order[i-1]
-                    st.session_state.group_order[str(gsel)] = order
-                    st.rerun()
-                if cols[2].button("↓", key=f"grp_dn_{gsel}_{mid}") and i < len(order)-1:
-                    order[i+1], order[i] = order[i], order[i+1]
-                    st.session_state.group_order[str(gsel)] = order
-                    st.rerun()
-                if cols[3].button("置頂", key=f"grp_top_{gsel}_{mid}") and i>0:
-                    moved = order.pop(i)
-                    order.insert(0, moved)
-                    st.session_state.group_order[str(gsel)] = order
-                    st.rerun()
-                if cols[4].button("置底", key=f"grp_bot_{gsel}_{mid}") and i < len(order)-1:
-                    moved = order.pop(i)
-                    order.append(moved)
-                    st.session_state.group_order[str(gsel)] = order
-                    st.rerun()
-
     with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
 
 
-
+    
 
     with st.expander("④ 匯入 / 匯出", expanded=True):
         # 匯出
