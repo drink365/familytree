@@ -1,9 +1,9 @@
 
 # -*- coding: utf-8 -*-
 import json
+import os
 from datetime import datetime
 import streamlit as st
-import os
 
 # -------------------- App Config --------------------
 st.set_page_config(
@@ -24,6 +24,7 @@ _BRAND = load_brand()
 BRAND_PRIMARY = _BRAND.get("PRIMARY", "#D33B2C")
 LOGO_PATH = _BRAND.get("LOGO_SQUARE") or "logo2.png"
 
+# fallback 檢查
 if not os.path.exists(LOGO_PATH):
     LOGO_PATH = "logo2.png" if os.path.exists("logo2.png") else ("logo.png" if os.path.exists("logo.png") else None)
 
@@ -44,8 +45,9 @@ page = get_page_from_query()
 # -------------------- Sidebar --------------------
 with st.sidebar:
     st.markdown("## 導覽")
-    if LOGO_PATH:
-        st.image(LOGO_PATH, width=64)
+    sidebar_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
+    if sidebar_logo:
+        st.image(sidebar_logo, use_column_width=True)  # 側邊欄統一使用橫式 logo.png（有則用）
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -64,6 +66,7 @@ for label, key, icon in [
 ]:
     nav_button(label, key, icon)
 
+# 側欄按鈕樣式
 st.markdown(
     '''
     <style>
@@ -90,9 +93,8 @@ st.markdown(
 )
 
 # -------------------- Pages --------------------
-
 def render_home():
-    # 首頁 LOGO：優先用 logo.png，若不存在再用 logo2.png
+    # 首頁 LOGO：優先用 logo.png，若不存在再用 LOGO_PATH
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo:
         st.image(main_logo, use_column_width=False, width=320)  # 橫式 LOGO 顯示較大
@@ -107,7 +109,7 @@ def render_home():
 
     st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
 
-    def _safe_import_and_render(module_name: str):
+def _safe_import_and_render(module_name: str):
     try:
         mod = __import__(module_name, fromlist=['render'])
         if hasattr(mod, "render"):
@@ -117,6 +119,7 @@ def render_home():
     except Exception as e:
         st.error(f"載入 `{module_name}` 失敗：{e}")
 
+# 路由
 if page == "home":
     render_home()
 elif page == "familytree":
