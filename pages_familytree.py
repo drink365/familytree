@@ -598,67 +598,67 @@ def render():
         preserve_sp = c1.checkbox("保留配偶現有順序", value=True, help="取消勾選則會依出生年排序配偶（若有資料）。")
         sort_kids = c2.checkbox("子女依出生年排序", value=True)
         if st.button("⚙️ 生成建議排序並套用", type="primary"):
-            gen_order, group_order, new_tree = _auto_layout(t, preserve_spouse=preserve_sp, sort_children_by_birth=sort_kids, sweeps=3)
+                        gen_order, group_order, new_tree = _auto_layout(t, preserve_spouse=preserve_sp, sort_children_by_birth=sort_kids, sweeps=3)
             st.session_state.gen_order = gen_order
             st.session_state.group_order = group_order
             st.session_state.tree = new_tree
             st.success("已套用建議排序，您可再用 ②-1/②-2/②-3 做微調。")
             st.rerun()
-with st.expander("③ 家族樹視覺化", expanded=True):
+    with st.expander("③ 家族樹視覺化", expanded=True):
         st.graphviz_chart(_graph(t))
-
-
     
-
+    
+        
+    
     with st.expander("④ 匯入 / 匯出", expanded=True):
         # 匯出
-        st.download_button(
-            "⬇️ 下載 JSON",
-            data=json.dumps(t, ensure_ascii=False, indent=2),
-            file_name="family_tree.json",
-            mime="application/json",
-            key="btn_dl_json",
-        )
-
-        # 匯入（先上傳，再按「執行匯入」）
-        upl = st.file_uploader("選擇 JSON 檔", type=["json"], key="ft_upload_json")
-        do_import = st.button("⬆️ 執行匯入", use_container_width=True, key="btn_do_import")
-
-        if do_import:
-            if upl is None:
-                st.warning("請先選擇要匯入的 JSON 檔。")
-            else:
-                try:
-                    raw = upl.getvalue()
-                    import hashlib
-                    md5 = hashlib.md5(raw).hexdigest()
-                    if st.session_state.get("ft_last_import_md5") == md5:
-                        st.info("此檔已匯入過。若要重新匯入，請先更改檔案內容或重新選擇檔案。")
-                    else:
-                        data = json.loads(raw.decode("utf-8"))
-                        if not isinstance(data, dict):
-                            raise ValueError("檔案格式錯誤（非 JSON 物件）")
-                        data.setdefault("persons", {})
-                        data.setdefault("marriages", {})
-                        data.setdefault("child_types", {})
-
-                        # 重新設定計數器，避免新建 ID 衝突
-                        def _max_id(prefix, keys):
-                            mx = 0
-                            for k in keys:
-                                if isinstance(k, str) and k.startswith(prefix):
-                                    try:
-                                        mx = max(mx, int(k[len(prefix):] or "0"))
-                                    except Exception:
-                                        pass
-                            return mx
-
-                        st.session_state.tree = data
-                        st.session_state["ft_last_import_md5"] = md5
-                        st.session_state["pid_counter"] = _max_id("P", data["persons"].keys()) + 1
-                        st.session_state["mid_counter"] = _max_id("M", data["marriages"].keys()) + 1
-
-                        st.session_state["ft_flash_msg"] = "已匯入"
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"匯入失敗：{e}")
+            st.download_button(
+                "⬇️ 下載 JSON",
+                data=json.dumps(t, ensure_ascii=False, indent=2),
+                file_name="family_tree.json",
+                mime="application/json",
+                key="btn_dl_json",
+            )
+    
+            # 匯入（先上傳，再按「執行匯入」）
+            upl = st.file_uploader("選擇 JSON 檔", type=["json"], key="ft_upload_json")
+            do_import = st.button("⬆️ 執行匯入", use_container_width=True, key="btn_do_import")
+    
+            if do_import:
+                if upl is None:
+                    st.warning("請先選擇要匯入的 JSON 檔。")
+                else:
+                    try:
+                        raw = upl.getvalue()
+                        import hashlib
+                        md5 = hashlib.md5(raw).hexdigest()
+                        if st.session_state.get("ft_last_import_md5") == md5:
+                            st.info("此檔已匯入過。若要重新匯入，請先更改檔案內容或重新選擇檔案。")
+                        else:
+                            data = json.loads(raw.decode("utf-8"))
+                            if not isinstance(data, dict):
+                                raise ValueError("檔案格式錯誤（非 JSON 物件）")
+                            data.setdefault("persons", {})
+                            data.setdefault("marriages", {})
+                            data.setdefault("child_types", {})
+    
+                            # 重新設定計數器，避免新建 ID 衝突
+                            def _max_id(prefix, keys):
+                                mx = 0
+                                for k in keys:
+                                    if isinstance(k, str) and k.startswith(prefix):
+                                        try:
+                                            mx = max(mx, int(k[len(prefix):] or "0"))
+                                        except Exception:
+                                            pass
+                                return mx
+    
+                            st.session_state.tree = data
+                            st.session_state["ft_last_import_md5"] = md5
+                            st.session_state["pid_counter"] = _max_id("P", data["persons"].keys()) + 1
+                            st.session_state["mid_counter"] = _max_id("M", data["marriages"].keys()) + 1
+    
+                            st.session_state["ft_flash_msg"] = "已匯入"
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"匯入失敗：{e}")
