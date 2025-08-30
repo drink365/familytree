@@ -220,7 +220,7 @@ def _graph(tree):
     marriages = tree.get("marriages", {})
 
     g = Digraph("G", format="svg")
-    g.attr(rankdir="TB", splines="polyline", nodesep="0.25", ranksep="0.8")
+    g.attr(rankdir="TB", splines="polyline", nodesep="0.25", ranksep="0.9")
     g.attr("node", shape="box", style="rounded,filled", fillcolor="white",
            fontname="Noto Sans CJK TC", fontsize="11")
     g.attr("edge", fontname="Noto Sans CJK TC", fontsize="10")
@@ -232,7 +232,7 @@ def _graph(tree):
         label = nm + (f"\n{by}" if by else "")
         g.node(pid, label=label)
 
-    # -------- 建每層預設順序（夫妻緊鄰） ----------
+    # ------- 建每層的預設順序（含：讓夫妻緊鄰） -------
     def base_key(pid):
         by = persons.get(pid, {}).get("birth", "")
         try:
@@ -255,6 +255,7 @@ def _graph(tree):
                 sps = [s for s in m.get("spouses", []) if depth.get(s) == d]
                 if len(sps) < 2:
                     continue
+                # 只需保證前兩位同層配偶相鄰即可
                 s1, s2 = sps[0], sps[1]
                 if s1 not in pos or s2 not in pos:
                     continue
@@ -275,30 +276,35 @@ def _graph(tree):
         order = make_spouses_adjacent(order, d)
         per_layer_order[d] = order
 
-    # -------- 婚姻節點與連線（夫妻水平中線、配偶→婚姻點改隱形） ----------
+    # ------- 婚姻節點與連線（婚姻點釘在兩配偶中點；夫妻水平線置中） -------
     for mid, m in marriages.items():
         spouses = m.get("spouses", []) or []
         children = m.get("children", []) or []
 
-        # 婚姻點與配偶同層
+        # 先找這段婚姻在該層真正的左右配偶
+        s_same = [s for s in spouses if s in persons]
+        if len(s_same) >= 2:
+            d = depth.get(s_same[0], 0)
+            order = per_layer_order.get(d, s_same)
+            pos = {p: i for i, p in enumerate(order)}
+            s_same = sorted(s_same, key=lambda x: pos.get(x, 10**9))
+            left_sp, right_sp = s_same[0], s_same[1]
+        else:
+            left_sp = right_sp = s_same[0] if s_same else None
+
         with g.subgraph() as sg:
             sg.attr(rank="same")
             sg.node(mid, shape="point", width="0.01", height="0.01", label="")
 
-            # 幾何錨點：配偶→婚姻點（隱形，但 constraint=true 以穩定位置）
-            for s in spouses:
-                sg.edge(s, mid, style="invis", weight="80", constraint="true")
+            # 幾何錨點：把婚姻點固定在左右配偶的正中間（隱形但有約束）
+            if left_sp and right_sp:
+                sg.edge(left_sp, mid, style="invis", weight="200", constraint="true", tailport="e")
+                sg.edge(mid, right_sp, style="invis", weight="200", constraint="true", headport="w")
+                # 可見的夫妻水平線（只做視覺，不影響分層）
+                sg.edge(left_sp, right_sp, dir="none", constraint="false",
+                        tailport="e", headport="w", penwidth="1.2")
 
-            # 可見的夫妻水平線：從左(e)到右(w)，不影響分層
-            if len(spouses) >= 2:
-                for i in range(len(spouses) - 1):
-                    s1, s2 = spouses[i], spouses[i + 1]
-                    sg.edge(
-                        s1, s2, dir="none", constraint="false",
-                        tailport="e", headport="w", minlen="0", penwidth="1.2"
-                    )
-
-        # 婚姻 → 子女（決定下一層）
+        # 婚姻 → 子女（從中點往下）
         if len(children) >= 2:
             with g.subgraph() as kg:
                 kg.attr(rank="same")
@@ -308,7 +314,7 @@ def _graph(tree):
         for c in children:
             g.edge(mid, c, weight="3", minlen="1")
 
-    # -------- 強制分層與同層全序鏈 ----------
+    # ------- 強制分層 + 同層全序鏈（穩定同層順序） -------
     for d, members in layers.items():
         with g.subgraph() as same:
             same.attr(rank="same")
@@ -321,9 +327,9 @@ def _graph(tree):
                 gg.attr(rank="same")
                 for i in range(len(order) - 1):
                     gg.edge(order[i], order[i + 1],
-                            style="invis", weight="200", constraint="true")
+                            style="invis", weight="220", constraint="true")
 
-    # 使用者的 ②-2 / ②-3 排序（權重更高，覆蓋預設）
+    # 使用者 ②-2 / ②-3 的排序（優先度更高）
     gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
     if gen_order:
         for d, people in layers.items():
@@ -343,15 +349,13 @@ def _graph(tree):
                 d = int(d_str)
             except Exception:
                 continue
-            mids_valid = [mid for mid in mids if mid in marriages]
             anchors = []
-            for mid in mids_valid:
-                sps = marriages.get(mid, {}).get("spouses", [])
+            for mid in [m for m in mids if m in marriages]:
+                sps = marriages[mid].get("spouses", [])
                 anchor = None
                 for s in sps:
                     if depth.get(s) == d:
-                        anchor = s
-                        break
+                        anchor = s; break
                 if anchor is None and sps:
                     anchor = sps[0]
                 if anchor in persons:
@@ -364,6 +368,7 @@ def _graph(tree):
                                  style="invis", weight="450", constraint="true")
 
     return g
+
 
 # -------------------- UI：人物與婚姻 --------------------
 def _person_form(t):
