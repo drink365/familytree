@@ -27,17 +27,17 @@ def _next_mid():
 # -------------------- 世代計算（拓撲法，穩定三層） --------------------
 def _compute_generations(tree):
     """
-    以『父（任一配偶）→ 子』建圖，對所有人物做 Kahn 拓撲層級：
-    - 沒有父母的人 indegree=0，層級=0（祖父母輩）
-    - 每條父→子邊讓子女層級至少為父層+1
-    - 能正確傳遞到孫輩，得到 0/1/2… 多層
+    分層規則：
+    1) 父/母 → 子：子女層級 >= 父母層級 + 1
+    2) 同一段婚姻的配偶：層級相同（取配偶們的最大層級）
+    以上兩個約束反覆鬆弛直到收斂，確保「沒有父母資料的配偶」會提升到與其配偶同層。
     """
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
+    # 先用父→子邊做一次拓撲式傳播（給初值）
     children_of = {pid: set() for pid in persons}
     indeg = {pid: 0 for pid in persons}
-
     for m in marriages.values():
         sps = [s for s in m.get("spouses", []) if s in persons]
         kids = [c for c in m.get("children", []) if c in persons]
@@ -47,12 +47,11 @@ def _compute_generations(tree):
                     children_of[s].add(c)
                     indeg[c] += 1
 
+    from collections import deque
     depth = {pid: 0 for pid in persons}
     q = deque([p for p in persons if indeg.get(p, 0) == 0])
-
-    # 若極端資料都不是 indeg=0（理論上不會），保底全部先入列
     if not q and persons:
-        q = deque(list(persons.keys()))
+        q = deque(list(persons.keys()))  # 保底
 
     while q:
         u = q.popleft()
@@ -62,6 +61,35 @@ def _compute_generations(tree):
             indeg[v] -= 1
             if indeg[v] <= 0:
                 q.append(v)
+
+    # 加入「配偶同層」與「父母→子」的反覆鬆弛，直到穩定
+    changed = True
+    guard = 0
+    while changed and guard < 200:
+        changed = False
+        guard += 1
+        for m in marriages.values():
+            sps = [s for s in m.get("spouses", []) if s in persons]
+            kids = [c for c in m.get("children", []) if c in persons]
+
+            # (A) 讓配偶同層：提升較低者到配偶們的最大層級
+            if sps:
+                d = max(depth[s] for s in sps)
+                for s in sps:
+                    if depth[s] < d:
+                        depth[s] = d
+                        changed = True
+            else:
+                d = None
+
+            # (B) 再推子女：子女層級 >= 父母最大層級 + 1
+            if kids:
+                parent_depth = d if d is not None else max((depth.get(p, 0) for p in sps), default=0)
+                for c in kids:
+                    need = parent_depth + 1
+                    if depth[c] < need:
+                        depth[c] = need
+                        changed = True
 
     return depth
 
