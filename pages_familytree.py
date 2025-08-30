@@ -77,27 +77,23 @@ def _ensure_adjacent_inside(lst: List[str], a: str, b: str):
 # 計算世代
 # -----------------------------
 def _compute_generations(tree: Dict) -> Dict[str, int]:
-    persons = tree.get("persons", {})
+    persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
-    depth: Dict[str, int] = {}
 
-    child_of = {}
-    for mid, m in marriages.items():
-        for c in m.get("children", []) or []:
-            child_of[c] = mid
+    # 收集父母→子女、配偶對
+    children_of = {mid: (m.get("children") or []) for mid, m in marriages.items()}
+    spouses_of  = {mid: (m.get("spouses")  or []) for mid, m in marriages.items()}
 
-    # 初始：不是任何人的小孩 => 第 0 層
-    for pid in persons.keys():
-        if pid not in child_of:
-            depth[pid] = 0
+    # 根：不在任何 children 列表的人，放第 0 層
+    all_children = set(c for kids in children_of.values() for c in kids)
+    depth: Dict[str, int] = {pid: 0 for pid in persons if pid not in all_children}
 
-    # 傳播
-    for _ in range(120):
+    # 由上往下鬆弛直到收斂：配偶同層、子女 = 父母層 + 1
+    for _ in range(200):
         changed = False
 
-        # 同一婚姻的配偶同層
-        for m in marriages.values():
-            sps = m.get("spouses", []) or []
+        # 配偶同層（若其中一人已知層級）
+        for sps in spouses_of.values():
             known = [depth[s] for s in sps if s in depth]
             if known:
                 d = min(known)
@@ -106,10 +102,9 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
                         depth[s] = d
                         changed = True
 
-        # 子女層 = 父母層 + 1
-        for m in marriages.values():
-            sps = m.get("spouses", []) or []
-            kids = m.get("children", []) or []
+        # 子女 = 父母層 + 1（若父母已有層級）
+        for mid, kids in children_of.items():
+            sps = spouses_of.get(mid, [])
             pd = [depth[s] for s in sps if s in depth]
             if pd:
                 d = min(pd) + 1
@@ -118,33 +113,14 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
                         depth[c] = d
                         changed = True
 
-        # 由孩子回推父母（孩子最淺層 - 1）
-        for m in marriages.values():
-            sps = m.get("spouses", []) or []
-            kids = m.get("children", []) or []
-            kd = [depth[c] for c in kids if c in depth]
-            if kd:
-                want = min(kd) - 1
-                for s in sps:
-                    if s not in depth or depth[s] > want:
-                        depth[s] = want
-                        changed = True
-
         if not changed:
             break
 
-    # 填 0
-    for pid in persons.keys():
-        if pid not in depth:
-            depth[pid] = 0
+    # 尚未決定的人（孤立或尚未關聯）仍置於第 0 層
+    for pid in persons:
+        depth.setdefault(pid, 0)
 
-    # 平移到非負
-    min_d = min(depth.values()) if depth else 0
-    if min_d < 0:
-        for k in depth:
-            depth[k] -= min_d
     return depth
-
 
 # -----------------------------
 # 層內群序（穩定）
