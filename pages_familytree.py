@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 import json
-import re
 import uuid
 from typing import Dict, List, Tuple, Optional
 
@@ -65,7 +64,6 @@ def _ensure_adjacent_inside(lst: List[str], a: str, b: str):
     ia, ib = lst.index(a), lst.index(b)
     if abs(ia - ib) == 1:
         return
-    # 把 b 拉到 a 的旁邊（左邊）
     lst.pop(ib)
     ia = lst.index(a)
     lst.insert(ia + 1, b)
@@ -117,7 +115,7 @@ def _compute_generations(tree: Dict) -> Dict[str, int]:
                     depth[c] = d
                     changed = True
 
-        # 如果有小孩已知層，回推父母層（最小孩子層 - 1）
+        # 若小孩已知層，回推父母層（最小孩子層 - 1）
         for m in marriages.values():
             sps = m.get("spouses", []) or []
             kids = m.get("children", []) or []
@@ -160,7 +158,6 @@ def _stable_cluster_order(d: int, clusters: Dict[str, List[str]],
         if cid.startswith("orph:"):
             anchors[cid] = lst[0]
         else:
-            # 父母群：找其中一位配偶做 anchor，若沒有在此層就取 children 中的第一位
             m = marriages.get(cid, {})
             sps = m.get("spouses", []) or []
             anchor = None
@@ -169,13 +166,11 @@ def _stable_cluster_order(d: int, clusters: Dict[str, List[str]],
                     anchor = s
                     break
             if not anchor:
-                # 若上一輪沒出現，取群內排序最前的人
                 anchor = lst[0]
             anchors[cid] = anchor
 
     def key(cid):
         a = anchors[cid]
-        # 是否在上一輪有位置 / 上一輪位置 / 再用 base_key 穩定
         return (0 if a in pos else 1, pos.get(a, 10**9), _base_key(a, persons))
 
     return sorted(clusters.keys(), key=key)
@@ -267,7 +262,7 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
 
         gen_order[str(d)] = final
 
-    # 產出 group_order（可選，用不到也無妨）
+    # 產出 group_order（可選）
     group_order: Dict[str, List[str]] = {}
     for d, order in gen_order.items():
         d = int(d)
@@ -330,17 +325,10 @@ def _graph(tree: Dict):
         if not sps:
             continue
 
-        # 婚姻點放在配偶層
-        d_sp = [depth[s] for s in sps if s in depth]
-        if d_sp:
-            d_here = min(d_sp)
-        else:
-            d_here = 0
-
         mnode = f"{mid}_pt"
         g.node(mnode, "", shape="point", width="0.02", height="0.02")
 
-        # 連接配偶 ↔ 婚姻點（無箭頭、較重權重讓水平線穩一點）
+        # 連接配偶 ↔ 婚姻點
         for s in sps:
             g.edge(s, mnode, dir="none", weight="10")
 
@@ -434,7 +422,6 @@ def _ui_marriages(tree: Dict):
 
                 # 刪除婚姻
                 if st.button("刪除此婚姻", key=f"del_{mid}"):
-                    # 同步移除 children 的父母關係（資料模型就是從 marriages 讀孩子）
                     marriages.pop(mid, None)
                     _apply_rules(tree)
                     st.rerun()
@@ -474,10 +461,33 @@ def _ui_io(tree: Dict):
 
 
 # ------------------------------------------------------------
-# 主程式
+# 主畫面（給單檔執行使用）
 # ------------------------------------------------------------
 def main():
     st.set_page_config(page_title="家族樹", layout="wide")
+    _init_state()
+
+    st.markdown("## 🌳 家族樹")
+    tree = st.session_state.family
+
+    with st.expander("① 人物管理", expanded=True):
+        _ui_persons(tree)
+
+    with st.expander("② 婚姻與子女", expanded=True):
+        _ui_marriages(tree)
+
+    with st.expander("③ 家族樹視覺化", expanded=True):
+        _ui_graph(tree)
+
+    with st.expander("④ 匯入 / 匯出", expanded=True):
+        _ui_io(tree)
+
+
+# ------------------------------------------------------------
+# 提供給外部框架呼叫的頁面入口（你需要的 render()）
+# ------------------------------------------------------------
+def render():
+    """供外層 app / multipage 框架呼叫的入口；不設定 page_config。"""
     _init_state()
 
     st.markdown("## 🌳 家族樹")
