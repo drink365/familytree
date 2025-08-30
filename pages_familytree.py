@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # pages_familytree.py
 #
-# Streamlit 家族樹（穩定橫向、配偶相鄰、配偶顯示單一水平直線、婚姻點在配偶中間、子女自婚姻點往下）
+# Streamlit 家族樹（配偶相鄰、配偶顯示單一直線、婚姻點在配偶中間、子女自婚姻點往下）
 from __future__ import annotations
 import json
 import uuid
@@ -157,7 +157,7 @@ def _apply_rules(tree: Dict, focus_child: Optional[str] = None):
 
 
 # =========================
-# Graphviz（婚姻點在配偶同層；配偶畫單一水平直線；子女自婚姻點往下）
+# Graphviz（配偶水平直線 + 指定 ports；婚姻點只接子女）
 # =========================
 def _graph(tree: Dict):
     persons   = tree.get("persons", {})
@@ -169,9 +169,9 @@ def _graph(tree: Dict):
         "G",
         graph_attr={
             "rankdir": "TB",           # 由上往下；同層橫向
-            "splines": "line",         # 線條用直線
-            "nodesep": "0.40",
-            "ranksep": "0.80",
+            "splines": "polyline",     # 折線/直線（更穩定）
+            "nodesep": "0.45",
+            "ranksep": "0.85",
             "fontname": "Noto Sans CJK TC, Helvetica, Arial",
         },
     )
@@ -204,17 +204,21 @@ def _graph(tree: Dict):
             sg.node(mnode, "", shape="point", width="0.02", height="0.02")
 
             if len(sps) >= 2:
+                # 只取前兩位（常見一夫一妻）；若你有多配偶情境，可自行延伸
                 left, right = sps[0], sps[1]
                 # 以重權重的隱形邊把婚姻點夾在兩配偶中間，位置穩定
                 sg.edge(left,  mnode, style="invis", weight="300")
                 sg.edge(mnode, right, style="invis", weight="300")
-                # 顯示配偶之間「單一水平直線」
+
+                # 顯示配偶之間「單一水平直線」（指定 port，保證水平）
                 g.edge(left, right,
                        dir="none",
-                       constraint="false",  # 不影響層級
+                       constraint="false",   # 不影響層級
                        minlen="0",
                        weight="0",
-                       penwidth="1.2")
+                       penwidth="1.6",
+                       tailport="e",         # 從左配偶右側出發
+                       headport="w")         # 進到右配偶左側
             elif len(sps) == 1:
                 # 只有一方（資料不完整）就不畫水平線
                 sg.edge(sps[0], mnode, style="invis", weight="300")
@@ -229,7 +233,7 @@ def _graph(tree: Dict):
         for c in kids:
             g.edge(mnode, c, arrowhead="normal")
 
-    st.graphviz_chart(g)
+    st.graphviz_chart(g, use_container_width=True)
 
 
 # =========================
