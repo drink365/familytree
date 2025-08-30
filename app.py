@@ -43,11 +43,13 @@ def get_page_from_query() -> str:
 page = get_page_from_query()
 
 # -------------------- Sidebar --------------------
+
 with st.sidebar:
     st.markdown("## 導覽")
+    # 只在「非首頁」顯示側邊欄 Logo；首頁不顯示，避免與主視覺重複
     sidebar_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
-    if sidebar_logo:
-        st.image(sidebar_logo, use_container_width=True)  # 側邊欄統一使用橫式 logo.png（有則用）
+    if sidebar_logo and page != "home":
+        st.image(sidebar_logo, use_container_width=False, width=140)  # 小尺寸、降低存在感
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
@@ -97,7 +99,7 @@ def render_home():
     # 首頁 LOGO：優先用 logo.png，若不存在再用 LOGO_PATH
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo:
-        st.image(main_logo, use_container_width=False, width=320)  # 橫式 LOGO 顯示較大
+        st.image(main_logo, use_container_width=False, width=280)  # 橫式 LOGO 顯示較大
 
     st.markdown(
         """
@@ -136,3 +138,14 @@ elif page == "about":
     _safe_import_and_render("pages_about")
 else:
     render_home()
+
+
+st.markdown("""
+<style>
+/* 側邊欄 Logo 視覺降階（灰階 + 降低亮度與透明度） */
+section[data-testid="stSidebar"] img {
+  filter: grayscale(100%) brightness(0.92);
+  opacity: 0.85;
+}
+</style>
+""", unsafe_allow_html=True)
