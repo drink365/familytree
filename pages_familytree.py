@@ -92,7 +92,7 @@ def _compute_generations(tree):
     return depth
 
 # =========================================================
-# 2) 排序規則：手足群、配偶相鄰、跨家庭靠攏（防拆）
+# 2) 排序規則：手足群、配偶相鄰、跨家庭靠攏（防拆 + 強制補救）
 # =========================================================
 def _parents_mid_of(pid, marriages):
     for mid, m in marriages.items():
@@ -129,41 +129,34 @@ def _ensure_adjacent_inside(lst, a, b):
     ia = lst.index(a)  # a 的位置可能因 pop 而變動
     lst.insert(ia + 1, b)
 
+def _are_clusters_adjacent(cluster_ids, ca, cb):
+    return ca in cluster_ids and cb in cluster_ids and abs(cluster_ids.index(ca) - cluster_ids.index(cb)) == 1
+
 def _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors):
     """
-    讓群 ca 與 cb 成為鄰居；優先不破壞既有相鄰（placed_neighbors）。
-    placed_neighbors 是 dict[cluster] -> set(已鎖定的鄰居)。
-    回傳是否真的調整了 cluster_ids（或本來就相鄰）。
+    嘗試在不破壞既有鄰接的前提下，讓群 ca 與 cb 成為鄰居；成功/已相鄰回 True。
+    若無法（兩側都鎖死），回 False，讓呼叫端決定是否強制。
     """
     if ca == cb or ca not in cluster_ids or cb not in cluster_ids:
         return False
-
     ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
     if abs(ia - ib) == 1:
-        # 已相鄰，直接記鎖定
         placed_neighbors[ca].add(cb); placed_neighbors[cb].add(ca)
-        return False
+        return True
 
-    # 決定放在 ca 的哪一側：若一側已被鎖定，放另一側；都未鎖定則放較靠近的一側
-    left_locked  = None
-    right_locked = None
-    if ia - 1 >= 0:
-        left_locked  = cluster_ids[ia - 1] in placed_neighbors[ca]
-    if ia + 1 < len(cluster_ids):
-        right_locked = cluster_ids[ia + 1] in placed_neighbors[ca]
+    left_locked  = (ia - 1 >= 0 and cluster_ids[ia - 1] in placed_neighbors[ca])
+    right_locked = (ia + 1 < len(cluster_ids) and cluster_ids[ia + 1] in placed_neighbors[ca])
 
-    prefer_side = None
-    if left_locked and not right_locked:
+    if left_locked and right_locked:
+        return False  # 交給強制策略
+
+    prefer_side = "left" if ib < ia else "right"
+    if prefer_side == "left" and left_locked:
         prefer_side = "right"
-    elif right_locked and not left_locked:
+    if prefer_side == "right" and right_locked:
         prefer_side = "left"
-    elif left_locked and right_locked:
-        # 兩側都被鎖死，只能放最接近側（但無法鎖定鄰接，交給上層處理）
-        prefer_side = "left" if ib < ia else "right"
-    else:
-        prefer_side = "left" if ib < ia else "right"
 
-    # 把 cb 抽出，插到 ca 的 prefer_side
+    # 把 cb 抽出插到 ca 的 prefer_side
     cluster_ids.pop(ib)
     if ib < ia:
         ia -= 1
@@ -173,13 +166,29 @@ def _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors):
     placed_neighbors[ca].add(cb); placed_neighbors[cb].add(ca)
     return True
 
+def _force_clusters_adjacent(cluster_ids, ca, cb):
+    """不顧鎖定，強制把 cb 移到 ca 旁邊（選擇較近側），保證相鄰。"""
+    if ca == cb or ca not in cluster_ids or cb not in cluster_ids:
+        return
+    ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
+    if abs(ia - ib) == 1:
+        return
+    cluster_ids.pop(ib)
+    if ib < ia:
+        ia -= 1
+    # 將 cb 插入離原本位置較近的一側
+    left_cost  = abs((ia)   - ib)
+    right_cost = abs((ia+1) - ib)
+    insert_at = ia if left_cost <= right_cost else ia + 1
+    cluster_ids.insert(insert_at, cb)
+
 def _apply_rules(tree, focus_child=None):
     """
     產生 gen_order / group_order，滿足：
       1) 建立婚姻後，同層配偶必相鄰（僅在群內調整到邊界，不打散手足群）
       2) 同父母的小孩固定成群（sibling cluster），不同家庭不互插
-      3) 新增子女且其配偶有父母：兩個家庭靠攏，夫妻在交界相鄰
-      4) 防拆：已成為鄰居的群會被鎖定，再處理新的跨群婚姻時盡量不破壞
+      3) 新增子女：無論其配偶是否有父母，兩個家庭先靠攏，夫妻放在兩群交界
+      4) 全層婚姻兩階段：先防拆靠攏；再強制靠攏補救，確保每對配偶都相鄰
     """
     persons   = tree.get("persons", {})
     marriages = tree.get("marriages", {})
@@ -196,7 +205,7 @@ def _apply_rules(tree, focus_child=None):
     for d in range(0, maxd + 1):
         members = sorted(layers.get(d, []), key=lambda x: _base_key(x, persons))
 
-        # ---- Step A：形成手足群（cluster）
+        # ---- A. 形成手足群（cluster）
         clusters = {}  # cid -> [pids]
         for p in members:
             pmid = _parents_mid_of(p, marriages)
@@ -211,7 +220,7 @@ def _apply_rules(tree, focus_child=None):
                 if len(sps) >= 2:
                     _ensure_adjacent_inside(lst, sps[0], sps[1])
 
-        # 初始群順序：以父母在上一層的平均位置排序 (d>0)，否則按基本鍵
+        # 初始群順序
         cluster_ids = list(clusters.keys())
         if d > 0:
             parent_pos = {p: i for i, p in enumerate(gen_order.get(str(d - 1), []))}
@@ -228,32 +237,30 @@ def _apply_rules(tree, focus_child=None):
             cluster_ids.sort(key=lambda cid: _base_key(cid.replace("orph:",""), persons)
                              if cid.startswith("orph:") else (False, 0, cid))
 
-        # 方便後續：鄰接鎖定表
+        # 鄰接鎖定表
         placed_neighbors = defaultdict(set)
 
-        # ---- Step B（規則 3先行）：若 focus_child 的配偶有父母，先把兩群靠攏
+        # ---- B. 新增子女 → 不論配偶是否有父母，都先讓兩群靠攏，並把兩人放交界
         if focus_child and depth.get(focus_child) == d:
-            spouses = _spouses_of(focus_child, marriages)
-            spouse_with_parents = None
-            for s in spouses:
-                if _parents_mid_of(s, marriages):
-                    spouse_with_parents = s; break
-            if spouse_with_parents:
+            for s in _spouses_of(focus_child, marriages):
                 ca = _parents_mid_of(focus_child, marriages) if d > 0 else f"orph:{focus_child}"
-                cb = _parents_mid_of(spouse_with_parents, marriages) if d > 0 else f"orph:{spouse_with_parents}"
-                if ca != cb and ca in cluster_ids and cb in cluster_ids:
-                    _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors)
-                    # 把兩人推到交界
-                    ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
-                    if ia < ib:
-                        _move_to_back(clusters[ca], focus_child)
-                        _move_to_front(clusters[cb], spouse_with_parents)
-                    else:
-                        _move_to_back(clusters[cb], spouse_with_parents)
-                        _move_to_front(clusters[ca], focus_child)
+                cb = _parents_mid_of(s, marriages)           if d > 0 else f"orph:{s}"
+                if ca == cb or ca not in cluster_ids or cb not in cluster_ids:
+                    continue
+                ok = _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors)
+                if not ok:
+                    _force_clusters_adjacent(cluster_ids, ca, cb)
+                # 兩人放在交界
+                ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
+                if ia < ib:
+                    _move_to_back(clusters[ca], focus_child)
+                    _move_to_front(clusters[cb], s)
+                else:
+                    _move_to_back(clusters[cb], s)
+                    _move_to_front(clusters[ca], focus_child)
 
-        # ---- Step C：處理本層所有跨家庭婚姻（由近到遠，盡量不破壞已鎖定鄰接）
-        # 蒐集跨群配偶對
+        # ---- C. 全層婚姻：先防拆靠攏，再強制靠攏補救
+        # 收集跨群婚姻
         cross_pairs = []
         for mid, m in marriages.items():
             sps = [s for s in (m.get("spouses", []) or []) if depth.get(s) == d]
@@ -269,8 +276,12 @@ def _apply_rules(tree, focus_child=None):
             cross_pairs.append((gap, ca, cb, a, b))
         cross_pairs.sort(key=lambda x: x[0])  # gap 小者優先
 
+        # C1. 防拆靠攏
         for _, ca, cb, a, b in cross_pairs:
-            _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors)
+            if not _are_clusters_adjacent(cluster_ids, ca, cb):
+                ok = _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors)
+                if not ok:
+                    continue  # 留給強制階段
             ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
             if ia < ib:
                 _move_to_back(clusters[ca], a)
@@ -279,7 +290,19 @@ def _apply_rules(tree, focus_child=None):
                 _move_to_back(clusters[cb], b)
                 _move_to_front(clusters[ca], a)
 
-        # ---- Step D：拍扁成層序列
+        # C2. 強制靠攏補救（保證每對配偶皆相鄰）
+        for _, ca, cb, a, b in cross_pairs:
+            if not _are_clusters_adjacent(cluster_ids, ca, cb):
+                _force_clusters_adjacent(cluster_ids, ca, cb)
+            ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
+            if ia < ib:
+                _move_to_back(clusters[ca], a)
+                _move_to_front(clusters[cb], b)
+            else:
+                _move_to_back(clusters[cb], b)
+                _move_to_front(clusters[ca], a)
+
+        # ---- D. 拍扁成層序列
         final_list = []
         for cid in cluster_ids:
             final_list.extend(clusters[cid])
@@ -291,11 +314,11 @@ def _apply_rules(tree, focus_child=None):
         d_int = int(d)
         pos = {p: i for i, p in enumerate(order)}
         mids = []
-        for mid, m in marriages.items():
+        for mid, m in tree.get("marriages", {}).items():
             sps = m.get("spouses", []) or []
             anchor = None
             for s in sps:
-                if depth.get(s) == d_int:
+                if _compute_generations(tree).get(s) == d_int:
                     anchor = s; break
             if anchor is None and sps:
                 anchor = sps[0]
@@ -483,7 +506,7 @@ def _marriage_form(t):
                 if cc[1].button("加入子女", key=f"addk_{mid}") and kid:
                     if kid not in m["children"]:
                         m["children"].append(kid)
-                        _apply_rules(t, focus_child=kid)  # 規則 3：靠攏配偶家庭＋交界相鄰
+                        _apply_rules(t, focus_child=kid)  # 規則 3：靠攏配偶家庭＋交界相鄰（無論配偶是否有父母）
                         st.rerun()
                 if cc[2].button("清空子女", key=f"clr_{mid}"):
                     m["children"]=[]; _apply_rules(t); st.rerun()
@@ -549,7 +572,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree • rules v3 (auto layout, no manual UI)")
+    st.caption("familytree • rules v4 (focus child adjacency + force pass)")
 
 if __name__ == "__main__":
     render()
