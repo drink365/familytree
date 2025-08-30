@@ -18,21 +18,29 @@ def load_brand():
     try:
         return json.load(open("brand.json", "r", encoding="utf-8"))
     except Exception:
-        return {"PRIMARY": "#D33B2C", "BG": "#F7FAFC", "LOGO_SQUARE": "logo2.png", "SHOW_SIDEBAR_LOGO": False}
+        # 預設品牌設定
+        return {
+            "PRIMARY": "#D33B2C",
+            "BG": "#F7FAFC",
+            "LOGO_SQUARE": "logo2.png",
+            "SHOW_SIDEBAR_LOGO": True,
+            "TAGLINE": "說清楚，做得到",
+            "SUBLINE": "把傳承變簡單。",
+            "RETINA_FACTOR": 3
+        }
 
 _BRAND = load_brand()
 BRAND_PRIMARY = _BRAND.get("PRIMARY", "#D33B2C")
 LOGO_PATH = _BRAND.get("LOGO_SQUARE") or "logo2.png"
-SHOW_SIDEBAR_LOGO = bool(_BRAND.get("SHOW_SIDEBAR_LOGO", False))
+SHOW_SIDEBAR_LOGO = bool(_BRAND.get("SHOW_SIDEBAR_LOGO", True))
 TAGLINE = _BRAND.get("TAGLINE", "說清楚，做得到")
 SUBLINE = _BRAND.get("SUBLINE", "把傳承變簡單。")
 RETINA_FACTOR = int(_BRAND.get("RETINA_FACTOR", 3))
 
-# fallback 檢查
 if not os.path.exists(LOGO_PATH):
-    LOGO_PATH = "logo.png" if os.path.exists("logo.png") else ("logo2.png" if os.path.exists("logo2.png") else None)
+    LOGO_PATH = "logo2.png" if os.path.exists("logo2.png") else ("logo.png" if os.path.exists("logo.png") else None)
 
-# -------------------- Router --------------------
+# -------------------- Router helpers --------------------
 def navigate(key: str):
     st.query_params.update({"page": key})
     st.rerun()
@@ -47,79 +55,56 @@ def get_page_from_query() -> str:
 page = get_page_from_query()
 
 # -------------------- Sidebar --------------------
-
-
-
-
-
 with st.sidebar:
     st.markdown("## 導覽")
-    sidebar_logo_path = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
-    if sidebar_logo_path:
-        mtime = os.path.getmtime(sidebar_logo_path); fsize = os.path.getsize(sidebar_logo_path)
-        b64 = _logo_b64(sidebar_logo_path, 72*2, mtime, fsize)  # 2x retina for small logo
-        st.markdown(
-            f"""
-            <div class="gfo-logo" style="display:flex;justify-content:center;align-items:center;">
-                <img src="data:image/png;base64,{b64}" class="gfo-logo-img" alt="logo2">
-            </div>
-            """, unsafe_allow_html=True
-        )
-        st.markdown(
-            """
-            <style>
-            .gfo-logo-img { width: 72px !important; height: auto !important; display:block; }
-            @media (max-width: 1200px) { .gfo-logo-img { width: 64px !important; } }
-            @media (max-width: 900px)  { .gfo-logo-img { width: 56px !important; } }
-            </style>
-            """, unsafe_allow_html=True
-        )
+
+    if SHOW_SIDEBAR_LOGO:
+        sidebar_logo_path = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
+        if sidebar_logo_path:
+            from PIL import Image, ImageFilter
+            import base64, io
+
+            def _b64_from_path(path: str, target_px_w: int):
+                img = Image.open(path).convert("RGBA")
+                if img.width < target_px_w:
+                    ratio = target_px_w / img.width
+                    img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.Resampling.LANCZOS)
+                    img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=2))
+                buf = io.BytesIO()
+                img.save(buf, format="PNG", optimize=True)
+                return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+            b64 = _b64_from_path(sidebar_logo_path, 72*2)  # 2x for small logo
+            st.markdown(
+                f"""
+                <div class="gfo-logo" style="display:flex;justify-content:center;align-items:center;">
+                    <img src="data:image/png;base64,{b64}" class="gfo-logo-img" alt="logo2">
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            st.markdown(
+                """
+                <style>
+                .gfo-logo-img { width: 72px !important; height: auto !important; display:block; }
+                @media (max-width: 1200px) { .gfo-logo-img { width: 64px !important; } }
+                @media (max-width: 900px)  { .gfo-logo-img { width: 56px !important; } }
+                </style>
+                """,
+                unsafe_allow_html=True
+            )
+
     st.markdown('<div class="gfo-caption">《影響力》AI 傳承規劃平台</div>', unsafe_allow_html=True)
-    st.markdown("""
-    <style>
-    .gfo-caption { text-align:center; color: rgba(75,85,99,0.9); font-size: 0.9rem; }
-    @media (max-width: 900px) { .gfo-caption { font-size: 0.85rem; } }
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        .gfo-caption { text-align:center; color: rgba(75,85,99,0.9); font-size: 0.9rem; }
+        @media (max-width: 900px) { .gfo-caption { font-size: 0.85rem; } }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
     st.markdown("---")
-
-
-st.markdown(
-    """
-    <style>
-    /* ===== Mobile sidebar tuning ===== */
-    @media (max-width: 900px) {
-      section[data-testid="stSidebar"] {
-        padding-top: 6px !important;
-      }
-      section[data-testid="stSidebar"] .stButton > button {
-        padding: 8px 10px !important;
-        font-size: 0.95rem !important;
-        border-radius: 12px !important;
-        margin-bottom: 10px !important;
-      }
-      section[data-testid="stSidebar"] h2, 
-      section[data-testid="stSidebar"] h3 {
-        font-size: 1.05rem !important;
-        margin: 6px 0 4px 0 !important;
-      }
-      section[data-testid="stSidebar"] p {
-        font-size: 0.9rem !important;
-        line-height: 1.2rem !important;
-      }
-    }
-    @media (max-width: 480px) {
-      section[data-testid="stSidebar"] .stButton > button {
-        padding: 8px 10px !important;
-        font-size: 0.9rem !important;
-      }
-      section[data-testid="stSidebar"] p {
-        font-size: 0.85rem !important;
-      }
-    }
-    </style>
-    """, unsafe_allow_html=True
-)
 
 def nav_button(label: str, page_key: str, icon: str):
     if st.sidebar.button(f"{icon} {label}", use_container_width=True, key=f"nav_{page_key}"):
@@ -157,45 +142,49 @@ st.markdown(
         border-color: #cbd5e1 !important;
         box-shadow: 0 2px 6px rgba(0,0,0,0.08) !important;
     }
+    @media (max-width: 900px) {
+        section[data-testid="stSidebar"] .stButton > button {
+            padding: 8px 10px !important;
+            font-size: 0.95rem !important;
+            border-radius: 12px !important;
+            margin-bottom: 10px !important;
+        }
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-
-# -------- Cached image loader (sharp upscale for Retina) --------
+# -------- Cached image upscale for Retina --------
 @st.cache_data(show_spinner=False)
-def _logo_b64(path: str, target_px_width: int, mtime: float, size: int):
+def logo_b64_highres(path: str, target_px_width: int, mtime: float, size: int):
     from PIL import Image, ImageFilter
     import base64, io
     img = Image.open(path).convert("RGBA")
     if img.width < target_px_width:
         ratio = target_px_width / img.width
-        new_size = (int(img.width * ratio), int(img.height * ratio))
-        img = img.resize(new_size, Image.Resampling.LANCZOS)
+        img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.Resampling.LANCZOS)
         img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=2))
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("utf-8")
+
 # -------------------- Pages --------------------
-
-
-
-
 def render_home():
-    # 首頁 LOGO：自動高解析輸出（retina_factor 由 brand.json 控制），置左顯示
+    # 首頁 LOGO：高解析輸出 + base64 置左
     main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo_path:
         mtime = os.path.getmtime(main_logo_path); fsize = os.path.getsize(main_logo_path)
         target_css_width = 200
         target_px_width = max(target_css_width * RETINA_FACTOR, 600)
-        b64 = _logo_b64(main_logo_path, target_px_width, mtime, fsize)
+        b64 = logo_b64_highres(main_logo_path, target_px_width, mtime, fsize)
         st.markdown(
             f"""
             <div class="gfo-hero-logo-wrap">
                 <img src="data:image/png;base64,{b64}" class="gfo-hero-logo" alt="logo">
             </div>
-            """, unsafe_allow_html=True
+            """,
+            unsafe_allow_html=True
         )
         st.markdown(
             """
@@ -204,22 +193,21 @@ def render_home():
             .gfo-hero-logo { width: 200px !important; height: auto !important; image-rendering: -webkit-optimize-contrast; }
             @media (max-width: 900px) { .gfo-hero-logo { width: 180px !important; } }
             </style>
-            """, unsafe_allow_html=True
+            """,
+            unsafe_allow_html=True
         )
-    TAGLINE = TAGLINE
-   "說清楚，做得到"
-    SUBLINE = "把傳承變簡單。"
+
+    tagline_text = TAGLINE
+    subline_text = SUBLINE
 
     st.markdown(
         f"""
         ### 10 分鐘完成高資產家族 10 年的傳承規劃
 
-        {TAGLINE}｜{SUBLINE}
+        {tagline_text}｜{subline_text}
         """.strip()
     )
-
     st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
-
 
 def _safe_import_and_render(module_name: str):
     try:
@@ -231,8 +219,7 @@ def _safe_import_and_render(module_name: str):
     except Exception as e:
         st.error(f"載入 `{module_name}` 失敗：{e}")
 
-
-# 路由（以字典單點呼叫，避免任何情況下的重複渲染）
+# 路由（字典單一呼叫）
 def _page_familytree(): _safe_import_and_render("pages_familytree")
 def _page_legacy(): _safe_import_and_render("pages_legacy")
 def _page_tax(): _safe_import_and_render("pages_tax")
