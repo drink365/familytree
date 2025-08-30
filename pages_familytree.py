@@ -164,6 +164,9 @@ def render():
     st.caption("➊ 新增人物 → ➋ 建立婚姻 → ➌ 加入子女 → ➍ 匯出/匯入 JSON")
 
     t = st.session_state.tree
+    # 匯入後的提示
+    if st.session_state.get("ft_flash_msg"):
+        st.success(st.session_state.pop("ft_flash_msg"))
 
     with st.expander("① 人物管理", expanded=True):
         cols = st.columns([2,1,1,1,1])
@@ -248,14 +251,32 @@ def render():
         col1,col2 = st.columns(2)
         col1.download_button("⬇️ 下載 JSON", data=json.dumps(t, ensure_ascii=False, indent=2),
                              file_name="family_tree.json", mime="application/json", key="btn_dl_json")
-        upl = col2.file_uploader("或：上傳 JSON 匯入", type=["json"])
-        if upl is not None:
-            try:
-                data = json.loads(upl.read().decode("utf-8"))
-                if not isinstance(data, dict):
-                    raise ValueError("檔案格式錯誤")
-                data.setdefault("persons", {}); data.setdefault("marriages", {}); data.setdefault("child_types", {})
-                st.session_state.tree = data
-                st.success("已匯入")
-            except Exception as e:
-                st.error(f"匯入失敗：{e}")
+        
+upl = col2.file_uploader("或：上傳 JSON 匯入", type=["json"])
+if upl is not None:
+    try:
+        data = json.loads(upl.read().decode("utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("檔案格式錯誤")
+        data.setdefault("persons", {}); data.setdefault("marriages", {}); data.setdefault("child_types", {})
+
+        # 重新設定計數器，避免新建 ID 衝突
+        def _max_id(prefix, keys):
+            mx = 0
+            for k in keys:
+                if isinstance(k, str) and k.startswith(prefix):
+                    try:
+                        mx = max(mx, int(k[len(prefix):] or "0"))
+                    except Exception:
+                        pass
+            return mx
+
+        st.session_state.tree = data
+        st.session_state["pid_counter"] = _max_id("P", data.get("persons", {}).keys()) + 1
+        st.session_state["mid_counter"] = _max_id("M", data.get("marriages", {}).keys()) + 1
+
+        # 設一個一次性提示，並重新整理讓圖更新
+        st.session_state["ft_flash_msg"] = "已匯入"
+        st.rerun()
+    except Exception as e:
+        st.error(f"匯入失敗：{e}")
