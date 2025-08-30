@@ -189,7 +189,7 @@ def _graph(tree):
     marriages = tree.get("marriages", {})
 
     g = Digraph("G", format="svg")
-    g.attr(rankdir="TB", splines="polyline", nodesep="0.2", ranksep="0.6")
+    g.attr(rankdir="TB", splines="polyline", nodesep="0.2", ranksep="0.7")
     g.attr("node", shape="box", style="rounded,filled", fillcolor="white",
            fontname="Noto Sans CJK TC", fontsize="11")
     g.attr("edge", fontname="Noto Sans CJK TC", fontsize="10")
@@ -206,31 +206,37 @@ def _graph(tree):
         spouses = m.get("spouses", []) or []
         children = m.get("children", []) or []
 
-        # 婚姻為一個小節點（點）當連接器
-        g.node(mid, shape="point", width="0.01", height="0.01", label="")
-
-        # 夫妻 → 婚姻（同層靠近）
+        # 夫妻與婚姻點「同一層」
         with g.subgraph() as sg:
             sg.attr(rank="same")
+            # 在同層子圖內「建立」婚姻節點（確保它屬於這個 rank）
+            sg.node(mid, shape="point", width="0.01", height="0.01", label="")
+            # 夫妻靠近：以隱形邊串起來
             if len(spouses) >= 2:
                 for i in range(len(spouses) - 1):
-                    sg.edge(spouses[i], spouses[i + 1], style="invis", weight="150", constraint="true")
+                    sg.edge(spouses[i], spouses[i + 1],
+                            style="invis", weight="150", constraint="true")
+            # 配偶 → 婚姻點：不影響分層（constraint=false），避免把婚姻點拉到上一層
             for s in spouses:
-                sg.edge(s, mid, dir="none", weight="5")
+                sg.edge(s, mid, dir="none", weight="5", constraint="false")
+
+            # 兩位配偶再加一條隱形邊，穩定橫向位置
             if len(spouses) == 2:
                 s1, s2 = spouses[0], spouses[1]
-                sg.edge(s1, s2, style="invis", weight="200")
+                sg.edge(s1, s2, style="invis", weight="200", constraint="true")
 
-        # 子女 ← 婚姻（同層相鄰）
+        # 婚姻 → 子女：這條邊決定下一層；minlen 拉開垂直距離
         if len(children) >= 2:
             with g.subgraph() as kg:
                 kg.attr(rank="same")
                 for i in range(len(children) - 1):
-                    kg.edge(children[i], children[i + 1], style="invis", weight="50", constraint="true")
+                    kg.edge(children[i], children[i + 1],
+                            style="invis", weight="60", constraint="true")
         for c in children:
-            g.edge(mid, c, weight="3")
+            g.edge(mid, c, weight="3", minlen="1")
 
-    # ---- 強制分層：同一代放同一 rank（避免只顯示兩層）----
+    # ---- 強制分層（依演算法算出的世代）----
+    # 這段把同一代的人放同一個 rank，保證至少會分出 0/1/2... 多層
     levels = sorted(set(depth.values()))
     for d in levels:
         members = [pid for pid, lv in depth.items() if lv == d]
@@ -241,10 +247,7 @@ def _graph(tree):
                     same.node(pid)
 
     # ---- 全域同層排序（②-2） ----
-    try:
-        gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
-    except Exception:
-        gen_order = {}
+    gen_order = st.session_state.get("gen_order", {}) if hasattr(st, "session_state") else {}
     if gen_order:
         gens = {}
         for pid, d in depth.items():
@@ -256,13 +259,11 @@ def _graph(tree):
                 with g.subgraph() as gg:
                     gg.attr(rank="same")
                     for i in range(len(seq) - 1):
-                        gg.edge(seq[i], seq[i + 1], style="invis", weight="80", constraint="true")
+                        gg.edge(seq[i], seq[i + 1],
+                                style="invis", weight="80", constraint="true")
 
     # ---- 夫妻群排序（②-3） ----
-    try:
-        group_order = st.session_state.get("group_order", {}) if hasattr(st, "session_state") else {}
-    except Exception:
-        group_order = {}
+    group_order = st.session_state.get("group_order", {}) if hasattr(st, "session_state") else {}
     if group_order:
         for d_str, mids in group_order.items():
             try:
@@ -286,7 +287,8 @@ def _graph(tree):
                 with g.subgraph() as grp:
                     grp.attr(rank="same")
                     for i in range(len(anchors) - 1):
-                        grp.edge(anchors[i], anchors[i + 1], style="invis", weight="90", constraint="true")
+                        grp.edge(anchors[i], anchors[i + 1],
+                                 style="invis", weight="90", constraint="true")
 
     return g
 
