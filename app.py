@@ -99,6 +99,7 @@ st.markdown(
 )
 
 # -------------------- Pages --------------------
+
 def render_home():
     # 首頁 LOGO：橫式置左顯示（logo.png，寬 200）
     main_logo = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
@@ -118,18 +119,6 @@ def render_home():
 
     st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
 
-    TAGLINE = "說清楚，做得到"
-    SUBLINE = "把傳承變簡單。"
-
-    st.markdown(
-        f"""
-        ### 10 分鐘完成高資產家族 10 年的傳承規劃
-
-        {TAGLINE}｜{SUBLINE}
-        """.strip()
-    )
-
-    st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
 
 def _safe_import_and_render(module_name: str):
     try:
