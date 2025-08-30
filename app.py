@@ -5,14 +5,6 @@ st.set_page_config(page_title="影響力｜AI 傳承規劃平台", page_icon="lo
 _BRAND = json.load(open("brand.json", "r", encoding="utf-8"))
 BRAND_PRIMARY = _BRAND["PRIMARY"]; BRAND_BG = _BRAND["BG"]
 
-st.sidebar.markdown("## 導覽")
-st.sidebar.button("🏠 首頁", on_click=lambda: navigate("home"))
-st.sidebar.button("🌳 家族樹", on_click=lambda: navigate("familytree"))
-st.sidebar.button("🏛️ 法稅傳承", on_click=lambda: navigate("legacy"))
-st.sidebar.button("🧾 稅務工具", on_click=lambda: navigate("tax"))
-st.sidebar.button("📦 保單策略", on_click=lambda: navigate("policy"))
-st.sidebar.button("💬 價值觀探索", on_click=lambda: navigate("values"))
-st.sidebar.button("👩‍💼 關於我們", on_click=lambda: navigate("about"))
 
 if 'page' not in st.session_state:
     st.session_state['page'] = 'home'
@@ -31,9 +23,19 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 def navigate(key: str): st.query_params.update({"page": key}); st.rerun()
+
 with st.sidebar:
     st.image(_BRAND.get("LOGO_SQUARE", "logo2.png"), width=64)
     st.markdown("### 影響力｜AI 傳承規劃平台"); st.caption("專業 × 快速 × 可信任"); st.markdown("---")
+    if st.button("🏠 首頁", use_container_width=True): navigate("home")
+    if st.button("🌳 家族樹", use_container_width=True): navigate("familytree")
+    if st.button("🏛️ 法稅傳承", use_container_width=True): navigate("legacy")
+    if st.button("🧾 稅務工具", use_container_width=True): navigate("tax")
+    if st.button("📦 保單策略", use_container_width=True): navigate("policy")
+    if st.button("💬 價值觀探索", use_container_width=True): navigate("values")
+    if st.button("👩‍💼 關於我們", use_container_width=True): navigate("about")
+    st.markdown("---")
+
     if st.button("🏠 首頁總覽", use_container_width=True): navigate("home")
     if st.button("🗺️ 傳承地圖", use_container_width=True): navigate("legacy")
     if st.button("🧮 稅務試算", use_container_width=True): navigate("tax")
