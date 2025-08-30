@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
-import json, copy
+import json
+import copy
 from graphviz import Digraph
 
 # -------------------- 狀態初始化 --------------------
@@ -40,9 +41,9 @@ def _compute_generations(tree):
     while changed and guard < 100:
         changed = False
         guard += 1
-        for mid, m in marriages.items():
-            sps = m.get("spouses", [])
-            kids = m.get("children", [])
+        for _, m in marriages.items():
+            sps = m.get("spouses", []) or []
+            kids = m.get("children", []) or []
             parent_depth = 0
             for s in sps:
                 parent_depth = max(parent_depth, depth.get(s, 0))
@@ -75,7 +76,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
     回傳 (gen_order, group_order, tree)：
     - 以出生年/姓名作初始排序
     - 多輪 barycenter（由上而下 + 由下而上）壓交錯
-    - 夫妻群以該層錨點（配偶）在該層的位置由左到右排序
+    - 夫妻群以該層錨點（配偶）在該層位置由左到右排序
     可選：保留配偶現有左右、子女依出生年排序
     """
     persons = tree.get("persons", {})
@@ -84,7 +85,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
 
     # (0) 子女依出生年排序（可選）
     if sort_children_by_birth:
-        for mid, m in marriages.items():
+        for _, m in marriages.items():
             kids = list(m.get("children", []))
             kids_sorted = sorted(
                 kids,
@@ -98,7 +99,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
 
     # (1) 配偶排序（若不保留，依出生年）
     if not preserve_spouse:
-        for mid, m in marriages.items():
+        for _, m in marriages.items():
             sps = list(m.get("spouses", []))
             sps_sorted = sorted(
                 sps,
@@ -126,7 +127,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
     adj = {}
     for pid in persons:
         nbrs = set()
-        for mid, m in marriages.items():
+        for _, m in marriages.items():
             if pid in m.get("spouses", []):
                 for c in m.get("children", []):
                     nbrs.add(c)
@@ -151,7 +152,7 @@ def _auto_layout(tree, preserve_spouse=True, sort_children_by_birth=True, sweeps
             )
         # bottom-up
         for d in range(maxd - 1, -1, -1):
-            nxt = gen_order[str(d + 1)] if str(d + 1) in gen_order else []
+            nxt = gen_order.get(str(d + 1), [])
             nxt_pos = {pid: i for i, pid in enumerate(nxt)}
             nxt_pos["__adj__"] = adj
             cur = gen_order[str(d)]
@@ -229,7 +230,7 @@ def _graph(tree):
         for c in children:
             g.edge(mid, c, weight="3")
 
-    # ---- 強制分層：同一代放同一 rank（避免誤併層，只顯示兩層的情況）----
+    # ---- 強制分層：同一代放同一 rank（避免只顯示兩層）----
     levels = sorted(set(depth.values()))
     for d in levels:
         members = [pid for pid, lv in depth.items() if lv == d]
@@ -592,7 +593,7 @@ def _ui_import_export(t):
     with st.expander("④ 匯入 / 匯出", expanded=False):
         c1, c2 = st.columns(2)
 
-        # 匯出：直接提供下載
+        # 匯出：直接下載目前狀態
         with c1:
             st.download_button(
                 "下載 familytree.json",
@@ -601,29 +602,45 @@ def _ui_import_export(t):
                 mime="application/json",
             )
 
-        # 匯入：使用 form（選檔 → 按「套用匯入」才寫入），並自動建立匯入前快照可復原
+        # 匯入：選檔 → 預覽 → 按「套用匯入」才真正寫入；成功後立刻 rerun
         with c2:
             with st.form("import_form", clear_on_submit=True):
                 file = st.file_uploader("選擇 JSON 檔", type=["json"], key="import_file")
+
+                # 預覽統計（不寫入）
+                if file is not None:
+                    try:
+                        preview = json.loads(file.getvalue().decode("utf-8"))
+                        if isinstance(preview, dict):
+                            pc = len(preview.get("persons", {}) or {})
+                            mc = len(preview.get("marriages", {}) or {})
+                            st.caption(f"預覽：人物 {pc} 位、婚姻 {mc} 筆")
+                            if pc:
+                                keys = list((preview.get("persons") or {}).keys())[:3]
+                                names = [preview["persons"][k].get("name", k) for k in keys]
+                                st.caption("樣本姓名：" + "、".join(names))
+                    except Exception as e:
+                        st.caption(f"無法預覽：{e}")
+
                 submitted = st.form_submit_button("套用匯入")
                 if submitted:
                     if file is None:
                         st.warning("請先選擇檔案")
                     else:
                         try:
-                            data = json.load(file)
+                            data = json.loads(file.getvalue().decode("utf-8"))
                             if isinstance(data, dict) and "persons" in data and "marriages" in data:
-                                # 建立快照 → 寫入 → 顯示成功（不 rerun，避免閃爍）
                                 st.session_state.__backup_tree__ = copy.deepcopy(st.session_state.tree)
                                 st.session_state.tree = data
-                                st.success("匯入成功！可用下方的『復原到匯入前』回復。")
+                                st.success("匯入成功！")
+                                st.rerun()  # 立刻刷新，讓上方區塊用新資料重繪
                             else:
                                 st.warning("JSON 結構不正確，需包含 persons 與 marriages。")
                         except Exception as e:
                             st.error(f"匯入失敗：{e}")
 
-            # 復原/清空
-            c3, c4 = st.columns([1,1])
+            # 復原／清空
+            c3, c4 = st.columns([1, 1])
             if c3.button("復原到匯入前", disabled=st.session_state.__backup_tree__ is None):
                 if st.session_state.__backup_tree__ is None:
                     st.warning("沒有可復原的快照。")
@@ -661,7 +678,7 @@ def render():
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree autosuggest • r6")  # 版本戳記（確認載入新檔）
+    st.caption("familytree autosuggest • r7")  # 版本戳記（確認載入新檔）
 
 if __name__ == "__main__":
     st.set_page_config(page_title="家族樹", layout="wide")
