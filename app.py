@@ -16,6 +16,15 @@ if st.button("👩‍💼 關於我們", key="btn_about", use_container_width=Tr
 
 
 
+if st.button("🌳 家族樹", key="btn_familytree", use_container_width=True): navigate("familytree")
+if st.button("🏛️ 法稅傳承", key="btn_legacy", use_container_width=True): navigate("legacy")
+if st.button("🧾 稅務工具", key="btn_tax", use_container_width=True): navigate("tax")
+if st.button("📦 保單策略", key="btn_policy", use_container_width=True): navigate("policy")
+if st.button("💬 價值觀探索", key="btn_values", use_container_width=True): navigate("values")
+if st.button("👩‍💼 關於我們", key="btn_about", use_container_width=True): navigate("about")
+
+
+
 if 'page' not in st.session_state:
     st.session_state['page'] = 'home'
 st.markdown("""
