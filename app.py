@@ -12,7 +12,6 @@ BRAND_PRIMARY = _BRAND["PRIMARY"]; BRAND_BG = _BRAND["BG"]
 st.sidebar.markdown("## 導覽")
 def nav_card(label, page_key, icon):
     with st.container():
-        if st.button(f"{icon} {label}", key=f"btn_{page_key}", use_container_width=True):
             navigate(page_key)
     st.markdown("---")
 for label, key, icon in [("首頁","home","🏠"),("家族樹","familytree","🌳"),("法稅傳承","legacy","🏛️"),("稅務工具","tax","🧾"),("保單策略","policy","📦"),("價值觀探索","values","💬"),("關於我們","about","👩‍💼")]:
@@ -36,12 +35,6 @@ def navigate(key: str): st.query_params.update({"page": key}); st.rerun()
 with st.sidebar:
     st.image(_BRAND.get("LOGO_SQUARE", "logo2.png"), width=64)
     st.markdown("### 影響力｜AI 傳承規劃平台"); st.caption("專業 × 快速 × 可信任"); st.markdown("---")
-    if st.button("🏠 首頁總覽", use_container_width=True): navigate("home")
-    if st.button("🗺️ 傳承地圖", use_container_width=True): navigate("legacy")
-    if st.button("🧮 稅務試算", use_container_width=True): navigate("tax")
-    if st.button("📦 保單策略", use_container_width=True): navigate("policy")
-    if st.button("❤️ 價值觀探索", use_container_width=True): navigate("values")
-    if st.button("🤝 關於我們 / 聯絡", use_container_width=True): navigate("about")
 q = st.query_params; page = (q.get("page") or ["home"]); page = page[0] if isinstance(page, list) else page
 top = st.columns([1,5])
 with top[0]: st.image(_BRAND.get("LOGO_WIDE","logo.png"), width=180)
@@ -53,9 +46,9 @@ if page == "home":
     st.markdown('<div style="height:14px"></div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("🚀 開始建立傳承地圖", type="primary", use_container_width=True): navigate("legacy")
+        st.empty()  # placeholder to keep layout
     with c2:
-        if st.button("📞 預約顧問 / 合作洽談", use_container_width=True): navigate("about")
+        st.empty()  # placeholder to keep layout
     st.markdown('</div>', unsafe_allow_html=True)
 elif page == "legacy":
     from pages_legacy import render; render()
