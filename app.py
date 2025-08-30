@@ -47,30 +47,33 @@ page = get_page_from_query()
 
 
 
+
 with st.sidebar:
     st.markdown("## 導覽")
     sidebar_logo = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
     if sidebar_logo:
-        s1, s2, s3 = st.columns([1,1,1])
-        with s2:
+        import base64
+        try:
+            b64 = base64.b64encode(open(sidebar_logo, "rb").read()).decode("utf-8")
+            st.markdown(
+                f"""
+                <div class="gfo-logo" style="display:flex;justify-content:center;align-items:center;">
+                    <img src="data:image/png;base64,{b64}" class="gfo-logo-img" alt="logo2">
+                </div>
+                """, unsafe_allow_html=True
+            )
+            # Responsive sizes
+            st.markdown(
+                """
+                <style>
+                .gfo-logo-img { width: 72px !important; height: auto !important; display:block; }
+                @media (max-width: 1200px) { .gfo-logo-img { width: 64px !important; } }
+                @media (max-width: 900px)  { .gfo-logo-img { width: 56px !important; } }
+                </style>
+                """, unsafe_allow_html=True
+            )
+        except Exception:
             st.image(sidebar_logo, use_container_width=False, width=72)
-        # 自適應尺寸：桌機 72px，<=1200px 用 64px，<=900px 用 56px
-        st.markdown(
-            """
-            <style>
-            section[data-testid='stSidebar'] img {
-                display: block; margin: 6px auto;
-                width: 72px !important; height: auto !important;
-            }
-            @media (max-width: 1200px) {
-                section[data-testid='stSidebar'] img { width: 64px !important; }
-            }
-            @media (max-width: 900px) {
-                section[data-testid='stSidebar'] img { width: 56px !important; }
-            }
-            </style>
-            """, unsafe_allow_html=True
-        )
     st.caption("《影響力》AI 傳承規劃平台")
     st.markdown("---")
 
