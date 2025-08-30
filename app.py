@@ -24,6 +24,9 @@ _BRAND = load_brand()
 BRAND_PRIMARY = _BRAND.get("PRIMARY", "#D33B2C")
 LOGO_PATH = _BRAND.get("LOGO_SQUARE") or "logo2.png"
 SHOW_SIDEBAR_LOGO = bool(_BRAND.get("SHOW_SIDEBAR_LOGO", False))
+TAGLINE = _BRAND.get("TAGLINE", "說清楚，做得到")
+SUBLINE = _BRAND.get("SUBLINE", "把傳承變簡單。")
+RETINA_FACTOR = int(_BRAND.get("RETINA_FACTOR", 3))
 
 # fallback 檢查
 if not os.path.exists(LOGO_PATH):
@@ -48,32 +51,29 @@ page = get_page_from_query()
 
 
 
+
 with st.sidebar:
     st.markdown("## 導覽")
-    sidebar_logo = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
-    if sidebar_logo:
-        import base64
-        try:
-            b64 = base64.b64encode(open(sidebar_logo, "rb").read()).decode("utf-8")
-            st.markdown(
-                f"""
-                <div class="gfo-logo" style="display:flex;justify-content:center;align-items:center;">
-                    <img src="data:image/png;base64,{b64}" class="gfo-logo-img" alt="logo2">
-                </div>
-                """, unsafe_allow_html=True
-            )
-            # Responsive sizes
-            st.markdown(
-                """
-                <style>
-                .gfo-logo-img { width: 72px !important; height: auto !important; display:block; }
-                @media (max-width: 1200px) { .gfo-logo-img { width: 64px !important; } }
-                @media (max-width: 900px)  { .gfo-logo-img { width: 56px !important; } }
-                </style>
-                """, unsafe_allow_html=True
-            )
-        except Exception:
-            st.image(sidebar_logo, use_container_width=False, width=72)
+    sidebar_logo_path = "logo2.png" if os.path.exists("logo2.png") else (LOGO_PATH if LOGO_PATH else None)
+    if sidebar_logo_path:
+        mtime = os.path.getmtime(sidebar_logo_path); fsize = os.path.getsize(sidebar_logo_path)
+        b64 = _logo_b64(sidebar_logo_path, 72*2, mtime, fsize)  # 2x retina for small logo
+        st.markdown(
+            f"""
+            <div class="gfo-logo" style="display:flex;justify-content:center;align-items:center;">
+                <img src="data:image/png;base64,{b64}" class="gfo-logo-img" alt="logo2">
+            </div>
+            """, unsafe_allow_html=True
+        )
+        st.markdown(
+            """
+            <style>
+            .gfo-logo-img { width: 72px !important; height: auto !important; display:block; }
+            @media (max-width: 1200px) { .gfo-logo-img { width: 64px !important; } }
+            @media (max-width: 900px)  { .gfo-logo-img { width: 56px !important; } }
+            </style>
+            """, unsafe_allow_html=True
+        )
     st.markdown('<div class="gfo-caption">《影響力》AI 傳承規劃平台</div>', unsafe_allow_html=True)
     st.markdown("""
     <style>
@@ -162,15 +162,34 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
+# -------- Cached image loader (sharp upscale for Retina) --------
+@st.cache_data(show_spinner=False)
+def _logo_b64(path: str, target_px_width: int, mtime: float, size: int):
+    from PIL import Image, ImageFilter
+    import base64, io
+    img = Image.open(path).convert("RGBA")
+    if img.width < target_px_width:
+        ratio = target_px_width / img.width
+        new_size = (int(img.width * ratio), int(img.height * ratio))
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
+        img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=130, threshold=2))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    return base64.b64encode(buf.getvalue()).decode("utf-8")
 # -------------------- Pages --------------------
 
 
+
+
 def render_home():
-    # 首頁 LOGO：以 base64 方式嵌入，避免縮放模糊；置左顯示，寬 200
+    # 首頁 LOGO：自動高解析輸出（retina_factor 由 brand.json 控制），置左顯示
     main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
     if main_logo_path:
-        import base64
-        b64 = base64.b64encode(open(main_logo_path, "rb").read()).decode("utf-8")
+        mtime = os.path.getmtime(main_logo_path); fsize = os.path.getsize(main_logo_path)
+        target_css_width = 200
+        target_px_width = max(target_css_width * RETINA_FACTOR, 600)
+        b64 = _logo_b64(main_logo_path, target_px_width, mtime, fsize)
         st.markdown(
             f"""
             <div class="gfo-hero-logo-wrap">
@@ -183,13 +202,12 @@ def render_home():
             <style>
             .gfo-hero-logo-wrap { display:block; }
             .gfo-hero-logo { width: 200px !important; height: auto !important; image-rendering: -webkit-optimize-contrast; }
-            @media (max-width: 900px) {
-                .gfo-hero-logo { width: 180px !important; }
-            }
+            @media (max-width: 900px) { .gfo-hero-logo { width: 180px !important; } }
             </style>
             """, unsafe_allow_html=True
         )
-    TAGLINE =  "說清楚，做得到"
+    TAGLINE = TAGLINE
+   "說清楚，做得到"
     SUBLINE = "把傳承變簡單。"
 
     st.markdown(
