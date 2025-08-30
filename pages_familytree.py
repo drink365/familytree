@@ -84,7 +84,21 @@ def render():
                 else:
                     mid = _new_id("M"); t["marriages"][mid] = {"spouses":[a,b], "children":[]}; t["child_types"][mid]={}; st.success(f"已建立婚姻 {mid}")
         if t["marriages"]:
-            mid = st.selectbox("選擇婚姻以新增子女", list(t["marriages"].keys()), format_func=lambda x: f'{x}｜'+" × ".join(t["persons"][pid]["name"] for pid in t["marriages"][x]["spouses"]))
+            def safe_format_marriage(x):
+    spouses = t["marriages"].get(x, {}).get("spouses", [])
+    names = []
+    for pid in spouses:
+        if pid in t["persons"]:
+            names.append(t["persons"][pid]["name"])
+        else:
+            names.append(f"未知成員{pid}")
+    return f"{x}｜" + " × ".join(names)
+
+mid = st.selectbox(
+    "選擇婚姻以新增子女",
+    list(t["marriages"].keys()),
+    format_func=safe_format_marriage
+))
             c1,c2,c3 = st.columns([2,1,1])
             child = c1.selectbox("子女", [""]+[p for p in t["persons"].keys() if p not in t["marriages"][mid]["children"]], format_func=lambda x: x if not x else f'{x}｜{t["persons"][x]["name"]}')
             ctype = c2.selectbox("關係", ["生","繼","認領","其他"], index=0, key="sel_ctype")
