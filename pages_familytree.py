@@ -14,7 +14,6 @@ def _init_state():
         st.session_state.pid_counter = 1
     if "mid_counter" not in st.session_state:
         st.session_state.mid_counter = 1
-    # 只做為演算法輸出（沒有手動 UI）
     if "gen_order" not in st.session_state:
         st.session_state.gen_order = {}
     if "group_order" not in st.session_state:
@@ -100,6 +99,15 @@ def _parents_mid_of(pid, marriages):
             return mid
     return None
 
+def _cluster_id_of(pid, d, marriages):
+    """
+    回傳此人物在第 d 層的群 ID：
+      - 若有父母（且 d>0）：回父母婚姻 mid
+      - 否則：回 'orph:PID'
+    """
+    pmid = _parents_mid_of(pid, marriages)
+    return pmid if (pmid is not None and d > 0) else f"orph:{pid}"
+
 def _spouses_of(pid, marriages):
     seen, res = set(), []
     for m in marriages.values():
@@ -177,16 +185,16 @@ def _force_clusters_adjacent(cluster_ids, ca, cb):
     if ib < ia:
         ia -= 1
     # 將 cb 插入離原本位置較近的一側
-    left_cost  = abs((ia)   - ib)
-    right_cost = abs((ia+1) - ib)
+    left_cost  = abs(ia       - ib)
+    right_cost = abs((ia + 1) - ib)
     insert_at = ia if left_cost <= right_cost else ia + 1
     cluster_ids.insert(insert_at, cb)
 
 def _apply_rules(tree, focus_child=None):
     """
-    產生 gen_order / group_order，滿足：
+    規則保證：
       1) 建立婚姻後，同層配偶必相鄰（僅在群內調整到邊界，不打散手足群）
-      2) 同父母的小孩固定成群（sibling cluster），不同家庭不互插
+      2) 同父母的小孩固定成群（sibling cluster）
       3) 新增子女：無論其配偶是否有父母，兩個家庭先靠攏，夫妻放在兩群交界
       4) 全層婚姻兩階段：先防拆靠攏；再強制靠攏補救，確保每對配偶都相鄰
     """
@@ -208,8 +216,7 @@ def _apply_rules(tree, focus_child=None):
         # ---- A. 形成手足群（cluster）
         clusters = {}  # cid -> [pids]
         for p in members:
-            pmid = _parents_mid_of(p, marriages)
-            cid = pmid if (pmid is not None and d > 0) else f"orph:{p}"
+            cid = _cluster_id_of(p, d, marriages)
             clusters.setdefault(cid, []).append(p)
 
         # 群內排序：基本排序 + 同群配偶相鄰
@@ -243,8 +250,8 @@ def _apply_rules(tree, focus_child=None):
         # ---- B. 新增子女 → 不論配偶是否有父母，都先讓兩群靠攏，並把兩人放交界
         if focus_child and depth.get(focus_child) == d:
             for s in _spouses_of(focus_child, marriages):
-                ca = _parents_mid_of(focus_child, marriages) if d > 0 else f"orph:{focus_child}"
-                cb = _parents_mid_of(s, marriages)           if d > 0 else f"orph:{s}"
+                ca = _cluster_id_of(focus_child, d, marriages)
+                cb = _cluster_id_of(s,           d, marriages)
                 if ca == cb or ca not in cluster_ids or cb not in cluster_ids:
                     continue
                 ok = _ensure_clusters_adjacent(cluster_ids, ca, cb, placed_neighbors)
@@ -267,8 +274,8 @@ def _apply_rules(tree, focus_child=None):
             if len(sps) < 2:
                 continue
             a, b = sps[0], sps[1]
-            ca = _parents_mid_of(a, marriages) if d > 0 else f"orph:{a}"
-            cb = _parents_mid_of(b, marriages) if d > 0 else f"orph:{b}"
+            ca = _cluster_id_of(a, d, marriages)
+            cb = _cluster_id_of(b, d, marriages)
             if ca == cb or ca not in cluster_ids or cb not in cluster_ids:
                 continue
             ia, ib = cluster_ids.index(ca), cluster_ids.index(cb)
@@ -308,7 +315,7 @@ def _apply_rules(tree, focus_child=None):
             final_list.extend(clusters[cid])
         gen_order[str(d)] = final_list
 
-    # 產生 group_order（供圖上同層鍊接使用；沒有手動 UI）
+    # 產生 group_order（用同一份 depth，避免重算）
     group_order = {}
     for d, order in gen_order.items():
         d_int = int(d)
@@ -318,7 +325,7 @@ def _apply_rules(tree, focus_child=None):
             sps = m.get("spouses", []) or []
             anchor = None
             for s in sps:
-                if _compute_generations(tree).get(s) == d_int:
+                if depth.get(s) == d_int:
                     anchor = s; break
             if anchor is None and sps:
                 anchor = sps[0]
@@ -488,7 +495,7 @@ def _marriage_form(t):
             else:
                 mid = _next_mid()
                 t["marriages"][mid]={"spouses":[s1,s2],"children":[]}
-                _apply_rules(t)  # 規則 1：立即讓配偶相鄰（不破壞手足群）
+                _apply_rules(t)  # 立即把配偶相鄰（不破壞手足群）
                 st.success(f"已新增婚姻：{mid}（已自動把配偶排為相鄰）")
                 st.rerun()
 
@@ -506,7 +513,7 @@ def _marriage_form(t):
                 if cc[1].button("加入子女", key=f"addk_{mid}") and kid:
                     if kid not in m["children"]:
                         m["children"].append(kid)
-                        _apply_rules(t, focus_child=kid)  # 規則 3：靠攏配偶家庭＋交界相鄰（無論配偶是否有父母）
+                        _apply_rules(t, focus_child=kid)  # 靠攏配偶家庭＋交界相鄰（無論配偶是否有父母）
                         st.rerun()
                 if cc[2].button("清空子女", key=f"clr_{mid}"):
                     m["children"]=[]; _apply_rules(t); st.rerun()
@@ -571,8 +578,7 @@ def render():
     _marriage_form(t)
     _ui_visualize(t)
     _ui_import_export(t)
-
-    st.caption("familytree • rules v4 (focus child adjacency + force pass)")
+    st.caption("familytree • rules v5 (cluster_id fix for orphans)")
 
 if __name__ == "__main__":
     render()
