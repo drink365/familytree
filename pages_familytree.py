@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import streamlit as st
 import json
-from collections import deque, Counter
+from collections import deque, Counter, defaultdict
 from graphviz import Digraph
 
 # =========================================================
@@ -11,9 +11,9 @@ def _init_state():
     if "tree" not in st.session_state:
         st.session_state.tree = {"persons": {}, "marriages": {}, "child_types": {}}
     if "gen_order" not in st.session_state:
-        st.session_state.gen_order = {}   # ②-2 同層排序（使用者指定 / 程式自動維護）
+        st.session_state.gen_order = {}   # ②-2 同層排序（使用者指定）
     if "group_order" not in st.session_state:
-        st.session_state.group_order = {} # ②-3 夫妻群排序（使用者指定 / 自動）
+        st.session_state.group_order = {} # ②-3 夫妻群排序（使用者指定）
     if "pid_counter" not in st.session_state:
         st.session_state.pid_counter = 1
     if "mid_counter" not in st.session_state:
@@ -82,7 +82,7 @@ def _compute_generations(tree):
     return depth
 
 # =========================================================
-# 2) 佈局 / 排序用工具
+# 2) 排序工具（硬規則使用）
 # =========================================================
 def _year(person):
     try:
@@ -90,10 +90,6 @@ def _year(person):
         return int(str(v).strip()[:4]) if v else None
     except Exception:
         return None
-
-def _base_key_for_pid(pid, persons):
-    y = _year(persons.get(pid, {}))
-    return (y is None, y if y is not None else 9999, persons.get(pid, {}).get("name", ""))
 
 def _spouses_of(pid, marriages):
     """回傳 pid 的配偶清單（可能多段婚姻，去重）。"""
@@ -113,9 +109,95 @@ def _parents_mid_of(pid, marriages):
             return mid
     return None
 
+def _couple_units(order, marriages, layer, depth):
+    """
+    把同層的配偶合併成『單位』（unit）。回傳 units（list of list[pids]）。
+    規則：若某人與同層有人結婚，挑第一段婚姻的另一半，兩人結成一個 unit；
+         沒有同層配偶則獨立成單人 unit。
+    """
+    pos = {p:i for i,p in enumerate(order)}
+    used = set()
+    units = []
+    for p in order:
+        if p in used:
+            continue
+        # 找同層配偶
+        mate = None
+        for mid, m in marriages.items():
+            sps = m.get("spouses", []) or []
+            if p in sps:
+                # 第一個不是自己、且在同一層
+                for s in sps:
+                    if s != p and depth.get(s) == layer and s in pos:
+                        mate = s
+                        break
+            if mate:
+                break
+        if mate and mate not in used:
+            # 按目前左右位置排序，確保 unit 內呈現相鄰
+            a, b = (p, mate) if pos[p] <= pos[mate] else (mate, p)
+            units.append([a, b])
+            used.add(a); used.add(b)
+        else:
+            units.append([p])
+            used.add(p)
+    return units
+
+def _family_blocks(units, marriages):
+    """
+    把 units（每個 unit 是 [人] 或 [配偶A, 配偶B]）依『父母婚姻』分群。
+    - 只要 unit 內有人有父母婚姻（mid），整個 unit 就歸入該 mid 的子女群。
+    - 若 unit 內兩人分屬不同 mid，優先採用該 unit 在當前順序中出現時
+      第一個帶有 mid 的那位（穩定、可預期）。
+    - 找不到 mid 的歸入 None 群。
+    回傳：[(group_key, [units...]) ...] 依原出現順序排序。
+    """
+    groups = defaultdict(list)
+    # 保持穩定：照 units 順序掃描，遇到的第一個有 mid 的人當群鍵
+    for u in units:
+        key = None
+        for p in u:
+            mid = _parents_mid_of(p, marriages)
+            if mid:
+                key = mid
+                break
+        groups[key].append(u)
+
+    # 回傳按原 keys 的出現順序
+    ordered = []
+    for key in groups:
+        ordered.append((key, groups[key]))
+    return ordered
+
+def _apply_hard_constraints(order, marriages, layer, depth):
+    """
+    對單一層的『人物順序 order』套用兩個硬規則：
+      1) 夫妻必相鄰（用 unit 表示）
+      2) 同父母子女必為連續段（以父母 mid 分群），每位子女若有配偶，配偶跟在旁邊
+    輸入：order（list[pids]）
+    回傳：新的 order（list[pids]）
+    """
+    if not order:
+        return order[:]
+
+    # 先做「夫妻單位」
+    units = _couple_units(order, marriages, layer, depth)
+
+    # 再以「父母婚姻 mid」把 units 分成連續區塊
+    blocks = _family_blocks(units, marriages)
+
+    # 最終順序：依 block 的原始順序平舖，每個 unit 內保持相鄰
+    new_order = []
+    for _, us in blocks:
+        for u in us:
+            new_order.extend(u)
+
+    # 若長度對不上（極少見：資料異常），保底回原順
+    return new_order if len(new_order) == len(order) else order[:]
+
 def _enforce_spouse_adjacency(order, marriages, layer, depth):
     """
-    在同一層 order 內，讓所有『同層夫妻』緊鄰（盡量小幅移動）。
+    保險起見：再跑一輪把夫妻拉到相鄰（萬一外部又把人塞進去）。
     """
     pos = {p: i for i, p in enumerate(order)}
     changed, guard = True, 0
@@ -145,101 +227,8 @@ def _enforce_spouse_adjacency(order, marriages, layer, depth):
             changed = True
     return order
 
-def _group_siblings(order, layer, marriages, depth):
-    """
-    讓『同一對父母（同一個婚姻）的孩子』在同層 order 裡相鄰成區塊。
-    不改變各孩子在群內的相對順序，只把同群孩子黏在一起。
-    """
-    # 找出此層有哪些孩子屬於哪些婚姻
-    mid_children = {}
-    for mid, m in marriages.items():
-        kids = [k for k in (m.get("children", []) or []) if depth.get(k) == layer]
-        if len(kids) >= 2:  # 有 2 個以上才需要群組
-            mid_children[mid] = [k for k in order if k in kids]  # 依目前 order 的相對順序
-
-    if not mid_children:
-        return order
-
-    placed = set()
-    new_order = []
-    for p in order:
-        # 如果這個人是某個婚姻的孩子，且該婚姻尚未放入，直接把整個群組放進來
-        mid_to_place = None
-        for mid, kids in mid_children.items():
-            if mid in placed:
-                continue
-            if p in kids:
-                mid_to_place = mid
-                break
-        if mid_to_place:
-            new_order.extend(mid_children[mid_to_place])
-            placed.add(mid_to_place)
-        else:
-            # 不是需要群組的人，照舊放
-            # 注意：若此人也是其他婚姻的孩子但只有 1 人，不需要特別合併
-            if all(p not in kids for mid, kids in mid_children.items()):
-                new_order.append(p)
-
-    # 還沒放進去的群（理論上不會發生），保險起見補上
-    for mid, kids in mid_children.items():
-        if mid not in placed:
-            for k in kids:
-                if k not in new_order:
-                    new_order.append(k)
-    # 保留所有原成員（防丟）
-    for p in order:
-        if p not in new_order:
-            new_order.append(p)
-    return new_order
-
 # =========================================================
-# 3) 在建立婚姻／加入子女時，立即維護同層排序
-# =========================================================
-def _ensure_spouses_adjacent_in_gen_order(tree, s1, s2):
-    """建立婚姻後：把兩位配偶在其層的同層順序中相鄰。"""
-    persons   = tree.get("persons", {})
-    marriages = tree.get("marriages", {})
-    depth     = _compute_generations(tree)
-    if s1 not in persons or s2 not in persons:
-        return
-    d = depth.get(s1)
-    if d is None:
-        return
-    # 取得當前層的順序（若還沒建立，先用預設排序）
-    layer_people = [p for p,dd in depth.items() if dd==d]
-    cur = list(st.session_state.gen_order.get(str(d), []))
-    order = [p for p in cur if p in layer_people] + [p for p in layer_people if p not in cur]
-    if s1 in order and s2 in order:
-        # 讓 s2 跟在 s1 右邊（穩定）
-        i1, i2 = order.index(s1), order.index(s2)
-        if i2 != i1 + 1:
-            order.pop(i2)
-            if i2 < i1:
-                i1 -= 1
-            order.insert(i1 + 1, s2)
-        st.session_state.gen_order[str(d)] = order
-
-def _ensure_siblings_grouped_in_gen_order(tree, mid):
-    """加入子女後：把該婚姻的孩子在其層的同層順序中相鄰成區塊。"""
-    persons   = tree.get("persons", {})
-    marriages = tree.get("marriages", {})
-    if mid not in marriages:
-        return
-    depth     = _compute_generations(tree)
-    kids = [k for k in marriages[mid].get("children", []) if k in persons]
-    if not kids:
-        return
-    # 找該群孩子的層（用眾數以保險）
-    d = Counter(depth.get(k, 0) for k in kids).most_common(1)[0][0]
-    layer_people = [p for p,dd in depth.items() if dd==d]
-    cur = list(st.session_state.gen_order.get(str(d), []))
-    order = [p for p in cur if p in layer_people] + [p for p in layer_people if p not in cur]
-    # 套用群組策略
-    new_order = _group_siblings(order, d, {mid: marriages[mid]}, depth)
-    st.session_state.gen_order[str(d)] = new_order
-
-# =========================================================
-# 4) 自動減少交錯（保留原有按鈕）
+# 3) 自動減少交錯（在套用硬規則前，先跑幾輪重心法）
 # =========================================================
 def _auto_layout(tree, sweeps=4):
     persons   = tree.get("persons", {})
@@ -253,7 +242,9 @@ def _auto_layout(tree, sweeps=4):
 
     # 初始順序：出生年/姓名
     def base_key(n):
-        return _base_key_for_pid(n, persons)
+        y = _year(persons.get(n, {}))
+        return (y is None, y if y is not None else 9999, persons.get(n, {}).get("name", ""))
+
     gen_order = {str(d): sorted(nodes, key=base_key) for d, nodes in layers.items()}
 
     # 父母<->子女鄰接
@@ -286,11 +277,11 @@ def _auto_layout(tree, sweeps=4):
             ref = {p: i for i, p in enumerate(gen_order[str(d + 1)])}
             gen_order[str(d)] = _bary(gen_order[str(d)], ref)
 
-    # 夫妻緊鄰 + 兄弟姊妹群組
+    # ====== 套用硬規則（核心）======
     for d in layers:
         order = gen_order[str(d)]
+        order = _apply_hard_constraints(order, marriages, d, depth)
         order = _enforce_spouse_adjacency(order, marriages, d, depth)
-        order = _group_siblings(order, d, marriages, depth)
         gen_order[str(d)] = order
 
     # 生成夫妻群排序（供 ②-3 使用）
@@ -315,8 +306,7 @@ def _auto_layout(tree, sweeps=4):
     return gen_order, group_order
 
 # =========================================================
-# 5) Graphviz（夫妻同層；婚姻點在中線；子女從中線往下）
-#     ─ 在視覺化前，再次強化：夫妻相鄰、兄弟姊妹成區塊
+# 4) Graphviz（夫妻同層；婚姻點在中線；子女從中線往下）
 # =========================================================
 def _graph(tree):
     depth     = _compute_generations(tree)
@@ -341,8 +331,11 @@ def _graph(tree):
     for pid, d in depth.items():
         layers.setdefault(d, []).append(pid)
 
-    per_layer_order = {d: sorted(nodes, key=lambda x: _base_key_for_pid(x, persons))
-                       for d, nodes in layers.items()}
+    def _base_key(pid):
+        y = _year(persons.get(pid, {}))
+        return (y is None, y if y is not None else 9999, persons.get(pid,{}).get("name",""))
+
+    per_layer_order = {d: sorted(nodes, key=_base_key) for d, nodes in layers.items()}
 
     # 使用者 ②-2 覆蓋
     if st.session_state.get("gen_order"):
@@ -351,13 +344,14 @@ def _graph(tree):
                   [p for p in people if p not in st.session_state.gen_order.get(str(d), [])]
             if seq: per_layer_order[d] = seq
 
-    # 在畫圖前，再強化一次：夫妻相鄰 + 兄弟姊妹群組
-    for d, order in list(per_layer_order.items()):
+    # ====== 最後一關：硬規則強制套用（不管來源順序如何）======
+    for d in list(per_layer_order.keys()):
+        order = per_layer_order[d]
+        order = _apply_hard_constraints(order, marriages, d, depth)
         order = _enforce_spouse_adjacency(order, marriages, d, depth)
-        order = _group_siblings(order, d, marriages, depth)
         per_layer_order[d] = order
 
-    # -- 婚姻與子女 --
+    # -- 婚姻與子女（夫妻兩段線；孩子從中線往下） --
     for mid, m in marriages.items():
         sps  = m.get("spouses", []) or []
         kids = m.get("children", []) or []
@@ -418,7 +412,8 @@ def _graph(tree):
                 for i in range(len(order)-1):
                     gg.edge(order[i], order[i+1], style="invis", weight="220", constraint="true")
 
-    # ②-3 夫妻群排序（優先度最高）
+    # ②-3 夫妻群排序（優先度最高；但因硬規則存在，仍不會破壞相鄰/同父母成段）
+    marriages_all = tree.get("marriages", {})
     if st.session_state.get("group_order"):
         for d_str, mids in st.session_state.group_order.items():
             try:
@@ -426,8 +421,8 @@ def _graph(tree):
             except Exception:
                 continue
             anchors=[]
-            for mid in [m for m in mids if m in marriages]:
-                sps = marriages[mid].get("spouses", [])
+            for mid in [m for m in mids if m in marriages_all]:
+                sps = marriages_all[mid].get("spouses", [])
                 anchor=None
                 for s in sps:
                     if depth.get(s)==d:
@@ -445,7 +440,7 @@ def _graph(tree):
     return g
 
 # =========================================================
-# 6) UI：基本資料
+# 5) UI：基本資料
 # =========================================================
 def _person_form(t):
     st.subheader("① 人物管理")
@@ -487,9 +482,6 @@ def _person_form(t):
                         st.session_state[f"ren_{pid}"]=False
                         st.rerun()
 
-# =========================================================
-# 7) UI：婚姻關係（建立婚姻即相鄰；加入子女即群組）
-# =========================================================
 def _marriage_form(t):
     st.subheader("② 婚姻關係")
     with st.form("add_marriage", clear_on_submit=True):
@@ -505,9 +497,8 @@ def _marriage_form(t):
             else:
                 mid = _next_mid()
                 t["marriages"][mid]={"spouses":[s1,s2],"children":[]}
-                # ★ 規則 1：建立婚姻後，立即把配偶兩人排成相鄰
-                _ensure_spouses_adjacent_in_gen_order(t, s1, s2)
-                st.success(f"已新增婚姻：{mid}")
+                # 一建立婚姻就強制刷新，讓夫妻立刻相鄰（由硬規則實現）
+                st.success(f"已新增婚姻：{mid}（視覺上已強制相鄰）")
                 st.rerun()
 
     if t["marriages"]:
@@ -523,16 +514,13 @@ def _marriage_form(t):
                                       key=f"k_{mid}")
                 if cc[1].button("加入子女", key=f"addk_{mid}") and kid:
                     if kid not in m["children"]:
-                        m["children"].append(kid)
-                        # ★ 規則 2：同一父母的小孩永遠相鄰成區塊
-                        _ensure_siblings_grouped_in_gen_order(t, mid)
-                        st.rerun()
+                        m["children"].append(kid); st.rerun()
                 if cc[2].button("清空子女", key=f"clr_{mid}"):
                     m["children"]=[]; st.rerun()
                 if cc[3].button("刪除此婚姻", key=f"del_{mid}"):
                     del t["marriages"][mid]; st.rerun()
 
-                # 子女局部排序（可選，群內仍保持相鄰）
+                # 子女局部排序（可選）— 視覺上仍會被硬規則包成一段
                 if len(kids)>=2:
                     st.caption("子女順序（此婚姻）")
                     for i,k in enumerate(kids):
@@ -540,20 +528,20 @@ def _marriage_form(t):
                         r = st.columns([6,1,1,1,1])
                         r[0].write(f"{i+1}. {k}｜{nm}")
                         if r[1].button("↑", key=f"u_{mid}_{k}") and i>0:
-                            kids[i-1],kids[i]=kids[i],kids[i-1]; _ensure_siblings_grouped_in_gen_order(t, mid); st.rerun()
+                            kids[i-1],kids[i]=kids[i],kids[i-1]; st.rerun()
                         if r[2].button("↓", key=f"d_{mid}_{k}") and i<len(kids)-1:
-                            kids[i+1],kids[i]=kids[i],kids[i+1]; _ensure_siblings_grouped_in_gen_order(t, mid); st.rerun()
+                            kids[i+1],kids[i]=kids[i],kids[i+1]; st.rerun()
                         if r[3].button("置頂", key=f"t_{mid}_{k}") and i>0:
-                            x=kids.pop(i); kids.insert(0,x); _ensure_siblings_grouped_in_gen_order(t, mid); st.rerun()
+                            x=kids.pop(i); kids.insert(0,x); st.rerun()
                         if r[4].button("置底", key=f"b_{mid}_{k}") and i<len(kids)-1:
-                            x=kids.pop(i); kids.append(x); _ensure_siblings_grouped_in_gen_order(t, mid); st.rerun()
+                            x=kids.pop(i); kids.append(x); st.rerun()
 
 # =========================================================
-# 8) UI：排序工具 + 一鍵自動減交錯
+# 6) UI：排序工具 + 一鍵自動減交錯
 # =========================================================
 def _ui_autoreduce(t):
     with st.expander("②-0 一鍵自動減少交錯（建議）", expanded=False):
-        st.caption("說明：以父母↔子女的 barycenter 佈局多輪微調，並強制『夫妻緊鄰』與『兄弟姊妹成區塊』。")
+        st.caption("說明：先跑重心法，再強制『夫妻相鄰』與『同父母子女成段（含子女之配偶）』兩個硬規則。")
         if st.button("⚙️ 自動減少交錯", type="primary"):
             gen_order, group_order = _auto_layout(t, sweeps=5)
             st.session_state.gen_order = gen_order
@@ -571,10 +559,7 @@ def _ui_same_layer_reorder(t):
         people = [p for p,d in depth.items() if d==gsel]
         cur = list(st.session_state.gen_order.get(str(gsel), []))
         order = [p for p in cur if p in people] + [p for p in people if p not in cur]
-        # 額外強化（避免使用者手動造成破壞）
-        order = _enforce_spouse_adjacency(order, t.get("marriages",{}), gsel, depth)
-        order = _group_siblings(order, gsel, t.get("marriages",{}), depth)
-        st.session_state.gen_order[str(gsel)] = order
+        # 提示：即使手動調整，繪圖時仍會自動把夫妻黏緊、同父母子女成段
         for i,pid in enumerate(order):
             nm = t["persons"].get(pid,{}).get("name",pid)
             r = st.columns([6,1,1,1,1])
@@ -622,7 +607,7 @@ def _ui_group_reorder(t):
                 x=order.pop(i); order.append(x); st.session_state.group_order[str(gsel)]=order; st.rerun()
 
 # =========================================================
-# 9) 視覺化 & 匯入/匯出
+# 7) 視覺化 & 匯入/匯出
 # =========================================================
 def _ui_visualize(t):
     with st.expander("③ 家族樹視覺化", expanded=True):
@@ -666,7 +651,7 @@ def _ui_import_export(t):
                 st.rerun()
 
 # =========================================================
-# 10) 入口
+# 8) 入口
 # =========================================================
 def render():
     _init_state()
@@ -676,14 +661,14 @@ def render():
     _person_form(t)
     _marriage_form(t)
 
-    _ui_autoreduce(t)
+    _ui_autoreduce(t)        # 一鍵自動減少交錯（可選）
     _ui_same_layer_reorder(t)
     _ui_group_reorder(t)
 
     _ui_visualize(t)
     _ui_import_export(t)
 
-    st.caption("familytree • r11")
+    st.caption("familytree • r11 (spouse-adjacent + siblings-block)")
 
 if __name__ == "__main__":
     st.set_page_config(page_title="家族樹", layout="wide")
