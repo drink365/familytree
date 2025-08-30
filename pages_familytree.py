@@ -276,43 +276,61 @@ def _graph(tree):
         order = make_spouses_adjacent(order, d)
         per_layer_order[d] = order
 
-    # ------- 婚姻節點與連線（婚姻點釘在兩配偶中點；夫妻水平線置中） -------
+    # ------- 婚姻節點與連線（夫妻線經過婚姻點；子女從中點往下） -------
     for mid, m in marriages.items():
         spouses = m.get("spouses", []) or []
         children = m.get("children", []) or []
 
-        # 先找這段婚姻在該層真正的左右配偶
+        # 找出這段婚姻在該層真正的左右配偶（依實際左右順序）
         s_same = [s for s in spouses if s in persons]
+        left_sp = right_sp = None
         if len(s_same) >= 2:
             d = depth.get(s_same[0], 0)
             order = per_layer_order.get(d, s_same)
             pos = {p: i for i, p in enumerate(order)}
             s_same = sorted(s_same, key=lambda x: pos.get(x, 10**9))
             left_sp, right_sp = s_same[0], s_same[1]
-        else:
-            left_sp = right_sp = s_same[0] if s_same else None
+        elif len(s_same) == 1:
+            left_sp = right_sp = s_same[0]
 
+        # 婚姻點與配偶同層
         with g.subgraph() as sg:
             sg.attr(rank="same")
             sg.node(mid, shape="point", width="0.01", height="0.01", label="")
 
-            # 幾何錨點：把婚姻點固定在左右配偶的正中間（隱形但有約束）
+            # 1) 幾何錨點：把婚姻點固定在左右配偶的「正中間」
+            #    （兩條隱形但有約束的邊，避免夫妻線鼓起來）
             if left_sp and right_sp:
                 sg.edge(left_sp, mid, style="invis", weight="200", constraint="true", tailport="e")
                 sg.edge(mid, right_sp, style="invis", weight="200", constraint="true", headport="w")
-                # 可見的夫妻水平線（只做視覺，不影響分層）
-                sg.edge(left_sp, right_sp, dir="none", constraint="false",
-                        tailport="e", headport="w", penwidth="1.2")
 
-        # 婚姻 → 子女（從中點往下）
-        if len(children) >= 2:
-            with g.subgraph() as kg:
-                kg.attr(rank="same")
-                for i in range(len(children) - 1):
-                    kg.edge(children[i], children[i + 1],
-                            style="invis", weight="60", constraint="true")
-        for c in children:
-            g.edge(mid, c, weight="3", minlen="1")
+                # 2) 夫妻可見連線：改成「兩段」穿過婚姻點，就不會避開而鼓起
+                sg.edge(left_sp, mid, dir="none", constraint="false", tailport="e", penwidth="1.2")
+                sg.edge(mid, right_sp, dir="none", constraint="false", headport="w", penwidth="1.2")
+
+        # 3) 子女：先在婚姻點下方做一個看不見的「對齊錨點」，再把孩子拉到錨點下方
+        if children:
+            anchor_id = f"{mid}_anchor"
+            g.node(anchor_id, shape="point", width="0.01", height="0.01", label="", style="invis")
+            # 婚姻點 → 錨點：決定下一層，垂直往下
+            g.edge(mid, anchor_id, style="invis", weight="150", minlen="1", constraint="true")
+
+            # 兄弟姊妹保持相鄰（同層鏈）
+            if len(children) >= 2:
+                with g.subgraph() as kg:
+                    kg.attr(rank="same")
+                    for i in range(len(children) - 1):
+                        kg.edge(children[i], children[i + 1],
+                                style="invis", weight="60", constraint="true")
+
+            # 錨點 → 每個孩子：把孩子“吸”到婚姻中點正下方
+            for c in children:
+                g.edge(anchor_id, c, style="invis", weight="120", minlen="1", constraint="true")
+
+            # 真的可見的親子線：從「婚姻點」往下（畫一次就好）
+            for c in children:
+                g.edge(mid, c, weight="3", minlen="1")
+
 
     # ------- 強制分層 + 同層全序鏈（穩定同層順序） -------
     for d, members in layers.items():
