@@ -252,10 +252,18 @@ def render():
         col1,col2 = st.columns(2)
         col1.download_button("⬇️ 下載 JSON", data=json.dumps(t, ensure_ascii=False, indent=2),
                              file_name="family_tree.json", mime="application/json", key="btn_dl_json")
-        upl = col2.file_uploader("或：上傳 JSON 匯入", type=["json"])
-        if upl is not None:
-            try:
-                data = json.loads(upl.read().decode("utf-8"))
+        
+upl = col2.file_uploader("或：上傳 JSON 匯入", type=["json"])
+if upl is not None:
+    try:
+        # 以檔案內容 MD5 去重，避免重整後反覆匯入造成無限 rerun
+        raw = upl.getvalue()
+        import hashlib
+        md5 = hashlib.md5(raw).hexdigest()
+        if st.session_state.get("ft_last_import_md5") == md5:
+            pass  # 同一檔案已匯入過，不重複處理
+        else:
+            data = json.loads(raw.decode("utf-8"))
                 if not isinstance(data, dict):
                     raise ValueError("檔案格式錯誤")
                 data.setdefault("persons", {}); data.setdefault("marriages", {}); data.setdefault("child_types", {})
@@ -272,6 +280,7 @@ def render():
                     return mx
 
                 st.session_state.tree = data
+            st.session_state["ft_last_import_md5"] = md5
                 st.session_state["pid_counter"] = _max_id("P", data.get("persons", {}).keys()) + 1
                 st.session_state["mid_counter"] = _max_id("M", data.get("marriages", {}).keys()) + 1
 
