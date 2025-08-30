@@ -26,68 +26,70 @@ def _label(p):
 
 # -------------------- Generation Layering --------------------
 
+
 def _compute_generations(tree):
-    """Assign generation layers so that spouses share a rank and children are the next rank."""
-    persons = set(tree.get("persons", {}).keys())
-    marriages = tree.get("marriages", {})
+    """
+    Robust generation assignment:
+    - Spouses share the same generation.
+    - Children get generation = max(parents) + 1.
+    - Works with multiple marriages and partial data.
+    """
+    persons = dict(tree.get("persons", {}))
+    marriages = dict(tree.get("marriages", {}))
 
-    # Build indices
-    spouse_to_mids = {}
+    # indices
+    spouse_of_mid = {mid: list(m.get("spouses", [])) for mid, m in marriages.items()}
+    children_of_mid = {mid: list(m.get("children", [])) for mid, m in marriages.items()}
+
+    # build parent sets per child
     parents_of = {}
-    for mid, m in marriages.items():
-        for s in m.get("spouses", []):
-            spouse_to_mids.setdefault(s, set()).add(mid)
-        for c in m.get("children", []):
-            parents_of.setdefault(c, set()).update(m.get("spouses", []))
+    for mid, sps in spouse_of_mid.items():
+        for c in children_of_mid.get(mid, []):
+            parents_of.setdefault(c, set()).update(sps)
 
-    # Roots: those without parents
-    from collections import deque
+    # roots = persons without recorded parents
     depth = {}
-    q = deque()
-
     roots = [p for p in persons if p not in parents_of]
+    if not roots and persons:
+        # if all have parents (data partial), pick arbitrary person as root
+        roots = [next(iter(persons))]
+
+    from collections import deque
+    q = deque()
     for r in roots:
         depth[r] = 0
         q.append(r)
 
-    # If no roots (cycle/only children recorded), seed with arbitrary node
-    if not q and persons:
-        anyp = next(iter(persons))
-        depth[anyp] = 0
-        q.append(anyp)
-
-    while q:
+    # BFS with repeated relaxations (because graphs can be loopy by marriages)
+    seen_loops = 0
+    while q and seen_loops < 100000:
         p = q.popleft()
-        d = depth[p]
+        dp = depth[p]
 
-        # Spouses of p stay same layer
-        for mid in spouse_to_mids.get(p, []):
-            spouses = marriages.get(mid, {}).get("spouses", [])
-            # sync spouse depth
-            for s in spouses:
-                if s == p: 
-                    continue
-                if depth.get(s) != d:
-                    depth[s] = d
-                    q.append(s)
+        # Spouses get same layer
+        for mid, sps in spouse_of_mid.items():
+            if p in sps:
+                for s in sps:
+                    if s not in depth or depth[s] != dp:
+                        if depth.get(s, dp) != dp:
+                            depth[s] = dp
+                            q.append(s)
 
-            # children placed one layer below parents
-            par_depths = [depth.get(s, d) for s in spouses if s in depth]
-            if par_depths:
-                cd = max(par_depths) + 1
-                for c in marriages.get(mid, {}).get("children", []):
-                    if depth.get(c, -10) < cd:
-                        depth[c] = cd
-                        q.append(c)
+                # Children of this marriage: depth = max(parents)+1
+                par_layers = [depth.get(s, dp) for s in sps]
+                if par_layers:
+                    cd = max(par_layers) + 1
+                    for c in children_of_mid.get(mid, []):
+                        if c not in depth or depth[c] < cd:
+                            depth[c] = cd
+                            q.append(c)
+        seen_loops += 1
 
-    # Default any missing
+    # Any leftover persons get closest reasonable depth 0
     for p in persons:
         depth.setdefault(p, 0)
+
     return depth
-
-
-# -------------------- Graph Builder (layered) --------------------
-
 
 
 def _graph(tree):
@@ -148,6 +150,22 @@ def _graph(tree):
         g.node(pid, label=_label(pdata), shape=shape)
 
     # --- 關鍵 1：同一代橫向（每層一個 rank=same 子圖 + 隱形鏈固定左右順序） ---
+    
+    # Create invisible anchors per generation to enforce strict vertical order
+    gen_levels = sorted(gens.keys())
+    anchors = []
+    for lv in gen_levels:
+        an = f"_GEN_ANCHOR_{lv}"
+        anchors.append(an)
+        # each anchor sits with its generation (rank=same)
+        with g.subgraph(name=f"rank_anchor_{lv}") as sg_a:
+            sg_a.attr(rank="same")
+            sg_a.node(an, label="", shape="point", width="0.01")
+
+    # chain anchors top→down to lock rank ordering
+    for i in range(len(anchors)-1):
+        g.edge(anchors[i], anchors[i+1], style="invis", weight="999", constraint="true")
+
     for layer, nodes in sorted(gens.items(), key=lambda kv: kv[0]):
         with g.subgraph(name=f"rank_gen_{layer}") as sg:
             sg.attr(rank="same")
@@ -350,7 +368,7 @@ def render():
                 st.divider()
 
     with st.expander("③ 家族樹視覺化", expanded=True):
-        st.graphviz_chart(_graph(t))
+        st.graphviz_chart(_graph(t), use_container_width=True, height=900)
 
 
     
