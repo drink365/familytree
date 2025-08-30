@@ -40,14 +40,16 @@ def build_graph(family):
 
     return g
 
-st.set_page_config(page_title="家族樹", layout="wide")
-st.header("③ 家族樹視覺化")
 
-# 假資料示例，實際請換成你匯入的 family 結構
-family = {
-    "people": {},
-    "marriages": []
-}
+def render():
+    st.set_page_config(page_title="家族樹", layout="wide")
+    st.header("③ 家族樹視覺化")
 
-G = build_graph(family)
-st.graphviz_chart(G, use_container_width=True)
+    # 假資料示例，實際請換成你匯入的 family 結構
+    family = st.session_state.get("family", {
+        "people": {},
+        "marriages": []
+    })
+
+    G = build_graph(family)
+    st.graphviz_chart(G, use_container_width=True)
