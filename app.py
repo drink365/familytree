@@ -6,7 +6,27 @@ _BRAND = json.load(open("brand.json", "r", encoding="utf-8"))
 BRAND_PRIMARY = _BRAND["PRIMARY"]; BRAND_BG = _BRAND["BG"]
 
 st.sidebar.markdown("## 導覽")
-if st.button("🏠 首頁", key="btn_home", use_container_width=True): navigate("home")
+def nav_card(label, page_key, icon):
+    with st.container():
+        if st.button(f"{icon} {label}", key=f"btn_{page_key}", use_container_width=True):
+            navigate(page_key)
+    st.markdown("---")
+
+nav_items = [
+    ("首頁", "home", "🏠"),
+    ("家族樹", "familytree", "🌳"),
+    ("法稅傳承", "legacy", "🏛️"),
+    ("稅務工具", "tax", "🧾"),
+    ("保單策略", "policy", "📦"),
+    ("價值觀探索", "values", "💬"),
+    ("關於我們", "about", "👩‍💼"),
+]
+
+for label, key, icon in nav_items:
+    nav_card(label, key, icon)
+
+
+
 if st.button("🌳 家族樹", key="btn_familytree", use_container_width=True): navigate("familytree")
 if st.button("🏛️ 法稅傳承", key="btn_legacy", use_container_width=True): navigate("legacy")
 if st.button("🧾 稅務工具", key="btn_tax", use_container_width=True): navigate("tax")
