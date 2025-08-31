@@ -1,11 +1,7 @@
-# pages_familytree.py — Spouse-first stable layout with side anchors
-# 版本：移除左側 Sidebar 的匯入／匯出與說明（僅保留頁面下方的匯入／匯出與「全部清空」）
-# 其他重點：
-# - 夫妻相鄰、夫妻線水平（ports）
-# - 新增兄弟姊妹不會使兩邊原生家庭對調（左右錨定鏈）
-# - 線條粗細一致
-# - 刪除子女、配偶左右交換、離婚虛線
-# - 「全部清空」立刻刷新
+# pages_familytree.py — Spouse-first stable layout
+# Fix: make mid a tiny visible point and draw spouse as two short segments
+# (s1–mid and mid–s2, constraint=false), so the spouse link never turns
+# into a long bent line when mid also connects to children.
 
 import json
 import uuid
@@ -107,7 +103,7 @@ def swap_spouse_order(mid: str):
 def render_graph(tree: dict) -> graphviz.Digraph:
     g = graphviz.Digraph("G", engine="dot")
     g.attr(rankdir="TB", splines="line", nodesep="0.5", ranksep="0.9")
-    g.attr("edge", dir="none", penwidth="2")  # 線條一致
+    g.attr("edge", dir="none", penwidth="2")  # visible lines unified
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
@@ -128,17 +124,11 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # Marriage mid points（可見極小點）
+    # Marriage mid points — now VISIBLE tiny point (so spouse lines stay short & straight)
     for mid in marriages.keys():
-        g.node(mid, label="", shape="point", width="0.03", color="black")
+        g.node(mid, label="", shape="point", width="0.03", color="black")  # tiny dot
 
-    # child -> parent_mid 對應
-    parents_of = {}
-    for pmid, m in marriages.items():
-        for c in m.get("children", []):
-            parents_of.setdefault(c, []).append(pmid)
-
-    # 夫妻相鄰鎖／夫妻水平線／左右錨定鏈
+    # Tight marriage clusters: A–mid–B–guard locked together (highest priority)
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -146,38 +136,21 @@ def render_graph(tree: dict) -> graphviz.Digraph:
         divorced = m.get("divorced", False)
 
         if len(order) == 2:
-            s1, s2 = order  # 左→右
-            # 相鄰鎖
+            s1, s2 = order
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid); sg.node(s2)
                 guard = f"{mid}_guard"
                 sg.node(guard, label="", shape="point", width="0.01", style="invis")
+                # strong invisible locks so spouses are adjacent and cannot be split
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(s2, guard, style="invis", constraint="true", weight="50000", minlen="0")
 
-            # 夫妻可見線（水平短線）
+            # Visible spouse lines: two short segments via the tiny mid point
             ls = "dashed" if divorced else "solid"
-            g.edge(f"{s1}:e", f"{mid}:w", style=ls, constraint="false", weight="0", minlen="0")
-            g.edge(f"{mid}:e", f"{s2}:w", style=ls, constraint="false", weight="0", minlen="0")
-
-            # 左右錨定：A 的父母 mid 在左、B 的父母 mid 在右
-            left_parent  = (parents_of.get(s1) or [None])[0]
-            right_parent = (parents_of.get(s2) or [None])[0]
-            chain = []
-            if left_parent:
-                chain.append(left_parent)
-            chain.extend([s1, mid, s2])
-            if right_parent:
-                chain.append(right_parent)
-
-            if len(chain) >= 2:
-                with g.subgraph(name=f"order_{mid}") as og:
-                    og.attr(rank="same", color="invis", style="invis", newrank="true")
-                    for i in range(len(chain)-1):
-                        og.edge(chain[i], chain[i+1],
-                                style="invis", constraint="true", weight="22000", minlen="0")
+            g.edge(s1, mid, style=ls, constraint="false", weight="0", minlen="0")
+            g.edge(mid, s2, style=ls, constraint="false", weight="0", minlen="0")
 
         elif len(order) == 1:
             s1 = order[0]
@@ -185,9 +158,9 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid)
                 sg.edge(s1, mid, style="invis", constraint="true", weight="40000", minlen="0")
-            g.edge(f"{s1}:e", f"{mid}:w", style="solid", constraint="false", weight="0", minlen="0")
+            g.edge(s1, mid, style="solid", constraint="false", weight="0", minlen="0")
 
-    # 子女：只由 mid 向下
+    # Draw children only downward; no sibling ordering to avoid breaking spouses
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
         if not children:
@@ -205,12 +178,38 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 def _fmt_pid(persons: dict, pid: str) -> str:
     return f"{persons.get(pid, {}).get('name', pid)}｜{pid}"
 
+def _sidebar_controls():
+    st.sidebar.header("📦 匯入 / 匯出")
+    st.sidebar.download_button(
+        label="⬇️ 匯出 JSON",
+        data=_export_json().encode("utf-8"),
+        file_name="family_tree.json",
+        mime="application/json",
+        use_container_width=True,
+    )
+    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
+        _reset_tree()
+        st.sidebar.warning("已清空家族樹")
+        _safe_rerun()
+
+    uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
+    if uploaded is not None:
+        if st.sidebar.button("▶️ 執行匯入", type="primary", use_container_width=True):
+            try:
+                _import_json(uploaded.read().decode("utf-8"))
+                st.sidebar.success("已匯入，家族樹已更新")
+                _safe_rerun()
+            except Exception as e:
+                st.sidebar.error(f"匯入失敗：{e}")
+
+    st.sidebar.markdown("---")
+    st.sidebar.caption("夫妻僅水平連線；有子女時才在下方生成匯流點並直/斜直線分支。")
+
 def _bottom_io_controls():
     st.markdown("---")
     st.subheader("📦 資料匯入 / 匯出")
     c1, c2 = st.columns([2, 2], gap="large")
 
-    # 匯出與清空（頁面專用，無側邊版）
     with c1:
         st.markdown("**匯出目前資料**")
         st.download_button(
@@ -226,7 +225,6 @@ def _bottom_io_controls():
             st.warning("已清空家族樹")
             _safe_rerun()
 
-    # 匯入（頁面專用，無側邊版）
     with c2:
         st.markdown("**匯入 JSON 檔**")
         up2 = st.file_uploader("選擇檔案", type=["json"], key="bottom_uploader")
@@ -390,15 +388,11 @@ def main():
     st.set_page_config(page_title="家族樹", page_icon="🌳", layout="wide")
     _init_state()
     st.title("🌳 家族樹")
-
-    #（已移除 sidebar 的匯入／匯出與說明）
-
+    _sidebar_controls()
     with st.expander("➕ 建立 / 管理成員與關係", expanded=True):
-        _person_manager()
-        _marriage_manager()
-
+        _person_manager(); _marriage_manager()
     _viewer()
-    _bottom_io_controls()  # 只在頁面下方提供匯入／匯出與「全部清空」
+    _bottom_io_controls()
 
 def render():
     main()
