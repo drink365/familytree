@@ -1,7 +1,8 @@
-# pages_familytree.py — Spouse-first stable layout
-# Fix: make mid a tiny visible point and draw spouse as two short segments
-# (s1–mid and mid–s2, constraint=false), so the spouse link never turns
-# into a long bent line when mid also connects to children.
+# pages_familytree.py — Spouse-first stable layout with side anchors
+# 修正：
+# 1) 用 child->parent_mid 對應，對每對夫妻建立左右錨定鏈，避免新增兄弟姐妹後左右對調。
+# 2) 夫妻線使用 ports：A:e->mid:w 與 mid:e->B:w，確保短而水平。
+# 其餘：配偶相鄰(強力不可見鎖)、刪子女、左右交換、離婚虛線、清空即時刷新、線條一致等。
 
 import json
 import uuid
@@ -103,7 +104,7 @@ def swap_spouse_order(mid: str):
 def render_graph(tree: dict) -> graphviz.Digraph:
     g = graphviz.Digraph("G", engine="dot")
     g.attr(rankdir="TB", splines="line", nodesep="0.5", ranksep="0.9")
-    g.attr("edge", dir="none", penwidth="2")  # visible lines unified
+    g.attr("edge", dir="none", penwidth="2")  # 線條一致
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
@@ -124,11 +125,17 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # Marriage mid points — now VISIBLE tiny point (so spouse lines stay short & straight)
+    # Marriage mid points（可見極小點）
     for mid in marriages.keys():
-        g.node(mid, label="", shape="point", width="0.03", color="black")  # tiny dot
+        g.node(mid, label="", shape="point", width="0.03", color="black")
 
-    # Tight marriage clusters: A–mid–B–guard locked together (highest priority)
+    # 先建 child -> parent_mid 對應（每個人通常只有一組父母）
+    parents_of = {}
+    for pmid, m in marriages.items():
+        for c in m.get("children", []):
+            parents_of.setdefault(c, []).append(pmid)
+
+    # 夫妻相鄰(不可見鎖)、夫妻可見線(ports)、左右錨定鏈
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -136,21 +143,38 @@ def render_graph(tree: dict) -> graphviz.Digraph:
         divorced = m.get("divorced", False)
 
         if len(order) == 2:
-            s1, s2 = order
+            s1, s2 = order  # s1=左、s2=右
+            # 相鄰鎖
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid); sg.node(s2)
                 guard = f"{mid}_guard"
                 sg.node(guard, label="", shape="point", width="0.01", style="invis")
-                # strong invisible locks so spouses are adjacent and cannot be split
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(s2, guard, style="invis", constraint="true", weight="50000", minlen="0")
 
-            # Visible spouse lines: two short segments via the tiny mid point
+            # 可見夫妻線（水平短線）
             ls = "dashed" if divorced else "solid"
-            g.edge(s1, mid, style=ls, constraint="false", weight="0", minlen="0")
-            g.edge(mid, s2, style=ls, constraint="false", weight="0", minlen="0")
+            g.edge(f"{s1}:e", f"{mid}:w", style=ls, constraint="false", weight="0", minlen="0")
+            g.edge(f"{mid}:e", f"{s2}:w", style=ls, constraint="false", weight="0", minlen="0")
+
+            # **左右錨定**：把 A 的父母 mid 固定在左邊、B 的父母 mid 固定在右邊
+            left_parent  = (parents_of.get(s1) or [None])[0]
+            right_parent = (parents_of.get(s2) or [None])[0]
+            chain = []
+            if left_parent:
+                chain.append(left_parent)
+            chain.extend([s1, mid, s2])
+            if right_parent:
+                chain.append(right_parent)
+
+            if len(chain) >= 2:
+                with g.subgraph(name=f"order_{mid}") as og:
+                    og.attr(rank="same", color="invis", style="invis", newrank="true")
+                    for i in range(len(chain)-1):
+                        og.edge(chain[i], chain[i+1],
+                                style="invis", constraint="true", weight="22000", minlen="0")
 
         elif len(order) == 1:
             s1 = order[0]
@@ -158,9 +182,9 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid)
                 sg.edge(s1, mid, style="invis", constraint="true", weight="40000", minlen="0")
-            g.edge(s1, mid, style="solid", constraint="false", weight="0", minlen="0")
+            g.edge(f"{s1}:e", f"{mid}:w", style="solid", constraint="false", weight="0", minlen="0")
 
-    # Draw children only downward; no sibling ordering to avoid breaking spouses
+    # 子女：只由 mid 向下
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
         if not children:
@@ -203,7 +227,7 @@ def _sidebar_controls():
                 st.sidebar.error(f"匯入失敗：{e}")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("夫妻僅水平連線；有子女時才在下方生成匯流點並直/斜直線分支。")
+    st.sidebar.caption("夫妻水平相鄰；有子女時自 mid 向下生成匯流點。")
 
 def _bottom_io_controls():
     st.markdown("---")
