@@ -91,7 +91,7 @@ def nav_button(label: str, page_key: str, icon: str):
 for label, key, icon in [
     ("首頁", "home", "🏠"),
     ("家族樹", "familytree", "🌳"),
-    ("傳承藍圖", "legacy", "🏛️"),
+    ("傳承地圖", "legacy", "🏛️"),
     ("法稅工具", "tax", "🧾"),
     ("保單策略", "policy", "📦"),
     ("價值觀探索", "values", "💬"),
