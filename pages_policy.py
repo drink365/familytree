@@ -36,8 +36,7 @@ def _fmt_currency(n: float, currency: str) -> str:
 def _estimate_cash_value(premium: float, years: int, irr_pct: float, horizon: int) -> int:
     """
     以 IRR 為年化報酬率，估算第 horizon 年的「示意現金值」。
-    假設每年年末投入 premium，投入年數 = min(years, horizon)。
-    （僅供會談示意，非商品精算）
+    假設每年年末投入 premium，投入年數 = min(years, horizon)。（僅供會談示意，非商品精算）
     """
     try:
         irr = max(0.0, float(irr_pct) / 100.0)
@@ -76,11 +75,7 @@ def _build_cashflow_table(
 ) -> Dict[str, List]:
     """
     產生年度現金流表（含支出與可選的流入）。
-    回傳：
-      timeline:  [1..N]
-      cash_flow: 每年現金流（+流入 / -流出）
-      cum:       累計現金流
-      rows:      已格式化的顯示列
+    回傳：timeline / cash_flow / cum / rows
     """
     # --- 安全轉型 ---
     premium_i = _safe_float(premium, 0.0)
@@ -95,7 +90,7 @@ def _build_cashflow_table(
     last_year = years_i
     if inflow_enabled:
         last_year = max(years_i, start_year_i + years_in_i - 1)
-    last_year = max(1, last_year)  # 至少顯示一年，避免空列表
+    last_year = max(1, last_year)  # 至少顯示一年
     timeline = list(range(1, last_year + 1))
 
     # 保費支出（負號）
@@ -135,7 +130,6 @@ def _build_cashflow_table(
     return {"timeline": timeline, "cash_flow": cash_flow, "cum": cum, "rows": rows}
 
 # ----------------------------- 倍數設定（已減半，與年齡無關） -----------------------------
-# 目標 keys: "放大財富傳承","補足遺產稅","退休現金流","企業風險隔離"
 FACE_MULTIPLIERS = {
     "保守": {"放大財富傳承": 5, "補足遺產稅": 4, "退休現金流": 3, "企業風險隔離": 4},
     "中性": {"放大財富傳承": 6, "補足遺產稅": 5, "退休現金流": 4, "企業風險隔離": 5},
@@ -194,9 +188,7 @@ def render():
     with st.expander("設定現金流入（可選）", expanded=(goal == "退休現金流")):
         inflow_enabled = st.checkbox("加入正現金流（退休提領／配息／部分解約等示意）", value=(goal == "退休現金流"))
 
-        # 先給安全預設，避免 None
-        inflow_amt: Optional[float] = 0.0
-        inflow_ratio_pct: Optional[float] = 0.0
+        # radio -> 'fixed' / 'ratio'
         mode_label = st.radio("提領模式", ["固定年領金額", "以現金值比例提領"],
                               index=0, horizontal=True, disabled=not inflow_enabled)
         inflow_mode = "fixed" if mode_label == "固定年領金額" else "ratio"
@@ -209,7 +201,8 @@ def render():
             years_in = st.number_input("領取年數", min_value=1, max_value=60,
                                        value=max(1, 20 - int(years)), step=1, disabled=not inflow_enabled)
         with c9:
-            if inflow_mode == "固定年領金額":
+            # ✅ 正確依 inflow_mode 顯示對應欄位（修正 bug）
+            if inflow_mode == "fixed":
                 inflow_amt = st.number_input("年領金額（元）", min_value=0, step=10_000,
                                              value=300_000, disabled=not inflow_enabled)
                 inflow_ratio_pct = 0.0
@@ -218,7 +211,7 @@ def render():
                                              0.5, 6.0, 2.0, 0.1, disabled=not inflow_enabled)
                 inflow_amt = 0.0
 
-    # 計算表格（不對 None 做 int/cast，全部在函式內安全處理）
+    # 計算表格
     table = _build_cashflow_table(
         currency=currency,
         premium=premium,
