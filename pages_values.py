@@ -85,24 +85,23 @@ def _build_tasks(princ_list, ways_list, weights, red_flags):
         tasks.append("規劃慈善信託或專項公益池（比例與治理）")
     if red_flags:
         tasks.append("針對紅旗議題安排法稅／跨境合規諮詢")
-    # 去重並保留順序
+    # 去重並保留順序；保底三項
     seen = set(); ordered = []
     for t in tasks:
         if t not in seen:
             ordered.append(t); seen.add(t)
-    # 保底三項
     if not ordered:
         ordered = ["彙整家族資產並標註可配置金額",
                    "安排家族會議確認價值宣言與分配原則",
                    "與法律／稅務顧問對齊執行路徑"]
-    return ordered[:7]  # 最多 7 條，避免過長
+    return ordered[:7]
 
 
 # ---------------- 情境模板 ----------------
 def _apply_template(name: str):
     """將情境模板載入到 session_state，並重新整理畫面。"""
     ss = st.session_state
-    # 基礎清空
+    # 清空
     ss.val_pri_sel = []
     ss.val_pri_custom = ""
     ss.val_princ_sel = []
@@ -160,7 +159,7 @@ def _apply_template(name: str):
         ss.val_notes = "設定公益占比與治理，分階段投入。"
 
     elif name == "清空":
-        pass  # 維持基礎清空
+        pass
 
     st.rerun()
 
@@ -170,21 +169,14 @@ def render():
     st.subheader("🧭 價值觀探索")
     st.caption("此頁用於會談討論與摘要整理，非法律或投資意見。")
 
-    # 輕量品牌樣式（與站內紅色系一致）
+    # 輕量品牌樣式
     st.markdown(
         """
         <style>
-          .card{
-            border:1px solid #e5e7eb;border-radius:14px;padding:16px 18px;margin-top:10px;background:#fff
-          }
+          .card{border:1px solid #e5e7eb;border-radius:14px;padding:16px 18px;margin-top:10px;background:#fff}
           .card h4{margin:0 0 8px 0;font-size:1.05rem;color:#111827}
-          .chip{
-            display:inline-block;padding:6px 10px;margin:4px 6px 0 0;border-radius:9999px;
-            background:#fff5f5;border:1px solid #f2b3b6;color:#c2272d;font-weight:600;font-size:.95rem
-          }
-          .chip-empty{
-            color:#6b7280;background:#f9fafb;border:1px dashed #e5e7eb;font-weight:400
-          }
+          .chip{display:inline-block;padding:6px 10px;margin:4px 6px 0 0;border-radius:9999px;background:#fff5f5;border:1px solid #f2b3b6;color:#c2272d;font-weight:600;font-size:.95rem}
+          .chip-empty{color:#6b7280;background:#f9fafb;border:1px dashed #e5e7eb;font-weight:400}
           .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
           @media (max-width: 900px){ .two-col{grid-template-columns:1fr} }
           .subtle{color:#6b7280}
@@ -193,7 +185,7 @@ def render():
         unsafe_allow_html=True,
     )
 
-    # ---------- 情境模板 ----------
+    # 情境模板
     st.markdown("### 情境模板")
     t1, t2, t3, t4, t5, t6 = st.columns([1.3, 1.3, 1.5, 1.6, 1.3, 2.5])
     with t1:
@@ -215,7 +207,7 @@ def render():
         if st.button("🧼 清空", use_container_width=True):
             _apply_template("清空")
 
-    # ---------- 初始化 session_state ----------
+    # 初始化 session_state
     ss = st.session_state
     ss.setdefault("val_pri_sel", ["子女", "配偶"])
     ss.setdefault("val_pri_custom", "")
@@ -229,9 +221,8 @@ def render():
     ss.setdefault("val_equity", False)
     ss.setdefault("val_wont", ["", "", ""])
     ss.setdefault("val_notes", "")
-    ss.setdefault("values_tasks", [])  # 讓「一鍵任務」可持久在本頁
 
-    # ---- Inputs（勾選 + 自訂 + 權重 + 風險 + Won’t-do）----
+    # 表單（只保留一個按鈕：生成摘要）
     with st.form("values_form"):
         st.markdown("### ① 選擇與自訂")
 
@@ -269,15 +260,13 @@ def render():
 
         notes = st.text_area("補充說明（可選）", ss.val_notes, height=90)
 
-        # 一鍵任務生成（按下後以目前勾選自動產生任務）
-        gen_tasks = st.form_submit_button("⚡ 以目前選項生成任務清單")
         submitted = st.form_submit_button("✅ 生成摘要")
 
-    if not (gen_tasks or submitted):
+    if not submitted:
         st.info("請勾選/輸入上方內容，點擊「生成摘要」。")
         return
 
-    # ---- 保存目前輸入（讓切換頁面後回來還在）----
+    # 保存目前輸入
     ss.val_pri_sel, ss.val_pri_custom = pri_sel, pri_custom
     ss.val_princ_sel, ss.val_princ_custom = princ_sel, princ_custom
     ss.val_ways_sel, ss.val_ways_custom = ways_sel, ways_custom
@@ -286,24 +275,23 @@ def render():
     ss.val_wont = [no1, no2, no3]
     ss.val_notes = notes
 
-    # ---- Merge selections ----
+    # 整理清單
     pri_list   = _merge_unique(pri_sel,   pri_custom)
     princ_list = _merge_unique(princ_sel, princ_custom)
     ways_list  = _merge_unique(ways_sel,  ways_custom)
 
-    # ---- 權重前三 ----
+    # 權重前三
     top3 = _top3(weights)
     top3_text = "、".join([f"{k}（{v}）" for k, v in top3]) if top3 else "（未設定）"
 
-    # ---- 兩句式價值宣言 ----
-    def _join_for_md(items):
-        return "、".join(items) if items else "（未選）"
+    # 價值宣言
+    def _join_for_md(items): return "、".join(items) if items else "（未選）"
     statement = (
         f"我們以**{_join_for_md(pri_list)}**為優先，遵循**{_join_for_md(princ_list)}**；"
         f"在傳承上，傾向**{_join_for_md(ways_list)}**，兼顧家族長期與流動性。"
     )
 
-    # ---- 衝突偵測（折衷建議）----
+    # 衝突偵測
     conflicts = []
     if ("公平" in princ_list) and ("能力導向" in princ_list):
         conflicts.append("「公平」與「能力導向」同時存在：可採 **現金等額＋股權依貢獻**。")
@@ -312,7 +300,7 @@ def render():
     if weights.get("企業傳承", 0) >= 4 and weights.get("慈善/公益", 0) >= 4:
         conflicts.append("「企業傳承」與「公益」皆高權重：可切分 **持股/現金池** 與專責治理。")
 
-    # ---- 價值 → 工具/結構 對照建議 ----
+    # 工具建議
     tool_hints = []
     if "隱私" in princ_list:
         tool_hints += ["信託（資訊最小化）", "控股/SPV", "保密協議與內控"]
@@ -322,25 +310,17 @@ def render():
         tool_hints += ["受託人／保護人條款", "績效里程碑撥款", "教育基金審核"]
     if "公平" in princ_list:
         tool_hints += ["等額現金＋不等額股權", "遺囑＋特留分評估"]
-    tool_hints = list(dict.fromkeys(tool_hints))  # 去重
+    tool_hints = list(dict.fromkeys(tool_hints))
 
-    # ---- 任務清單（建議下一步）----
+    # 紅旗與任務清單（自動生成）
     red_flags = []
     if cross_border:   red_flags.append("涉及跨境（台／陸／美等）")
     if special_care:   red_flags.append("家族成員需特別照護")
     if equity_dispute: red_flags.append("股權／合夥可能爭議")
 
-    if gen_tasks:
-        ss.values_tasks = _build_tasks(princ_list, ways_list, weights, red_flags)
+    tasks = _build_tasks(princ_list, ways_list, weights, red_flags)
 
-    tasks = ss.values_tasks or [
-        "彙整家族資產並標註可配置金額",
-        ("起草《家族憲章》（含揭露節奏）" if ("透明" in princ_list or "家族共識" in princ_list)
-         else "確認信託／保單的保密需求與流程"),
-        "安排家族會議確認價值宣言與分配原則",
-    ]
-
-    # ---------------- Display（卡片＋chips）----------------
+    # ======= 顯示 =======
     st.success("已整理為摘要：")
 
     st.markdown('<div class="two-col">', unsafe_allow_html=True)
@@ -350,7 +330,6 @@ def render():
 
     st.markdown(f'<div class="card"><h4>傳承方式</h4>{_chips_html(ways_list)}</div>', unsafe_allow_html=True)
 
-    # 權重 & 前三優先
     st.markdown(
         f'''
         <div class="card">
