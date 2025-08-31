@@ -179,31 +179,8 @@ def _fmt_pid(persons: dict, pid: str) -> str:
     return f"{persons.get(pid, {}).get('name', pid)}｜{pid}"
 
 def _sidebar_controls():
-    st.sidebar.header("📦 匯入 / 匯出")
-    st.sidebar.download_button(
-        label="⬇️ 匯出 JSON",
-        data=_export_json().encode("utf-8"),
-        file_name="family_tree.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
-        _reset_tree()
-        st.sidebar.warning("已清空家族樹")
-        _safe_rerun()
-
-    uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
-    if uploaded is not None:
-        if st.sidebar.button("▶️ 執行匯入", type="primary", use_container_width=True):
-            try:
-                _import_json(uploaded.read().decode("utf-8"))
-                st.sidebar.success("已匯入，家族樹已更新")
-                _safe_rerun()
-            except Exception as e:
-                st.sidebar.error(f"匯入失敗：{e}")
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("夫妻僅水平連線；有子女時才在下方生成匯流點並直/斜直線分支。")
+    # 已依需求移除左側的「匯入 / 匯出」按鈕與「夫妻僅…」說明（保留空白側邊欄）
+    return
 
 def _bottom_io_controls():
     st.markdown("---")
@@ -388,11 +365,11 @@ def main():
     st.set_page_config(page_title="家族樹", page_icon="🌳", layout="wide")
     _init_state()
     st.title("🌳 家族樹")
-    _sidebar_controls()
+    _sidebar_controls()  # 左側目前為空（依需求移除匯入/匯出與說明）
     with st.expander("➕ 建立 / 管理成員與關係", expanded=True):
         _person_manager(); _marriage_manager()
     _viewer()
-    _bottom_io_controls()
+    _bottom_io_controls()  # 保留底部的匯入/匯出功能
 
 def render():
     main()
