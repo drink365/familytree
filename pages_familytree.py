@@ -1,6 +1,6 @@
-# pages_familytree.py — no-crossing edition:
-# spouses adjacent via s1–mid–s2, children drop vertically from mid (ports+minlen),
-# siblings same-rank, execute-import buttons, stable marriage selection, width="stretch".
+# pages_familytree.py — anti-crossing edition with vertical drop node (mid_d)
+# Spouses adjacent (s1–mid–s2), children from a lower drop point to avoid crossings,
+# siblings same-rank, execute-import buttons, stable selection, width="stretch".
 
 import json
 import uuid
@@ -102,7 +102,7 @@ def _spouse_map(tree: dict) -> Dict[str, List[Tuple[str, List[str]]]]:
 
 def render_graph(tree: dict) -> graphviz.Graph:
     g = graphviz.Graph("G", engine="dot")
-    g.attr(rankdir="TB", splines="ortho", nodesep="0.42", ranksep="0.7")
+    g.attr(rankdir="TB", splines="ortho", nodesep="0.46", ranksep="0.8")
     g.attr("edge", dir="none")
 
     persons = tree.get("persons", {})
@@ -121,52 +121,59 @@ def render_graph(tree: dict) -> graphviz.Graph:
         else:
             g.node(pid, label=label, shape="box", style="rounded,filled", fillcolor="white", fontsize="11")
 
-    # Marriage points (invisible node)
+    # Marriage points (invisible)
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.01", style="invis")
+        g.node(f"{mid}_d", label="", shape="point", width="0.01", style="invis")  # drop node
 
-    # Spouses: enforce adjacency s1–mid–s2, keep same rank
+    # Spouses: enforce adjacency s1–mid–s2 (order with invisible constraints; visible line doesn't constrain)
     for mid, m in marriages.items():
         sp = list(m.get("spouses", []))
         divorced = m.get("divorced", False)
         if len(sp) == 2:
             s1, s2 = sp
-            with g.subgraph(name="rank_{}".format(mid)) as sg:
+            with g.subgraph(name=f"rank_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid); sg.node(s2)
-            # lock order & closeness (invisible but constraining)
-            g.edge(s1, mid, style="invis", weight="400", constraint="true", minlen="0")
-            g.edge(mid, s2, style="invis", weight="400", constraint="true", minlen="0")
-            # visible spouse lines (do not change rank nor order)
+
+            # lock order & closeness
+            g.edge(s1, mid, style="invis", weight="500", constraint="true", minlen="0")
+            g.edge(mid, s2, style="invis", weight="500", constraint="true", minlen="0")
+
+            # visible spouse lines (do NOT influence layout => avoid crossings)
             line_style = "dashed" if divorced else "solid"
-            g.edge(s1, mid, style=line_style, penwidth="2", constraint="true", minlen="0", tailport="e", headport="w")
-            g.edge(mid, s2, style=line_style, penwidth="2", constraint="true", minlen="0", tailport="e", headport="w")
+            g.edge(s1, mid, style=line_style, penwidth="2", constraint="false", tailport="e", headport="w")
+            g.edge(mid, s2, style=line_style, penwidth="2", constraint="false", tailport="e", headport="w")
+
         elif len(sp) == 1:
             s1 = sp[0]
-            with g.subgraph(name="rank_single_{}".format(mid)) as sg:
+            with g.subgraph(name=f"rank_single_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid)
-            g.edge(s1, mid, style="solid", penwidth="2", constraint="true", minlen="0", tailport="e", headport="w")
+            g.edge(s1, mid, style="solid", penwidth="2", constraint="false", tailport="e", headport="w")
+            g.edge(s1, mid, style="invis", weight="400", constraint="true", minlen="0")  # keep together
+            g.edge(mid, f"{mid}_d", style="invis", weight="300", constraint="true", minlen="1")  # prepare drop
 
-    # Siblings: same level, order to pull cross-family couples to the right
+    # Siblings: same level & ordering; children come from a lower drop node to avoid spouse-line crossings
     parent_of = _parents_map(tree)
     spouse_map = _spouse_map(tree)
 
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
 
-        # same rank for siblings
+        # siblings same rank
         if children:
-            with g.subgraph(name="rank_children_{}".format(mid)) as sgc:
+            with g.subgraph(name=f"rank_children_{mid}") as sgc:
                 sgc.attr(rank="same")
                 for c in children:
                     sgc.node(c)
 
-        # drop vertically from mid (ports + minlen=2 => down first, then sideways)
+        # vertical drop: mid -> mid_d (invisible, constraining), then mid_d -> child (visible, constraining)
+        g.edge(mid, f"{mid}_d", style="invis", weight="500", minlen="1", constraint="true", tailport="s", headport="n")
         for c in children:
-            g.edge(mid, c, weight="200", minlen="2", constraint="true", tailport="s", headport="n")
+            g.edge(f"{mid}_d", c, weight="300", minlen="1", constraint="true", tailport="s", headport="n")
 
-        # order siblings to encourage cross-family adjacency (but keep same level)
+        # order siblings to encourage cross-family adjacency
         if len(children) >= 2:
             right_pref, neutral = [], []
             for c in children:
@@ -217,7 +224,7 @@ def _sidebar_controls():
         st.sidebar.warning("已清空家族樹")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("提示：配偶以水平線連結（離婚為虛線），子女由婚姻點垂直接到下一層。")
+    st.sidebar.caption("提示：配偶以水平線連結（離婚為虛線），子女由較低的落點垂直連接，避免交錯。")
 
 def _bottom_io_controls():
     st.markdown("---")
