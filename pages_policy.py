@@ -3,14 +3,6 @@ import streamlit as st
 from datetime import datetime
 from typing import List, Dict, Optional
 
-# 圖表資料：pandas 優先，沒有就用 numpy 備援
-try:
-    import pandas as pd  # type: ignore
-    PANDAS_AVAILABLE = True
-except Exception:
-    import numpy as np  # type: ignore
-    PANDAS_AVAILABLE = False
-
 # PDF 工具（若專案無此模組，將自動略過下載功能）
 try:
     from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer  # type: ignore
@@ -42,7 +34,7 @@ def _fmt_currency(n: float, currency: str) -> str:
         return "—"
 
 def _estimate_cash_value(premium: float, years: int, irr_pct: float, horizon: int) -> int:
-    """以 IRR 為年化報酬率，估算第 horizon 年的示意現金值（年末投入；僅會談示意）。"""
+    """以 IRR 為年化報酬率，估算第 horizon 年的示意現金價值（年末投入；僅會談示意）。"""
     try:
         irr = max(0.0, float(irr_pct) / 100.0)
         horizon = max(1, int(horizon))
@@ -66,7 +58,7 @@ def _safe_float(x: Optional[float], default: float = 0.0) -> float:
     except Exception:
         return default
 
-# ------------------ 動態現金值模擬（含防穿透） ------------------
+# ------------------ 動態現金價值模擬（含防穿透） ------------------
 def _simulate_path(
     premium: float,
     years: int,
@@ -81,8 +73,8 @@ def _simulate_path(
 ):
     """
     年度序列模擬：先投入保費 → 依 IRR 成長 → 進行提領；
-    若提領超過可用現金值，會自動降額（防穿透）。
-    回傳：timeline, cv(年末現金值), annual_cf, cum_cf, clamped_years(list)
+    若提領超過可用現金價值，會自動降額（防穿透）。
+    回傳：timeline, cv(年末現金價值), annual_cf, cum_cf, clamped_years(list)
     """
     r = max(0.0, _safe_float(irr_pct) / 100.0)
     T = sim_years or max(_safe_int(years), _safe_int(start_year) + _safe_int(years_in) - 1, _safe_int(years) + 10)
@@ -139,7 +131,7 @@ FACE_MULTIPLIERS = {
 # ----------------------------- Page -----------------------------
 def render():
     st.subheader("📦 保單策略規劃（會談示意）")
-    st.caption("此頁以 IRR 近似估算現金值與年度現金流，方便會談討論；正式方案請以商品條款與保險公司試算為準。")
+    st.caption("此頁以 IRR 近似估算現金價值與年度現金流，方便會談討論；正式方案請以商品條款與保險公司試算為準。")
     st.warning(
         "【重要提醒】以下數字為 **AI 依您輸入參數的示意模擬**，僅供教育與討論；"
         "不構成任何投資/保險建議或保證值。最終以保險公司官方試算與契約為準。"
@@ -162,13 +154,12 @@ def render():
     with c5:
         irr = st.slider("示意 IRR（不代表商品保證）", 1.0, 6.0, 3.0, 0.1)
     with c6:
-        horizon = st.number_input("現金值觀察年（示意）", min_value=5, max_value=40, value=10)
+        horizon = st.number_input("現金價值觀察年（示意）", min_value=5, max_value=40, value=10)
     with c7:
         sim_years = st.number_input(
-            "模擬總年數（圖表）",
-            min_value=5, max_value=60,
+            "模擬總年數", min_value=5, max_value=60,
             value=max(int(years) + 10, int(horizon)),
-            help="用於下方動態模擬與折線圖。"
+            help="用於下方動態模擬。"
         )
 
     # 摘要
@@ -182,11 +173,11 @@ def render():
     if is_twd:
         st.write(f"- 年繳保費 × 年期：{_fmt_wan(premium)} × {int(years)} ＝ **總保費 {_fmt_wan(total_premium)}**")
         st.write(f"- 估計身故保額（倍數示意）：**{_fmt_wan(indicative_face)}**（使用倍數 **{face_mult}×**｜{stance}）")
-        st.write(f"- 第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：**{_fmt_wan(cv_h)}**")
+        st.write(f"- 第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：**{_fmt_wan(cv_h)}**")
     else:
         st.write(f"- 年繳保費 × 年期：{_fmt_currency(premium, currency)} × {int(years)} ＝ **總保費 {_fmt_currency(total_premium, currency)}**")
         st.write(f"- 估計身故保額（倍數示意）：**{_fmt_currency(indicative_face, currency)}**（使用倍數 **{face_mult}×**｜{stance}）")
-        st.write(f"- 第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：**{_fmt_currency(cv_h, currency)}**")
+        st.write(f"- 第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：**{_fmt_currency(cv_h, currency)}**")
 
     st.markdown("---")
 
@@ -213,7 +204,7 @@ def render():
         with c0b:
             if st.button("一鍵：比例提領 2%（保守）", use_container_width=True):
                 ss["pol_inflow_enabled"] = True
-                ss["pol_mode"] = "以現金值比例提領"
+                ss["pol_mode"] = "以現金價值比例提領"
                 ss["pol_start_year"] = int(years) + 1
                 ss["pol_years_in"] = 20
                 ss["pol_inflow_ratio"] = 2.0
@@ -224,7 +215,7 @@ def render():
             value=ss["pol_inflow_enabled"], key="pol_inflow_enabled"
         )
         mode_label = st.radio(
-            "提領模式", ["固定年領金額", "以現金值比例提領"],
+            "提領模式", ["固定年領金額", "以現金價值比例提領"],
             key="pol_mode", horizontal=True, disabled=not inflow_enabled
         )
         inflow_mode = "fixed" if mode_label == "固定年領金額" else "ratio"
@@ -252,16 +243,13 @@ def render():
                 inflow_ratio_pct = 0.0
             else:
                 inflow_ratio_pct = st.slider(
-                    "每年提領比例（%／以示意現金值計）",
+                    "每年提領比例（%／以示意現金價值計）",
                     0.5, 6.0, float(ss["pol_inflow_ratio"]),
                     key="pol_inflow_ratio", disabled=not inflow_enabled
                 )
                 inflow_amt = 0.0
 
-    # ───────── 📈 動態現金值模擬（統一來源 & 安全下限） ─────────
-    st.markdown("#### 📈 動態現金值模擬（示意）")
-    st.caption("順序：投入保費 → 依 IRR 成長 → 進行提領；若提領超過可用現金值，系統會自動降額（防穿透）。")
-
+    # ───────── 動態模擬（無圖，僅產出單一整合表） ─────────
     years_safe = max(1, _safe_int(years, 1))
     start_year_safe = max(1, _safe_int(start_year, 1))
     years_in_safe = max(0, _safe_int(years_in, 0))
@@ -284,78 +272,35 @@ def render():
     if all(v == 0 for v in sim["annual_cf"]):
         st.info("目前年度現金流全為 0：請確認「繳費年期 > 0」且（固定年領金額 > 0 或 提領比例 > 0）。")
 
+    # 關鍵年份提示
     if sim["clamped_years"]:
         yrs = ", ".join(str(y) for y in sim["clamped_years"][:5])
         more = "…" if len(sim["clamped_years"]) > 5 else ""
-        st.warning(f"已啟用防穿透：在第 {yrs}{more} 年自動降額提領以避免現金值歸零。")
+        st.warning(f"已啟用防穿透：在第 {yrs}{more} 年自動降額提領以避免現金價值歸零。")
 
     breakeven = next((y for y, v in zip(sim["timeline"], sim["cum_cf"]) if v >= 0), None)
     if breakeven:
         st.success(f"損益平衡年約為 **第 {breakeven} 年**（累計現金流轉正）。")
 
-    # 圖表：可選擇拆兩張（較易讀）
-    split = st.checkbox("將圖拆成兩張（較易讀）", value=True)
-    try:
-        if PANDAS_AVAILABLE:
-            if split:
-                flows_df = pd.DataFrame({
-                    "當年度現金流": sim["annual_cf"],
-                    "累計現金流": sim["cum_cf"],
-                }, index=sim["timeline"])
-                flows_df.index.name = "年度"
-                st.line_chart(flows_df, height=280, use_container_width=True)
-
-                cv_df = pd.DataFrame({"現金值(模擬)": sim["cv"]}, index=sim["timeline"])
-                cv_df.index.name = "年度"
-                st.line_chart(cv_df, height=280, use_container_width=True)
-            else:
-                df_chart = pd.DataFrame({
-                    "現金值(模擬)": sim["cv"],
-                    "累計現金流": sim["cum_cf"],
-                    "當年度現金流": sim["annual_cf"],
-                }, index=sim["timeline"])
-                df_chart.index.name = "年度"
-                st.line_chart(df_chart, height=320, use_container_width=True)
-        else:
-            if split:
-                st.line_chart(np.column_stack([sim["annual_cf"], sim["cum_cf"]]), height=280, use_container_width=True)
-                st.line_chart(np.column_stack([sim["cv"]]), height=280, use_container_width=True)
-            else:
-                st.line_chart(np.column_stack([sim["cv"], sim["cum_cf"], sim["annual_cf"]]), height=320, use_container_width=True)
-    except Exception:
-        st.info("圖表建立時發生例外，但不影響頁面其他功能。若需協助排查請截圖給我。")
-
-    # ───────── 年度現金流表（直接用 sim 結果） ─────────
-    is_twd = (currency == "TWD")
+    # ───────── 唯一保留的表：現金價值＋現金流（示意） ─────────
+    st.markdown("#### 現金價值與現金流（示意）")
     rows = []
-    for y, v, acc in zip(sim["timeline"], sim["annual_cf"], sim["cum_cf"]):
-        rows.append({
-            "年度": y,
-            "當年度現金流": _fmt_wan(v) if is_twd else _fmt_currency(v, currency),
-            "累計現金流": _fmt_wan(acc) if is_twd else _fmt_currency(acc, currency),
-        })
-
-    st.markdown("**完整年度現金流**")
+    for y, cv, v, acc in zip(sim["timeline"], sim["cv"], sim["annual_cf"], sim["cum_cf"]):
+        if is_twd:
+            rows.append({
+                "年度": y,
+                "現金價值（年末）": _fmt_wan(cv),
+                "當年度現金流": _fmt_wan(v),
+                "累計現金流": _fmt_wan(acc),
+            })
+        else:
+            rows.append({
+                "年度": y,
+                "現金價值（年末）": _fmt_currency(cv, currency),
+                "當年度現金流": _fmt_currency(v, currency),
+                "累計現金流": _fmt_currency(acc, currency),
+            })
     st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    # （選配）顯示計算檢查（以元為單位，不四捨五入）
-    with st.expander("顯示計算檢查（元）", expanded=False):
-        try:
-            if PANDAS_AVAILABLE:
-                df_dbg = pd.DataFrame({
-                    "年度": sim["timeline"],
-                    "當年度現金流(元)": sim["annual_cf"],
-                    "累計現金流(元)": sim["cum_cf"],
-                    "現金值年末(元)": sim["cv"],
-                })
-                st.dataframe(df_dbg, use_container_width=True, hide_index=True)
-            else:
-                st.write("年度：", sim["timeline"])
-                st.write("當年度現金流(元)：", sim["annual_cf"])
-                st.write("累計現金流(元)：", sim["cum_cf"])
-                st.write("現金值年末(元)：", sim["cv"])
-        except Exception:
-            st.info("檢查表建立時發生例外，但不影響主要功能。")
 
     # 下載 PDF（不含圖）
     if PDF_AVAILABLE:
@@ -371,21 +316,21 @@ def render():
                 flow.extend([
                     p(f"年繳保費 × 年期：{_fmt_wan(premium)} × {int(years)} ＝ 總保費 {_fmt_wan(total_premium)}"),
                     p(f"估計身故保額（倍數示意）：{_fmt_wan(indicative_face)}（使用倍數 {face_mult}×｜{stance}）"),
-                    p(f"第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：{_fmt_wan(cv_h)}"),
+                    p(f"第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_wan(cv_h)}"),
                 ])
             else:
                 flow.extend([
                     p(f"年繳保費 × 年期：{_fmt_currency(premium, currency)} × {int(years)} ＝ 總保費 {_fmt_currency(total_premium, currency)}"),
                     p(f"估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜{stance}）"),
-                    p(f"第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
+                    p(f"第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
                 ])
             flow.append(spacer(6))
-            flow.append(h2("年度現金流（示意）"))
-            for y, v, acc in zip(sim["timeline"], sim["annual_cf"], sim["cum_cf"]):
+            flow.append(h2("現金價值與現金流（示意）"))
+            for y, cv, v, acc in zip(sim["timeline"], sim["cv"], sim["annual_cf"], sim["cum_cf"]):
                 if is_twd:
-                    flow.append(p(f"第 {y} 年：{_fmt_wan(v)}（累計 {_fmt_wan(acc)}）"))
+                    flow.append(p(f"第 {y} 年：現金價值 {_fmt_wan(cv)}，當年度 { _fmt_wan(v)}，累計 { _fmt_wan(acc)}"))
                 else:
-                    flow.append(p(f"第 {y} 年：{_fmt_currency(v, currency)}（累計 {_fmt_currency(acc, currency)}）"))
+                    flow.append(p(f"第 {y} 年：現金價值 {_fmt_currency(cv, currency)}，當年度 { _fmt_currency(v, currency)}，累計 { _fmt_currency(acc, currency)}"))
 
             pdf = build_branded_pdf_bytes(flow)
             st.download_button(
