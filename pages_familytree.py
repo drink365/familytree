@@ -1,12 +1,11 @@
 # pages_familytree.py — Stable family tree page for Streamlit
-# Features:
-# - Spouses horizontal only; no downward line if no children
-# - When children exist, draw a small junction below marriage, then straight/diagonal lines to children
-# - Uniform penwidth=2 for all visible edges
-# - Per-marriage "swap spouses left/right"
-# - Add / Delete children (delete = remove from this marriage only)
-# - Import / Export JSON, Clear All
-# - No sibling-ordering invisible edges (to avoid layout side-effects)
+# Upgrades in this version:
+# - "Clear All" button is directly under "Export JSON" (same style, full width)
+# - Use Digraph and add invisible directed glue edges s1->mid->s2 (constraint=true, weight=10000)
+#   so no node (e.g., a sibling like 玄洲) can ever sit between spouses after swapping
+# - Spouses horizontal only; only marriages with children draw a small junction below
+# - Children lines straight/diagonal; uniform penwidth=2 for visible edges
+# - Add/Delete children; Swap spouses left/right; Import/Export JSON
 
 import json
 import uuid
@@ -110,9 +109,10 @@ def swap_spouse_order(mid: str):
 
 # ----------------------------- Rendering -----------------------------
 
-def render_graph(tree: dict) -> graphviz.Graph:
-    g = graphviz.Graph("G", engine="dot")
-    # Straight/diagonal lines (no orthogonal), moderate spacing
+def render_graph(tree: dict) -> graphviz.Digraph:
+    # Use Digraph to leverage ordering with directed invisible edges
+    g = graphviz.Digraph("G", engine="dot")
+    # Straight/diagonal lines; moderate spacing
     g.attr(rankdir="TB", splines="line", nodesep="0.46", ranksep="0.7")
     # Uniform penwidth for VISIBLE edges
     g.attr("edge", dir="none", penwidth="2")
@@ -140,7 +140,7 @@ def render_graph(tree: dict) -> graphviz.Graph:
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.01", style="invis")
 
-    # Spouse links: horizontal only
+    # Spouse links: horizontal only; enforce adjacency with invisible directed glue edges
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -150,13 +150,14 @@ def render_graph(tree: dict) -> graphviz.Graph:
 
         if len(sp) == 2:
             s1, s2 = sp
+            # keep them on same rank
             with g.subgraph(name=f"rank_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid); sg.node(s2)
-            # glue order (invisible constraints; DO NOT set penwidth here)
-            g.edge(s1, mid, style="invis", weight="800", constraint="true", minlen="0")
-            g.edge(mid, s2, style="invis", weight="800", constraint="true", minlen="0")
-            # visible spouse line (not constraining layout)
+                # invisible directed chain to force s1, mid, s2 be consecutive
+                sg.edge(s1, mid, style="invis", constraint="true", weight="10000", minlen="0")
+                sg.edge(mid, s2, style="invis", constraint="true", weight="10000", minlen="0")
+            # visible spouse line (non-constraining)
             ls = "dashed" if divorced else "solid"
             g.edge(s1, mid, style=ls, constraint="false")
             g.edge(mid, s2, style=ls, constraint="false")
@@ -166,8 +167,8 @@ def render_graph(tree: dict) -> graphviz.Graph:
             with g.subgraph(name=f"rank_single_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid)
+                sg.edge(s1, mid, style="invis", constraint="true", weight="800", minlen="0")
             g.edge(s1, mid, style="solid", constraint="false")
-            g.edge(s1, mid, style="invis", weight="600", constraint="true", minlen="0")
 
     # Parents -> children (draw only when children exist)
     for mid, m in marriages.items():
@@ -191,8 +192,6 @@ def render_graph(tree: dict) -> graphviz.Graph:
         for c in children:
             g.edge(f"{mid}_d", c, style="solid", weight="700", minlen="1", constraint="true")
 
-        # NO additional invisible ordering edges for siblings (avoid side-effects)
-
     return g
 
 
@@ -211,20 +210,20 @@ def _sidebar_controls():
         mime="application/json",
         use_container_width=True,
     )
+    # 也在側邊提供清空（保留舊有位置）
+    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
+        _reset_tree()
+        st.sidebar.warning("已清空家族樹")
 
     uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
     if uploaded is not None:
-        if st.sidebar.button("▶️ 執行匯入", type="primary"):
+        if st.sidebar.button("▶️ 執行匯入", type="primary", use_container_width=True):
             try:
                 _import_json(uploaded.read().decode("utf-8"))
                 st.sidebar.success("已匯入，家族樹已更新")
                 _safe_rerun()
             except Exception as e:
                 st.sidebar.error(f"匯入失敗：{e}")
-
-    if st.sidebar.button("🧹 全部清空", type="secondary", key="side_clear"):
-        _reset_tree()
-        st.sidebar.warning("已清空家族樹")
 
     st.sidebar.markdown("---")
     st.sidebar.caption("夫妻僅水平連線；有子女時才從夫妻下方的小圓點分支到子女（直/斜直線）。")
@@ -233,7 +232,8 @@ def _sidebar_controls():
 def _bottom_io_controls():
     st.markdown("---")
     st.subheader("📦 資料匯入 / 匯出")
-    c1, c2, c3 = st.columns([2, 2, 1], gap="large")
+    # 依你的要求：把「全部清空」直接放在「匯出 JSON」下方，同欄同樣樣式
+    c1, c2 = st.columns([2, 2], gap="large")
 
     with c1:
         st.markdown("**匯出目前資料**")
@@ -245,24 +245,21 @@ def _bottom_io_controls():
             use_container_width=True,
             key="bottom_export",
         )
+        if st.button("🧹 全部清空", type="secondary", use_container_width=True, key="bottom_clear_inline"):
+            _reset_tree()
+            st.warning("已清空家族樹")
 
     with c2:
         st.markdown("**匯入 JSON 檔**")
         up2 = st.file_uploader("選擇檔案", type=["json"], key="bottom_uploader")
         if up2 is not None:
-            if st.button("▶️ 執行匯入", type="primary"):
+            if st.button("▶️ 執行匯入", type="primary", use_container_width=True):
                 try:
                     _import_json(up2.read().decode("utf-8"))
                     st.success("已匯入，家族樹已更新")
                     _safe_rerun()
                 except Exception as e:
                     st.error(f"匯入失敗：{e}")
-
-    with c3:
-        st.markdown("**動作**")
-        if st.button("🧹 全部清空", type="secondary", key="bottom_clear"):
-            _reset_tree()
-            st.warning("已清空家族樹")
 
 
 def _person_manager():
@@ -365,7 +362,7 @@ def _marriage_manager():
                 st.success("已加入子女")
                 _safe_rerun()
 
-        # Delete children UI
+        # 刪除子女
         m = marriages[selected_mid]
         current_children = m.get("children", [])
         if current_children:
