@@ -1,13 +1,12 @@
-# demo.py（專業版報告＋情境說明＋品牌自訂｜安全共存版）
+# demo.py（品牌自動載入＋上傳自訂＋情境說明｜安全共存版）
 # 目的：
 # 1) 不影響現有架構（獨立頁面、避免 session key 衝突、set_page_config 安全）
-# 2) 品牌可自訂：上傳 Logo 或填寫 Logo URL、編輯聯絡資訊（頁面與下載報告同步）
+# 2) 自動讀取 brand.json 與 logo.png/logo2.png；亦支援側邊欄上傳 Logo 與輸入聯絡資訊
 # 3) 三步驟體驗：資產輸入 → 一鍵模擬 → 下載一頁摘要（HTML 可列印 PDF）
 # 4) 內建三個情境模板＋情境說明，能一鍵載入並同步寫入報告
 
 from typing import Dict, Optional
-import base64
-import math
+import base64, json, os, math
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
@@ -19,12 +18,6 @@ try:
     st.set_page_config(page_title="影響力｜家族資產地圖 Demo", page_icon="🧭", layout="centered")
 except Exception:
     pass
-
-# -----------------------------
-# 預設品牌資訊（可被側邊欄覆蓋）
-# -----------------------------
-DEFAULT_BRAND_LOGO_URL = ""  # 可留空；若上傳 Logo 會自動使用
-DEFAULT_BRAND_CONTACT = "《影響力》傳承策略平台｜永傳家族辦公室\nhttps://gracefo.com\n聯絡信箱：123@gracefo.com"
 
 # -----------------------------
 # 常數與示範資料（僅教育示意，非正式稅務建議）
@@ -46,7 +39,6 @@ DEMO_DATA = {
     "其他資產": 2_000_000,
 }
 
-# 典型情境模板（僅示意，方便第一次上手）
 SCENARIOS = {
     "創辦人A｜公司占比高": {
         "公司股權": 65_000_000,
@@ -93,13 +85,27 @@ SCENARIO_DESCRIPTIONS = {
 }
 
 # -----------------------------
-# Util：將上傳圖檔轉成 data URI（HTML 內嵌）
+# 檔案工具：讀 brand.json、檔案轉 data URI
 # -----------------------------
+def load_brand_config() -> Optional[dict]:
+    candidates = [
+        "brand.json",
+        os.path.join("familytree-main", "brand.json"),
+        os.path.join(os.path.dirname(__file__), "brand.json"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                pass
+    return None
+
 def file_to_data_uri(file) -> Optional[str]:
     if not file:
         return None
     data = file.read()
-    # 簡單推測 MIME
     mime = "image/png"
     name = (file.name or "").lower()
     if name.endswith(".jpg") or name.endswith(".jpeg"):
@@ -109,11 +115,23 @@ def file_to_data_uri(file) -> Optional[str]:
     b64 = base64.b64encode(data).decode("utf-8")
     return f"data:{mime};base64,{b64}"
 
+def path_to_data_uri(path_or_none: Optional[str]) -> str:
+    if not path_or_none or not os.path.exists(path_or_none):
+        return ""
+    mime = "image/png"
+    lower = path_or_none.lower()
+    if lower.endswith(".jpg") or lower.endswith(".jpeg"):
+        mime = "image/jpeg"
+    elif lower.endswith(".svg"):
+        mime = "image/svg+xml"
+    data = open(path_or_none, "rb").read()
+    b64 = base64.b64encode(data).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
+
 # -----------------------------
-# 計算函式
+# 稅務計算（示意）
 # -----------------------------
 def calc_estate_tax(tax_base: int) -> int:
-    """依簡化級距計算遺產稅（示意）。"""
     if tax_base <= 0:
         return 0
     for upper, rate, quick in TAIWAN_ESTATE_TAX_TABLE:
@@ -122,16 +140,12 @@ def calc_estate_tax(tax_base: int) -> int:
     return 0
 
 def simulate_with_without_insurance(total_assets: int, insurance_benefit: int) -> Dict[str, int]:
-    """示意比較：無保單 vs 有保單（理賠金假設直接給付家人）。"""
     total_assets = max(0, int(total_assets))
     insurance_benefit = max(0, int(insurance_benefit))
-
     tax_base = max(0, total_assets - BASIC_EXEMPTION)
     tax = calc_estate_tax(tax_base)
-
     cash_without = max(0, total_assets - tax)
     cash_with = max(0, total_assets - tax + insurance_benefit)
-
     return {
         "稅基": tax_base,
         "遺產稅": tax,
@@ -145,8 +159,8 @@ def simulate_with_without_insurance(total_assets: int, insurance_benefit: int) -
 # -----------------------------
 def build_summary_html(
     r: Dict[str, int],
-    logo_src: str,  # data uri 或 http(s) url，可為空字串
-    contact_text: str,
+    logo_src: str,               # data uri 或 http(s) url，可為空字串
+    contact_text: str,           # 多行文字；以 \n 換行
     scenario_title: str | None = None,
     scenario_desc: dict | None = None,
 ) -> str:
@@ -164,7 +178,6 @@ def build_summary_html(
     </ul>
   </div>
         """
-
     return f"""<!DOCTYPE html>
 <html lang='zh-Hant'>
 <head>
@@ -228,11 +241,35 @@ if "demo_used" not in st.session_state:
 if "demo_selected_scenario" not in st.session_state:
     st.session_state.demo_selected_scenario = None
 if "demo_brand_contact" not in st.session_state:
-    st.session_state.demo_brand_contact = DEFAULT_BRAND_CONTACT
+    st.session_state.demo_brand_contact = "永傳家族辦公室｜Grace Family Office\nhttps://gracefo.com\nservice@gracefo.com"
 if "demo_logo_data_uri" not in st.session_state:
     st.session_state.demo_logo_data_uri = None
 if "demo_logo_url" not in st.session_state:
-    st.session_state.demo_logo_url = DEFAULT_BRAND_LOGO_URL
+    st.session_state.demo_logo_url = ""
+
+# -----------------------------
+# 嘗試自動載入 ZIP 內的品牌設定（brand.json / logo.png / logo2.png）
+# -----------------------------
+_brand = load_brand_config()
+if _brand:
+    # 1) 聯絡資訊 CONTACT（若側邊欄尚未自訂）
+    if st.session_state.demo_brand_contact == "" or st.session_state.demo_brand_contact.startswith("永傳家族辦公室"):
+        contact = _brand.get("CONTACT")
+        if contact:
+            st.session_state.demo_brand_contact = contact
+
+    # 2) 尋找 LOGO 檔（優先 wide，再用 square），以 data URI 內嵌
+    wide = _brand.get("LOGO_WIDE", "")
+    square = _brand.get("LOGO_SQUARE", "")
+    logo_candidates = [
+        wide, square,
+        os.path.join("familytree-main", wide),
+        os.path.join("familytree-main", square)
+    ]
+    for p in logo_candidates:
+        if p and os.path.exists(p):
+            st.session_state.demo_logo_data_uri = path_to_data_uri(p)
+            break
 
 # -----------------------------
 # 側邊欄：品牌自訂（Logo 與聯絡資訊）
@@ -257,7 +294,7 @@ with st.sidebar:
         help="每一行會在報告中換行顯示",
     )
 
-# 取得用於顯示的 Logo 來源（頁面用 URL，下載報告用 data URI 優先）
+# 顯示用與報告用的 Logo 來源（上傳 > 網址）
 page_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url
 report_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url
 brand_contact_text = st.session_state.demo_brand_contact
