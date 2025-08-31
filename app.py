@@ -17,12 +17,13 @@ def load_brand():
     try:
         return json.load(open("brand.json", "r", encoding="utf-8"))
     except Exception:
+        # 預設品牌設定
         return {
             "PRIMARY": "#D33B2C",
             "BG": "#F7FAFC",
             "LOGO_SQUARE": "logo2.png",
             "SHOW_SIDEBAR_LOGO": True,
-            "TAGLINE": "財富永續｜基業長青｜幸福永傳",
+            "TAGLINE": "說清楚，做得到",
             "SUBLINE": "把傳承變簡單。",
             "RETINA_FACTOR": 3,
         }
@@ -38,6 +39,7 @@ if not os.path.exists(LOGO_PATH):
 
 # -------------------- Router helpers --------------------
 def navigate(key: str):
+    """更新網址參數（在 button 頂層呼叫即可觸發 rerun）。"""
     st.query_params.update({"page": key})
 
 def get_page_from_query() -> str:
@@ -97,6 +99,7 @@ for label, key, icon in [
 ]:
     nav_button(label, key, icon)
 
+# 側欄按鈕樣式
 st.markdown(
     """
     <style>
@@ -128,6 +131,7 @@ def logo_b64_highres(path: str, target_px_width: int, mtime: float, size: int):
 
 # -------------------- Pages --------------------
 def render_home():
+    # LOGO（高解析）
     main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH or None)
     if main_logo_path:
         mtime = os.path.getmtime(main_logo_path); fsize = os.path.getsize(main_logo_path)
@@ -136,13 +140,24 @@ def render_home():
         b64 = logo_b64_highres(main_logo_path, target_px_width, mtime, fsize)
         st.markdown(f'<img src="data:image/png;base64,{b64}" style="width:200px;height:auto;">', unsafe_allow_html=True)
 
-    # Hero（精簡）
-    st.title("留下的不只財富，更是愛與責任。")
+    # 《影響力》傳承策略平台（精簡文案，不提工具名）
+    with st.container():
+        st.markdown("### 《影響力》｜高資產家庭的傳承策略平台")
+        st.markdown("**讓每一分資源，都成為你影響力的延伸。**")
+        st.write("我們陪你設計每一分資源的去向，讓它守護最重要的人，延續你真正的價值。")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("🏛️ **富足結構**\n\n為資源設計流動性與穩定性，讓財富更有效率地守護人生階段。")
+        with c2:
+            st.markdown("🛡️ **風險預備**\n\n以合規與風險管理建立防線，為關鍵時刻預留餘裕。")
+        with c3:
+            st.markdown("🌱 **價值傳遞**\n\n不只是金錢，更是精神、信任與選擇，成就跨世代的連結。")
 
     st.divider()
     st.subheader("從這裡開始")
 
-    # 主行動（精簡三鍵）
+    # 主行動（三鍵）
     c1, c2, c3 = st.columns(3)
     with c1:
         if st.button("① 先把關係畫清楚 🌳", use_container_width=True):
@@ -151,24 +166,21 @@ def render_home():
         if st.button("② 看見風險與稅務缺口 🏛️", use_container_width=True):
             navigate("legacy")  # 或改 navigate("tax")
     with c3:
-        if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True):
+        if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True):  # 已移除「（萬元）」字樣
             navigate("policy")
 
     st.divider()
 
-    # 品牌承諾帶（收尾）
+    # 品牌承諾帶（不特別強調「幸福永傳」）
     st.markdown(
         """
-        <div class="signature-band">
-          財富永續｜基業長青｜幸福永傳</span>
-        </div>
+        <div class="signature-band">財富永續｜基業長青｜幸福永傳</div>
         <style>
           .signature-band{
             text-align:center;font-size:1.18rem;font-weight:700;letter-spacing:.02em;
             padding:12px 10px;margin:4px 0 0 0;color:#111827;background:linear-gradient(180deg,#ffffff,#fafafa);
             border:1px solid #eee;border-radius:12px;
           }
-          .mark-ever{ color:#D33B2C; }
           @media (max-width:900px){ .signature-band{ font-size:1.06rem;padding:10px 8px; } }
         </style>
         """,
