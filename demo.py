@@ -1,9 +1,10 @@
-# demo.py（品牌自動載入＋上傳自訂＋情境說明｜安全共存版）
+# demo.py（品牌自動載入＋上傳自訂＋情境說明＋新手引導｜安全共存版）
 # 目的：
 # 1) 不影響現有架構（獨立頁面、避免 session key 衝突、set_page_config 安全）
 # 2) 自動讀取 brand.json 與 logo.png/logo2.png；亦支援側邊欄上傳 Logo 與輸入聯絡資訊
 # 3) 三步驟體驗：資產輸入 → 一鍵模擬 → 下載一頁摘要（HTML 可列印 PDF）
 # 4) 內建三個情境模板＋情境說明，能一鍵載入並同步寫入報告
+# 5) 新手引導模式（onboarding）：進度條、提示、上一步／下一步／略過引導
 
 from typing import Dict, Optional
 import base64, json, os, math
@@ -161,8 +162,8 @@ def build_summary_html(
     r: Dict[str, int],
     logo_src: str,               # data uri 或 http(s) url，可為空字串
     contact_text: str,           # 多行文字；以 \n 換行
-    scenario_title: str | None = None,
-    scenario_desc: dict | None = None,
+    scenario_title: Optional[str] = None,
+    scenario_desc: Optional[dict] = None,
 ) -> str:
     contact_html = "<br/>".join(contact_text.split("\n"))
     logo_img = f"<img src='{logo_src}' alt='logo' />" if logo_src else ""
@@ -300,9 +301,54 @@ report_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_l
 brand_contact_text = st.session_state.demo_brand_contact
 
 # -----------------------------
+# 新手引導（Onboarding）狀態與工具
+# -----------------------------
+if "demo_onboarding" not in st.session_state:
+    st.session_state.demo_onboarding = True   # 預設打開引導
+if "demo_step" not in st.session_state:
+    st.session_state.demo_step = 1            # 1→2→3
+if "demo_seen_onboarding" not in st.session_state:
+    st.session_state.demo_seen_onboarding = False
+
+def step_enabled(target_step: int) -> bool:
+    """在引導模式下，只開放『目前步驟』；非引導模式則全開。"""
+    if not st.session_state.demo_onboarding:
+        return True
+    return st.session_state.demo_step == target_step
+
+def guide_hint(title: str, bullets: list):
+    """在每一步上方顯示友善提示。"""
+    with st.container():
+        st.success("✅ " + title)
+        for b in bullets:
+            st.markdown(f"- {b}")
+
+def step_nav():
+    """步驟導覽控制：上一步／下一步／略過引導。"""
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        st.button("⬅ 上一步", disabled=st.session_state.demo_step <= 1,
+                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step - 1))
+    with c2:
+        st.button("略過引導", on_click=lambda: st.session_state.update(demo_onboarding=False, demo_seen_onboarding=True))
+    with c3:
+        st.button("下一步 ➡", disabled=st.session_state.demo_step >= 3,
+                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step + 1))
+
+def onboarding_header():
+    if not st.session_state.demo_onboarding:
+        return
+    pct = (st.session_state.demo_step - 1) / 3
+    st.progress(pct, text=f"引導進度：第 {st.session_state.demo_step}/3 步")
+
+# -----------------------------
 # 頁面：三步驟體驗
 # -----------------------------
 st.title("🧭 三步驟 Demo｜家族資產地圖 × 一鍵模擬 × 報告")
+onboarding_header()
+if st.session_state.demo_onboarding:
+    st.info("這是新手引導模式：依提示完成三步驟，就能產生一頁摘要。")
+
 if page_logo_src:
     st.image(page_logo_src, width=150)
 st.caption("3 分鐘看懂、5 分鐘產出成果。示意版，非正式稅務或法律建議。")
@@ -320,17 +366,27 @@ st.divider()
 
 # Step 1
 st.subheader("① 建立家族資產地圖")
+
+# --- 引導提示（Step1）---
+if st.session_state.demo_onboarding and st.session_state.demo_step == 1:
+    guide_hint("先建立資產地圖", [
+        "可先按「🔎 載入示範數據」或點選三個情境之一。",
+        "需要微調時，直接修改下方各類別金額即可。",
+        "準備好就按下方「下一步」。"
+    ])
+enabled_step1 = step_enabled(1)
+
 left, right = st.columns([1, 1])
 with left:
     st.write("輸入六大資產類別金額（新台幣）：")
     cA, cB = st.columns(2)
     with cA:
-        if st.button("🔎 載入示範數據"):
+        if st.button("🔎 載入示範數據", disabled=not enabled_step1):
             st.session_state.demo_assets = DEMO_DATA.copy()
             st.session_state.demo_used = True
             st.session_state.demo_selected_scenario = None
     with cB:
-        if st.button("🧹 清除/歸零"):
+        if st.button("🧹 清除/歸零", disabled=not enabled_step1):
             st.session_state.demo_assets = {k: 0 for k in ASSET_CATS}
             st.session_state.demo_used = False
             st.session_state.demo_result = None
@@ -339,19 +395,19 @@ with left:
     # 一鍵載入典型情境
     s1, s2, s3 = st.columns(3)
     with s1:
-        if st.button("🏢 創辦人A"):
+        if st.button("🏢 創辦人A", disabled=not enabled_step1):
             st.session_state.demo_assets = SCENARIOS["創辦人A｜公司占比高"].copy()
             st.session_state.demo_used = True
             st.session_state.demo_selected_scenario = "創辦人A｜公司占比高"
             st.info("已載入情境：創辦人A｜公司占比高")
     with s2:
-        if st.button("🌏 跨境家庭B"):
+        if st.button("🌏 跨境家庭B", disabled=not enabled_step1):
             st.session_state.demo_assets = SCENARIOS["跨境家庭B｜海外資產高"].copy()
             st.session_state.demo_used = True
             st.session_state.demo_selected_scenario = "跨境家庭B｜海外資產高"
             st.info("已載入情境：跨境家庭B｜海外資產高")
     with s3:
-        if st.button("💼 保守型C"):
+        if st.button("💼 保守型C", disabled=not enabled_step1):
             st.session_state.demo_assets = SCENARIOS["保守型C｜金融資產高"].copy()
             st.session_state.demo_used = True
             st.session_state.demo_selected_scenario = "保守型C｜金融資產高"
@@ -359,7 +415,9 @@ with left:
 
     for cat in ASSET_CATS:
         st.session_state.demo_assets[cat] = st.number_input(
-            f"{cat}", min_value=0, step=100_000, value=int(st.session_state.demo_assets.get(cat, 0))
+            f"{cat}", min_value=0, step=100_000,
+            value=int(st.session_state.demo_assets.get(cat, 0)),
+            disabled=not enabled_step1,
         )
 
 with right:
@@ -378,10 +436,23 @@ with right:
 
     st.metric("目前總資產 (NT$)", f"{total_assets:,.0f}")
 
+if st.session_state.demo_onboarding:
+    step_nav()
+
 st.divider()
 
 # Step 2
 st.subheader("② 一鍵模擬：有保單 vs 無保單")
+
+# --- 引導提示（Step2）---
+if st.session_state.demo_onboarding and st.session_state.demo_step == 2:
+    guide_hint("模擬有／無保單的差異", [
+        "系統會先用稅額做為建議保額（可自行調整）。",
+        "按「⚡ 一鍵模擬差異」後，右側會顯示差異與指標。",
+        "滿意結果後，請按下一步產出摘要。"
+    ])
+enabled_step2 = step_enabled(2)
+
 pre_tax = calc_estate_tax(max(0, total_assets - BASIC_EXEMPTION)) if st.session_state.demo_used else 0
 insurance_benefit = st.number_input(
     "預估保單理賠金（可調）",
@@ -389,9 +460,10 @@ insurance_benefit = st.number_input(
     step=100_000,
     value=int(pre_tax),
     help="示意用途：假設理賠金直接提供給家人，可提高可動用現金。",
+    disabled=not enabled_step2,
 )
 
-if st.button("⚡ 一鍵模擬差異"):
+if st.button("⚡ 一鍵模擬差異", disabled=not enabled_step2):
     result = simulate_with_without_insurance(total_assets, insurance_benefit)
     st.session_state.demo_result = {**result, "總資產": total_assets, "建議保額": insurance_benefit}
     st.success("模擬完成！")
@@ -409,10 +481,23 @@ else:
 
 st.caption("＊法稅提醒：此模擬僅為示意，實務須視受益人、給付方式與最新法令而定。")
 
+if st.session_state.demo_onboarding:
+    step_nav()
+
 st.divider()
 
 # Step 3
 st.subheader("③ 一頁摘要（可下載）")
+
+# --- 引導提示（Step3）---
+if st.session_state.demo_onboarding and st.session_state.demo_step == 3:
+    guide_hint("下載一頁摘要（可列印 PDF）", [
+        "檢視頁內摘要是否正確。",
+        "點「⬇️ 下載一頁摘要」，在瀏覽器列印成 PDF 帶去會談。",
+        "完成引導後，可點上方「略過引導」改成專業模式自由操作。"
+    ])
+enabled_step3 = step_enabled(3)
+
 if st.session_state.get("demo_result"):
     r = st.session_state.demo_result
     scenario_key = st.session_state.get("demo_selected_scenario")
@@ -456,9 +541,13 @@ if st.session_state.get("demo_result"):
         data=html,
         file_name="家族資產_策略摘要_demo.html",
         mime="text/html",
+        disabled=not enabled_step3,
     )
 else:
     st.info("先完成上一步『一鍵模擬差異』，系統會自動生成摘要。")
+
+if st.session_state.demo_onboarding:
+    step_nav()
 
 st.write("---")
 st.info("🚀 專業版（規劃中）：進階稅務模擬、更多情境比較、白標報告與客戶 Viewer。如需試用名單，請與我們聯繫。")
