@@ -12,12 +12,17 @@ except Exception:
 
 # ----------------------------- Helpers -----------------------------
 def _fmt_currency(n: float, currency: str) -> str:
-    """四捨五入至個位數並加千分位，依幣別顯示 NT$/US$。"""
+    """四捨五入至個位數並加千分位，依幣別顯示 NT$/US$（一般用，非 Markdown）。"""
     try:
         sym = "NT$" if currency == "TWD" else "US$"
         return f"{sym}{float(round(n)):,.0f}"
     except Exception:
         return "—"
+
+def _fmt_currency_md(n: float, currency: str) -> str:
+    """供 Markdown 使用的貨幣字串（把 $ 轉成 \$，避免被當作 LaTeX）。"""
+    s = _fmt_currency(n, currency)
+    return s.replace("$", "\\$")
 
 def _currency_name(currency: str) -> str:
     return "新台幣" if currency == "TWD" else "美元"
@@ -35,7 +40,7 @@ def _safe_float(x: Optional[float], default: float = 0.0) -> float:
         return default
 
 def _estimate_cash_value(premium: float, years: int, irr_pct: float, horizon: int) -> int:
-    """以 IRR 為年化報酬率，估算第 horizon 年之示意現金價值（年末投入；僅會談示意）。"""
+    """以 IRR 為年化報酬率，估算第 horizon 年的示意現金價值（年末投入；僅會談示意）。"""
     try:
         irr = max(0.0, float(irr_pct) / 100.0)
         horizon = max(1, int(horizon))
@@ -132,7 +137,7 @@ def render():
     horizon = st.number_input("現金價值觀察年（示意）", min_value=5, max_value=40, value=10)
     SIM_YEARS_FIXED = 20
 
-    # 摘要（幣別中文 + 小圖示）
+    # 摘要（移除小圖示；UI 用 Markdown 安全貨幣，PDF 用純文字）
     total_premium = _safe_int(premium) * _safe_int(years)
     face_mult = FACE_MULTIPLIERS[stance][goal]
     indicative_face = _safe_int(total_premium * face_mult)
@@ -140,16 +145,23 @@ def render():
     cur_zh = _currency_name(currency)
 
     st.markdown("#### 摘要")
-    st.write(f"🧾 年繳保費 × 年期（幣別：{cur_zh}）：**{_fmt_currency(premium, currency)}** × **{int(years)}** ＝ 總保費 **{_fmt_currency(total_premium, currency)}**")
-    st.write(f"🛡️ 估計身故保額（倍數示意）：**{_fmt_currency(indicative_face, currency)}**（使用倍數 **{face_mult}×**｜{stance}）")
-    st.write(f"📈 第 **{int(horizon)}** 年估計現金價值（IRR **{irr:.1f}%**）：**{_fmt_currency(cv_h, currency)}**")
+    st.markdown(
+        f"- 年繳保費 × 年期（幣別：{cur_zh}）："
+        f"**{_fmt_currency_md(premium, currency)}** × **{int(years)}** ＝ 總保費 **{_fmt_currency_md(total_premium, currency)}**"
+    )
+    st.markdown(
+        f"- 估計身故保額（倍數示意）：**{_fmt_currency_md(indicative_face, currency)}**"
+        f"（使用倍數 **{face_mult}×**｜{stance}）"
+    )
+    st.markdown(
+        f"- 第 **{int(horizon)}** 年估計現金價值（IRR **{irr:.1f}%**）：**{_fmt_currency_md(cv_h, currency)}**"
+    )
 
     st.markdown("---")
 
     # 設定現金流入（可選，含一鍵情境）
     with st.expander("設定現金流入（可選）", expanded=(goal == "退休現金流")):
         ss = st.session_state
-        # 初次預設
         ss.setdefault("pol_inflow_enabled", goal == "退休現金流")
         ss.setdefault("pol_mode", "固定年領金額")
         ss.setdefault("pol_start_year", int(years) + 1)
@@ -181,7 +193,7 @@ def render():
             st.slider("每年提領比例（%／以現金價值計）", 0.5, 6.0,
                       key="pol_inflow_ratio", disabled=not inflow_enabled)
 
-    # 讀參數並模擬（固定 20 年）
+    # 模擬（固定 20 年）
     ss = st.session_state
     inflow_mode = "fixed" if ss.get("pol_mode", "固定年領金額") == "固定年領金額" else "ratio"
     sim = _simulate_path(
@@ -194,7 +206,7 @@ def render():
         years_in=max(0, _safe_int(ss.get("pol_years_in", max(1, 20 - int(years))), 0)),
         inflow_amt=max(0.0, _safe_float(ss.get("pol_inflow_amt", 300_000), 0.0)),
         inflow_ratio_pct=max(0.0, _safe_float(ss.get("pol_inflow_ratio", 2.0), 0.0)),
-        sim_years=SIM_YEARS_FIXED,
+        sim_years=20,
     )
 
     if all(v == 0 for v in sim["annual_cf"]):
@@ -207,7 +219,7 @@ def render():
     if breakeven:
         st.success(f"損益平衡年約為 **第 {breakeven} 年**（累積現金流轉正）。")
 
-    # 頁面表格
+    # 表格
     st.markdown("#### 現金價值與現金流（示意）")
     rows = []
     for y, cv, v, acc in zip(sim["timeline"], sim["cv"], sim["annual_cf"], sim["cum_cf"]):
@@ -219,25 +231,19 @@ def render():
         })
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    # ---------------- PDF（摘要含幣別；下方用文字表格） ----------------
+    # ---------------- PDF（摘要含幣別；下方用文字表格；不含任何 ** 或小圖示） ----------------
     if PDF_AVAILABLE:
         try:
-            # 建立「文字表格」：自動計算欄寬，輸出為等寬風格的字元表格
             headers = ["年度", "當年度現金流", "累積現金流", "年末現金價值"]
             table_rows = [
-                [str(y),
-                 _fmt_currency(v, currency),
-                 _fmt_currency(acc, currency),
-                 _fmt_currency(cv, currency)]
+                [str(y), _fmt_currency(v, currency), _fmt_currency(acc, currency), _fmt_currency(cv, currency)]
                 for y, v, acc, cv in zip(sim["timeline"], sim["annual_cf"], sim["cum_cf"], sim["cv"])
             ]
-            # 計算欄寬
             widths = [len(h) for h in headers]
             for r in table_rows:
                 for i, cell in enumerate(r):
                     widths[i] = max(widths[i], len(cell))
-            def _fmt_row(arr):
-                return " | ".join(str(arr[i]).ljust(widths[i]) for i in range(len(arr)))
+            def _fmt_row(arr): return " | ".join(str(arr[i]).ljust(widths[i]) for i in range(len(arr)))
             sep = " | ".join("─" * w for w in widths)
 
             flow = [
@@ -246,9 +252,9 @@ def render():
                 p("正式方案請以保險公司官方試算與契約條款為準。"),
                 spacer(4),
                 h2("摘要"),
-                p(f"🧾 年繳保費 × 年期（幣別：{cur_zh}）：{_fmt_currency(premium, currency)} × {int(years)} ＝ 總保費 {_fmt_currency(total_premium, currency)}"),
-                p(f"🛡️ 估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜{stance}）"),
-                p(f"📈 第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
+                p(f"年繳保費 × 年期（幣別：{cur_zh}）：{_fmt_currency(premium, currency)} × {int(years)} ＝ 總保費 {_fmt_currency(total_premium, currency)}"),
+                p(f"估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜{stance}）"),
+                p(f"第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
                 spacer(6),
                 h2("現金價值與現金流（示意）"),
                 p(_fmt_row(headers)),
