@@ -1,7 +1,11 @@
-# demo.py（品牌自動載入＋上傳自訂＋情境說明＋新手引導｜修正版：寬版＋唯一鍵）
-# 說明：
-# - 改為 layout="wide"（若 app.py 已設定，這裡會自動忽略）
-# - 修正 StreamlitDuplicateElementId：step_nav() 加入 key_prefix，三處分別呼叫 step_nav("s1"/"s2"/"s3")
+# demo.py（品牌自動載入＋上傳自訂＋情境說明＋新手引導｜修正版：寬版＋圖表優化＋唯一鍵）
+# 功能：
+# 1) 不影響現有架構（獨立頁面；set_page_config 包 try/except）
+# 2) 自動讀 brand.json 與 logo.png/logo2.png；也可側欄上傳 Logo、輸入聯絡資訊
+# 3) 三步驟體驗：資產輸入 → 一鍵模擬 → 下載一頁摘要（HTML 可列印 PDF）
+# 4) 三個情境模板＋情境說明
+# 5) 新手引導模式：進度條、提示、上一步／下一步／略過（修正重複 ID）
+# 6) 圖表優化：可切換 甜甜圈/圓餅、右側圖例避免文字重疊，小片段不擠
 
 from typing import Dict, Optional
 import base64, json, os, math
@@ -13,12 +17,12 @@ import streamlit as st
 # Page Config（若已被其他頁設定，忽略即可）
 # -----------------------------
 try:
-    st.set_page_config(page_title="影響力｜家族資產地圖 Demo", page_icon="🧭", layout="wide")  # 改為寬版
+    st.set_page_config(page_title="影響力｜家族資產地圖 Demo", page_icon="🧭", layout="wide")  # 寬版
 except Exception:
     pass
 
 # -----------------------------
-# 常數與示範資料（僅教育示意，非正式稅務建議）
+# 常數與示範資料（示意，非正式稅務建議）
 # -----------------------------
 ASSET_CATS = ["公司股權", "不動產", "金融資產", "保單", "海外資產", "其他資產"]
 TAIWAN_ESTATE_TAX_TABLE = [
@@ -32,35 +36,23 @@ DEMO_DATA = {
     "公司股權": 40_000_000,
     "不動產": 25_000_000,
     "金融資產": 12_000_000,
-    "保單": 3_000_000,  # 現有保單的保單價值（非理賠金）
+    "保單": 3_000_000,
     "海外資產": 8_000_000,
     "其他資產": 2_000_000,
 }
 
 SCENARIOS = {
     "創辦人A｜公司占比高": {
-        "公司股權": 65_000_000,
-        "不動產": 18_000_000,
-        "金融資產": 7_000_000,
-        "保單": 2_000_000,
-        "海外資產": 6_000_000,
-        "其他資產": 2_000_000,
+        "公司股權": 65_000_000, "不動產": 18_000_000, "金融資產": 7_000_000,
+        "保單": 2_000_000, "海外資產": 6_000_000, "其他資產": 2_000_000,
     },
     "跨境家庭B｜海外資產高": {
-        "公司股權": 28_000_000,
-        "不動產": 20_000_000,
-        "金融資產": 10_000_000,
-        "保單": 4_000_000,
-        "海外資產": 30_000_000,
-        "其他資產": 3_000_000,
+        "公司股權": 28_000_000, "不動產": 20_000_000, "金融資產": 10_000_000,
+        "保單": 4_000_000, "海外資產": 30_000_000, "其他資產": 3_000_000,
     },
     "保守型C｜金融資產高": {
-        "公司股權": 10_000_000,
-        "不動產": 22_000_000,
-        "金融資產": 35_000_000,
-        "保單": 5_000_000,
-        "海外資產": 6_000_000,
-        "其他資產": 2_000_000,
+        "公司股權": 10_000_000, "不動產": 22_000_000, "金融資產": 35_000_000,
+        "保單": 5_000_000, "海外資產": 6_000_000, "其他資產": 2_000_000,
     },
 }
 
@@ -68,7 +60,7 @@ SCENARIO_DESCRIPTIONS = {
     "創辦人A｜公司占比高": {
         "適用對象": "第一代創辦人、股權集中、資產波動度高",
         "常見痛點": "公司估值高但流動性低；二次繳稅風險；子女接班不確定",
-        "建議邏輯": "用保單補流動性，確保稅金與傳承金可即時到位，避免賣股或稀釋控制權",
+        "建議邏輯": "用保單補流動性，確保稅金與傳承金即時到位，避免賣股或稀釋控制權",
     },
     "跨境家庭B｜海外資產高": {
         "適用對象": "台灣/大陸/美國等多法域資產分布的家庭",
@@ -83,7 +75,7 @@ SCENARIO_DESCRIPTIONS = {
 }
 
 # -----------------------------
-# 檔案工具：讀 brand.json、檔案轉 data URI
+# 工具：讀 brand.json、檔案轉 data URI
 # -----------------------------
 def load_brand_config() -> Optional[dict]:
     candidates = [
@@ -157,8 +149,8 @@ def simulate_with_without_insurance(total_assets: int, insurance_benefit: int) -
 # -----------------------------
 def build_summary_html(
     r: Dict[str, int],
-    logo_src: str,
-    contact_text: str,
+    logo_src: str,               # data uri 或 http(s) url，可為空字串
+    contact_text: str,           # 多行文字；以 \n 換行
     scenario_title: Optional[str] = None,
     scenario_desc: Optional[dict] = None,
 ) -> str:
@@ -230,7 +222,7 @@ hr {{ border:none; border-top:1px solid #eee; margin:16px 0; }}
 </html>"""
 
 # -----------------------------
-# Session 狀態
+# Session 狀態（避免與主程式衝突）
 # -----------------------------
 if "demo_assets" not in st.session_state:
     st.session_state.demo_assets = {k: 0 for k in ASSET_CATS}
@@ -246,7 +238,7 @@ if "demo_logo_url" not in st.session_state:
     st.session_state.demo_logo_url = ""
 
 # -----------------------------
-# 嘗試自動載入品牌設定（brand.json / logo.png / logo2.png）
+# 自動載入品牌設定（brand.json / logo.png / logo2.png）
 # -----------------------------
 _brand = load_brand_config()
 if _brand:
@@ -254,7 +246,6 @@ if _brand:
         contact = _brand.get("CONTACT")
         if contact:
             st.session_state.demo_brand_contact = contact
-
     wide = _brand.get("LOGO_WIDE", "")
     square = _brand.get("LOGO_SQUARE", "")
     logo_candidates = [wide, square,
@@ -266,7 +257,7 @@ if _brand:
             break
 
 # -----------------------------
-# 側邊欄：品牌自訂
+# 側邊欄：品牌自訂（Logo 與聯絡資訊）
 # -----------------------------
 with st.sidebar:
     st.subheader("⚙️ 品牌設定（可選）")
@@ -287,17 +278,18 @@ with st.sidebar:
         help="每一行會在報告中換行顯示",
     )
 
+# 顯示/報告用 Logo 來源
 page_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url
 report_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url
 brand_contact_text = st.session_state.demo_brand_contact
 
 # -----------------------------
-# 新手引導（Onboarding）
+# 新手引導（Onboarding）狀態與工具
 # -----------------------------
 if "demo_onboarding" not in st.session_state:
-    st.session_state.demo_onboarding = True
+    st.session_state.demo_onboarding = True   # 預設開啟
 if "demo_step" not in st.session_state:
-    st.session_state.demo_step = 1
+    st.session_state.demo_step = 1            # 1→2→3
 if "demo_seen_onboarding" not in st.session_state:
     st.session_state.demo_seen_onboarding = False
 
@@ -391,6 +383,7 @@ with left:
             st.session_state.demo_result = None
             st.session_state.demo_selected_scenario = None
 
+    # 一鍵載入典型情境
     s1, s2, s3 = st.columns(3)
     with s1:
         if st.button("🏢 創辦人A", disabled=not enabled_step1):
@@ -423,19 +416,53 @@ with right:
     df_assets = pd.DataFrame({"類別": list(assets.keys()), "金額": list(assets.values())})
     total_assets = int(df_assets["金額"].sum())
 
-    st.write("**資產分布**（圓餅圖）")
+    st.write("**資產分布**")
     if total_assets > 0:
-        fig, ax = plt.subplots()
-        ax.pie(df_assets["金額"], labels=df_assets["類別"], autopct="%1.1f%%", startangle=90)
+        # 字型（若有 NotoSansTC，避免中文亂碼；沒有也無妨）
+        try:
+            plt.rcParams['font.family'] = ['Noto Sans CJK TC', 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', 'sans-serif']
+        except Exception:
+            pass
+
+        # 品牌色盤（可按需替換）
+        brand_colors = ["#1F4A7A", "#C99A2E", "#4CAF50", "#E64A19", "#7E57C2", "#455A64"]
+        colors = brand_colors[: len(df_assets)]
+
+        chart_style = st.radio("圖表樣式", ["甜甜圈圖（建議）", "圓餅圖"], horizontal=True, key="style_pie")
+        show_pct_threshold = 3  # 小於 3% 不在切片上顯示數字
+
+        sizes = df_assets["金額"].values
+        labels2 = df_assets["類別"].values
+
+        fig, ax = plt.subplots(figsize=(6.8, 5.2))
+        wedges, texts, autotexts = ax.pie(
+            sizes,
+            labels=None,  # 標籤由圖例呈現
+            autopct=lambda p: f"{p:.1f}%" if p >= show_pct_threshold else "",
+            startangle=90,
+            colors=colors,
+            pctdistance=0.75,
+        )
         ax.axis("equal")
-        st.pyplot(fig)
+
+        # 甜甜圈：加中心留白
+        if chart_style.startswith("甜甜圈"):
+            centre = plt.Circle((0, 0), 0.55, fc="white")
+            ax.add_artist(centre)
+
+        # 右側圖例（含金額）
+        legend_labels = [f"{lbl}：NT$ {val:,.0f}" for lbl, val in zip(labels2, sizes)]
+        ax.legend(wedges, legend_labels, title="資產類別", loc="center left", bbox_to_anchor=(1.02, 0.5))
+
+        ax.set_title(f"資產分布　｜　總資產 NT$ {total_assets:,.0f}", loc="left", fontsize=12, pad=12)
+        st.pyplot(fig, clear_figure=True)
     else:
         st.info("請輸入金額或先點『載入示範數據』。")
 
     st.metric("目前總資產 (NT$)", f"{total_assets:,.0f}")
 
 if st.session_state.demo_onboarding:
-    step_nav("s1")  # ← 唯一鍵前綴
+    step_nav("s1")
 
 st.divider()
 
@@ -479,7 +506,7 @@ else:
 st.caption("＊法稅提醒：此模擬僅為示意，實務須視受益人、給付方式與最新法令而定。")
 
 if st.session_state.demo_onboarding:
-    step_nav("s2")  # ← 唯一鍵前綴
+    step_nav("s2")
 
 st.divider()
 
@@ -541,7 +568,7 @@ else:
     st.info("先完成上一步『一鍵模擬差異』，系統會自動生成摘要。")
 
 if st.session_state.demo_onboarding:
-    step_nav("s3")  # ← 唯一鍵前綴
+    step_nav("s3")
 
 st.write("---")
 st.info("🚀 專業版（規劃中）：進階稅務模擬、更多情境比較、白標報告與客戶 Viewer。如需試用名單，請與我們聯繫。")
