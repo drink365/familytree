@@ -1,8 +1,8 @@
-# pages_familytree.py — straight lines, robust after adding children
-# - Spouses adjacent via s1–mid–s2 (visible lines don't constrain)
-# - Children from a lower drop point (mid_d) with straight lines down
-# - Siblings same-rank; ordering edges are truly invisible & non-constraining
-# - Import/Export with "▶️ 執行匯入" and "🧹 全部清空"
+# pages_familytree.py — visible junction for children (parents ↧ junction ↧ children)
+# - Spouses adjacent via s1–mid–s2 (visible spouse line doesn't constrain layout)
+# - A visible small junction point (mid_d) right below each marriage
+# - Children connect from that junction with straight (non-orthogonal) lines
+# - Siblings rank-same, import/export + clear all, stable selection
 
 import json
 import uuid
@@ -98,8 +98,8 @@ def _spouse_map(tree: dict) -> Dict[str, List[Tuple[str, List[str]]]]:
 
 def render_graph(tree: dict) -> graphviz.Graph:
     g = graphviz.Graph("G", engine="dot")
-    # 直線/斜直線（不產生折角）
-    g.attr(rankdir="TB", splines="line", nodesep="0.46", ranksep="0.9")
+    # 直線/斜直線（不要直角）；把層距稍微縮短，讓父母↧子女更貼近
+    g.attr(rankdir="TB", splines="line", nodesep="0.46", ranksep="0.65")
     g.attr("edge", dir="none")
 
     persons = tree.get("persons", {})
@@ -121,10 +121,11 @@ def render_graph(tree: dict) -> graphviz.Graph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # 建立婚姻點與下引點（都不可見）
+    # 婚姻點與「可見下引點」：mid 是不可見；mid_d 是很小的可見點（當作接線匯流結）
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.01", style="invis")
-        g.node(f"{mid}_d", label="", shape="point", width="0.01", style="invis")
+        # 可見 junction：黑色小點（很小，不搶畫面）
+        g.node(f"{mid}_d", label="", shape="point", width="0.04", color="black")
 
     # 配偶：一定相鄰 s1–mid–s2；配偶線不影響布局
     for mid, m in marriages.items():
@@ -136,9 +137,9 @@ def render_graph(tree: dict) -> graphviz.Graph:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid); sg.node(s2)
             # 鎖定順序與貼近（不可見、具約束）
-            g.edge(s1, mid, style="invis", weight="600", constraint="true", minlen="0")
-            g.edge(mid, s2, style="invis", weight="600", constraint="true", minlen="0")
-            # 視覺線（不參與布局）
+            g.edge(s1, mid, style="invis", weight="700", constraint="true", minlen="0")
+            g.edge(mid, s2, style="invis", weight="700", constraint="true", minlen="0")
+            # 視覺的配偶線（不參與布局）
             ls = "dashed" if divorced else "solid"
             g.edge(s1, mid, style=ls, penwidth="2", constraint="false")
             g.edge(mid, s2, style=ls, penwidth="2", constraint="false")
@@ -148,9 +149,9 @@ def render_graph(tree: dict) -> graphviz.Graph:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid)
             g.edge(s1, mid, style="solid", penwidth="2", constraint="false")
-            g.edge(s1, mid, style="invis", weight="500", constraint="true", minlen="0")
+            g.edge(s1, mid, style="invis", weight="600", constraint="true", minlen="0")
 
-    # 兄弟姊妹同層；排序邊完全不可見且不約束布局
+    # 兄弟姊妹：同層；排序邊完全不可見且不約束布局
     parent_of = _parents_map(tree)
     spouse_map = _spouse_map(tree)
 
@@ -163,12 +164,13 @@ def render_graph(tree: dict) -> graphviz.Graph:
                 for c in children:
                     sgc.node(c)
 
-        # mid -> mid_d 作垂直錨定（不可見、具約束）
-        g.edge(mid, f"{mid}_d", style="invis", weight="700", minlen="1", constraint="true")
+        # 父母到 junction 的線：可見、短（看起來就像父母線延伸一小段再分岔）
+        g.edge(mid, f"{mid}_d", style="solid", penwidth="2",
+               weight="800", minlen="1", constraint="true")
 
-        # 由 mid_d 直線往下接子女（單段直線、具約束）
+        # junction 直線分到每位子女（直線/斜直線，距離縮短）
         for c in children:
-            g.edge(f"{mid}_d", c, weight="500", minlen="1", constraint="true")
+            g.edge(f"{mid}_d", c, weight="600", minlen="1", constraint="true")
 
         # 兄弟姊妹排序（將與另一家庭結婚者推右側）—邊完全不可見、且不約束布局
         if len(children) >= 2:
@@ -186,7 +188,7 @@ def render_graph(tree: dict) -> graphviz.Graph:
             for i in range(len(ordered) - 1):
                 g.edge(ordered[i], ordered[i+1],
                        style="invis", color="transparent", penwidth="0",
-                       weight="1", constraint="false")  # 不畫、不約束
+                       weight="1", constraint="false")
 
     return g
 
@@ -199,7 +201,7 @@ def _sidebar_controls():
     st.sidebar.header("📦 匯入 / 匯出")
 
     st.sidebar.download_button(
-        label="⬇️ 匯出 JSON",
+        label="⬇️ 程式資料匯出（JSON）",
         data=_export_json().encode("utf-8"),
         file_name="family_tree.json",
         mime="application/json",
@@ -221,7 +223,7 @@ def _sidebar_controls():
         st.sidebar.warning("已清空家族樹")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("配偶以水平線連結（離婚為虛線），子女由下引點以**直線**往下。")
+    st.sidebar.caption("配偶水平連結；父母下方有小圓點作為匯流結點，子女線自該點直接分岔。")
 
 def _bottom_io_controls():
     st.markdown("---")
