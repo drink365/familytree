@@ -1,41 +1,135 @@
-
+# pages_values.py
+# -*- coding: utf-8 -*-
 import streamlit as st
 from datetime import datetime
-from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
 
+# 若你有品牌 PDF 工具，就能一鍵匯出；沒有也可安全移除這段 import
+try:
+    from utils.pdf_utils import build_branded_pdf_bytes, p, h2, spacer
+    HAS_PDF = True
+except Exception:
+    HAS_PDF = False
+
+# ---------------- helpers ----------------
+def _parse_csv(s: str) -> list[str]:
+    return [x.strip() for x in (s or "").split(",") if x.strip()]
+
+def _join(items: list[str]) -> str:
+    return "、".join(items) if items else "（未填）"
+
+def _chips_html(items: list[str]) -> str:
+    if not items:
+        return '<span class="chip chip-empty">（未填）</span>'
+    chips = "".join([f'<span class="chip">{st.escape_markdown(i)}</span>' for i in items])
+    return chips
+
+# ---------------- page ----------------
 def render():
-    st.subheader("❤️ 價值觀探索（PDF）")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        care = st.multiselect("想優先照顧", ["配偶", "子女", "父母", "夥伴", "公益"], default=["子女","配偶"])
-    with c2:
-        principles = st.multiselect("重要原則", ["公平", "感恩", "責任", "創新", "永續"], default=["公平","責任"])
-    with c3:
-        ways = st.multiselect("傳承方式", ["等分", "需求導向", "信託分期", "股權分流", "教育基金", "公益信託"], default=["信託分期","股權分流","教育基金"])
+    st.subheader("🧭 價值觀探索")
+    st.caption("此頁僅做會談討論的引導與整理，非法律或投資意見。")
 
-    bullets = []
-    if "公平" in principles: bullets.append("重大資產依『公平＋公開』原則分配，避免模糊地帶。")
-    if "責任" in principles: bullets.append("與公司治理連動：經營權與所有權分流，避免角色衝突。")
-    if "信託分期" in ways:   bullets.append("子女教育/生活費以信託分期給付，達成『照顧但不溺愛』。")
-    if "教育基金" in ways:   bullets.append("設立教育基金，明確用途與提領條件，受託人監管。")
-    if "公益信託" in ways or "公益" in care: bullets.append("提撥固定比例成立公益信託，作為家族影響力的延伸。")
-    if not bullets: bullets.append("將價值觀轉譯為具體的分配規則與審核條件，以降低爭議。")
+    # 些微品牌樣式（紅系與你站上其他頁一致）
+    st.markdown(
+        """
+        <style>
+          .card{
+            border:1px solid #e5e7eb;border-radius:14px;padding:16px 18px;margin-top:10px;background:#fff
+          }
+          .card h4{margin:0 0 8px 0;font-size:1.05rem;color:#111827}
+          .chip{
+            display:inline-block;padding:6px 10px;margin:4px 6px 0 0;border-radius:9999px;
+            background:#fff5f5;border:1px solid #f2b3b6;color:#c2272d;font-weight:600;font-size:.95rem
+          }
+          .chip-empty{
+            color:#6b7280;background:#f9fafb;border:1px dashed #e5e7eb;font-weight:400
+          }
+          .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+          @media (max-width: 900px){ .two-col{grid-template-columns:1fr} }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.write({
-        "優先照顧": ", ".join(care) if care else "（未選）",
-        "重要原則": ", ".join(principles) if principles else "（未選）",
-        "傳承方式": ", ".join(ways) if ways else "（未選）",
-    })
-    for b in bullets: st.markdown("- " + b)
+    # ---- Inputs ----
+    with st.form("values_form"):
+        c1, c2 = st.columns(2)
+        with c1:
+            pri_raw = st.text_input("優先照顧（以逗號分隔）", "子女, 配偶")
+            princ_raw = st.text_input("重要原則（以逗號分隔）", "公平, 責任")
+        with c2:
+            ways_raw = st.text_input("傳承方式（以逗號分隔）", "信託分期, 股權分流, 教育基金")
+            notes = st.text_area("補充說明（可選）", "", height=90)
+        submitted = st.form_submit_button("✅ 生成摘要")
 
-    flow = [
-        title("價值觀 × 行動準則"), spacer(6),
-        h2("探索重點"),
-        p("優先照顧：" + (", ".join(care) if care else "未選")),
-        p("重要原則：" + (", ".join(principles) if principles else "未選")),
-        p("傳承方式：" + (", ".join(ways) if ways else "未選")),
-        spacer(6), h2("建議家規 × 資金規則（示意）"),
-    ] + [p("- " + b) for b in bullets]
+    if not submitted:
+        st.info("請輸入上方欄位後，點擊「生成摘要」。")
+        return
 
-    pdf = build_branded_pdf_bytes(flow)
-    st.download_button("⬇️ 下載價值觀 PDF", data=pdf, file_name=f"value_charter_{datetime.now().strftime('%Y%m%d')}.pdf", mime="application/pdf")
+    # ---- Normalize ----
+    pri_list   = _parse_csv(pri_raw)
+    princ_list = _parse_csv(princ_raw)
+    ways_list  = _parse_csv(ways_raw)
+
+    # ---- Display (卡片＋標籤，不再用大括號) ----
+    st.success("已整理為摘要：")
+    st.markdown('<div class="two-col">', unsafe_allow_html=True)
+
+    st.markdown(
+        f'''
+        <div class="card">
+          <h4>優先照顧</h4>
+          {_chips_html(pri_list)}
+        </div>
+        ''', unsafe_allow_html=True
+    )
+    st.markdown(
+        f'''
+        <div class="card">
+          <h4>重要原則</h4>
+          {_chips_html(princ_list)}
+        </div>
+        ''', unsafe_allow_html=True
+    )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown(
+        f'''
+        <div class="card">
+          <h4>傳承方式</h4>
+          {_chips_html(ways_list)}
+        </div>
+        ''', unsafe_allow_html=True
+    )
+
+    if notes.strip():
+        st.markdown(
+            f'''
+            <div class="card">
+              <h4>補充說明</h4>
+              <div style="color:#374151;line-height:1.6;">{st.escape_markdown(notes)}</div>
+            </div>
+            ''', unsafe_allow_html=True
+        )
+
+    # ---- Optional: PDF ----
+    if HAS_PDF:
+        st.divider()
+        st.markdown("### 下載 PDF")
+        flow = [
+            h2("價值觀探索摘要"), spacer(6),
+            p("優先照顧：" + _join(pri_list)),
+            p("重要原則：" + _join(princ_list)),
+            p("傳承方式：" + _join(ways_list)),
+        ]
+        if notes.strip():
+            flow += [spacer(6), p("補充說明：" + notes.strip())]
+        flow += [spacer(6), p("產出日期：" + datetime.now().strftime("%Y/%m/%d"))]
+
+        pdf_bytes = build_branded_pdf_bytes(flow)
+        st.download_button(
+            "⬇️ 下載價值觀摘要 PDF",
+            data=pdf_bytes,
+            file_name=f"values_{datetime.now().strftime('%Y%m%d')}.pdf",
+            mime="application/pdf",
+            use_container_width=True,
+        )
