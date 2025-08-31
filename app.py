@@ -25,7 +25,7 @@ def load_brand():
             "SHOW_SIDEBAR_LOGO": True,
             "TAGLINE": "說清楚，做得到",
             "SUBLINE": "把傳承變簡單。",
-            "RETINA_FACTOR": 3
+            "RETINA_FACTOR": 3,
         }
 
 _BRAND = load_brand()
@@ -73,14 +73,14 @@ with st.sidebar:
                 img.save(buf, format="PNG", optimize=True)
                 return base64.b64encode(buf.getvalue()).decode("utf-8")
 
-            b64 = _b64_from_path(sidebar_logo_path, 72*2)  # 2x for small logo
+            b64 = _b64_from_path(sidebar_logo_path, 72 * 2)  # 2x for small logo
             st.markdown(
                 f"""
                 <div class="gfo-logo" style="display:flex;justify-content:center;align-items:center;">
                     <img src="data:image/png;base64,{b64}" class="gfo-logo-img" alt="logo2">
                 </div>
                 """,
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
             st.markdown(
                 """
@@ -90,7 +90,7 @@ with st.sidebar:
                 @media (max-width: 900px)  { .gfo-logo-img { width: 56px !important; } }
                 </style>
                 """,
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
 
     st.markdown('<div class="gfo-caption">《影響力》AI 傳承規劃平台</div>', unsafe_allow_html=True)
@@ -101,12 +101,12 @@ with st.sidebar:
         @media (max-width: 900px) { .gfo-caption { font-size: 0.85rem; } }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     st.markdown("---")
 
 def nav_button(label: str, page_key: str, icon: str):
-    # 頂層 if-statement 方式：按下按鈕後，Streamlit 會自動 rerun；navigate 只需改 query。
+    # 頂層 if-statement：按下按鈕後，Streamlit 自動 rerun；navigate 只需改 query。
     if st.sidebar.button(f"{icon} {label}", use_container_width=True, key=f"nav_{page_key}"):
         navigate(page_key)
 
@@ -115,7 +115,7 @@ for label, key, icon in [
     ("家族樹", "familytree", "🌳"),
     ("法稅傳承", "legacy", "🏛️"),
     ("稅務工具", "tax", "🧾"),
-    ("保單策略", "policy", "📦"),
+    ("保單策略", "policy", "📦"),  # ← 保持不改名
     ("價值觀探索", "values", "💬"),
     ("關於我們", "about", "👩‍💼"),
 ]:
@@ -172,54 +172,47 @@ def logo_b64_highres(path: str, target_px_width: int, mtime: float, size: int):
 # -------------------- Pages --------------------
 def render_home():
     # 首頁 LOGO：高解析輸出
-    main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
+    main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH or None)
     if main_logo_path:
         mtime = os.path.getmtime(main_logo_path); fsize = os.path.getsize(main_logo_path)
         target_css_width = 200
         target_px_width = max(target_css_width * RETINA_FACTOR, 600)
         b64 = logo_b64_highres(main_logo_path, target_px_width, mtime, fsize)
-        st.markdown(
-            f'<img src="data:image/png;base64,{b64}" style="width:200px;height:auto;">',
-            unsafe_allow_html=True
-        )
+        st.markdown(f'<img src="data:image/png;base64,{b64}" style="width:200px;height:auto;">', unsafe_allow_html=True)
 
-    # Hero：一句定位 + 一行揭露
-    st.title("把傳承變成「可驗證的現金流機制」")
-    st.caption("先法律/稅務路徑 → 再財務模型 → 最後選工具（股權/信託/保單/法律）")
-    st.write(":small_blue_diamond: 我們提供保險服務；每張保單在整體設計中都有**角色與數據驗證**（IRR/回本年/壓力測試）。")
+    # Hero（站在客戶角度，不談工具）
+    st.title("留下的不只財富，更是愛與責任。")
+    st.caption("少紛爭、多世代安穩——合規、現金節奏、家族共識一次到位。")
+    st.caption("私密保護｜數字可檢核｜專業共作")
 
     st.divider()
+    st.subheader("從這裡開始")
 
-    # 三顆主按鈕（頂層 if；無 on_click 回呼）
-    st.subheader("快速開始")
+    # 三顆主按鈕（用客戶語言）
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("① 家族樹 🌳", use_container_width=True):
+        if st.button("① 先把關係畫清楚 🌳", use_container_width=True):
             navigate("familytree")
     with c2:
-        if st.button("② 法稅傳承 🏛️", use_container_width=True):
-            navigate("legacy")
+        if st.button("② 看見風險與稅務缺口 🏛️", use_container_width=True):
+            navigate("legacy")  # 或 navigate("tax")
     with c3:
-        if st.button("③ 保單策略（萬元） 📦", use_container_width=True):
-            navigate("policy")
+        if st.button("③ 設計可持續的現金節奏（萬元） 📦", use_container_width=True):
+            navigate("policy")  # 保留名稱「保單策略」
 
-    # 次要入口
-    st.caption("或：🧾 稅務工具｜💬 價值觀探索｜👩‍💼 關於我們")
-    cc1, cc2, cc3 = st.columns(3)
+    # 次要入口（貼近動機）
+    st.caption("或：我還不確定，要先想清楚｜我想知道你們是誰")
+    cc1, cc2 = st.columns(2)
     with cc1:
-        if st.button("🧾 稅務工具", use_container_width=True):
-            navigate("tax")
-    with cc2:
-        if st.button("💬 價值觀探索", use_container_width=True):
+        if st.button("🧭 我還不確定，要先想清楚", use_container_width=True):
             navigate("values")
-    with cc3:
-        if st.button("👩‍💼 關於我們", use_container_width=True):
+    with cc2:
+        if st.button("👥 我想知道你們是誰", use_container_width=True):
             navigate("about")
 
     st.divider()
-
     # 信任條（極簡）
-    st.markdown("✅ **合規先行**　　✅ **保密優先**　　✅ **跨域團隊（律師/會計師/稅務顧問）**")
+    st.markdown("✅ **私密與保密優先**　　✅ **一切有數字可檢核**　　✅ **與律師/會計師協作**")
     st.caption(f"《影響力》傳承策略平台｜{datetime.now().strftime('%Y/%m/%d')}")
 
 def _safe_import_and_render(module_name: str):
