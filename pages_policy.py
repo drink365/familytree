@@ -3,7 +3,7 @@ import streamlit as st
 from datetime import datetime
 from typing import Optional
 
-# PDF：統一走你專案的 branded 工具
+# PDF：與其他頁一致的品牌工具
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
 
 # ----------------------------- Helpers -----------------------------
@@ -16,7 +16,7 @@ def _fmt_currency(n: float, currency: str) -> str:
         return "—"
 
 def _fmt_currency_md(n: float, currency: str) -> str:
-    """供 Markdown 顯示（將 $ 轉義避免 LaTeX）"""
+    """供 Markdown 顯示（將 $ 轉義避免被當 LaTeX）"""
     return _fmt_currency(n, currency).replace("$", "\\$")
 
 def _currency_name(currency: str) -> str:
@@ -211,7 +211,7 @@ def render():
     if breakeven:
         st.success(f"損益平衡年約為 **第 {breakeven} 年**（累積現金流轉正）。")
 
-    # 頁面表格
+    # 頁面表格（年度、當年度現金流、累積現金流、年末現金價值）
     st.markdown("#### 現金價值與現金流（示意）")
     rows = []
     for y, cv, v, acc in zip(sim["timeline"], sim["cv"], sim["annual_cf"], sim["cum_cf"]):
@@ -242,30 +242,11 @@ def render():
             p(f"第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
             spacer(6),
             h2("現金價值與現金流（示意）"),
+            # ⭐ 以關鍵字參數呼叫，避免被誤判為欄寬列表
+            table(headers=headers, rows=table_rows),
+            spacer(6),
+            p("產出日期：" + datetime.now().strftime("%Y/%m/%d")),
         ]
-
-        # 優先嘗試 table(headers, rows)
-        table_added = False
-        try:
-            flow.append(table(headers, table_rows))
-            table_added = True
-        except Exception:
-            pass
-        # 再嘗試以關鍵字傳入（不同版本相容）
-        if not table_added:
-            try:
-                flow.append(table(headers=headers, rows=table_rows))
-                table_added = True
-            except Exception:
-                pass
-        # 仍不行就用簡易文字表備援
-        if not table_added:
-            flow.append(p("｜".join(headers)))
-            flow.append(spacer(1))
-            for r in table_rows:
-                flow.append(p("｜".join(r)))
-
-        flow.extend([spacer(6), p("產出日期：" + datetime.now().strftime("%Y/%m/%d"))])
 
         pdf_bytes = build_branded_pdf_bytes(flow)
         st.download_button(
@@ -276,4 +257,32 @@ def render():
             use_container_width=True,
         )
     except Exception as e:
-        st.info(f"建立 PDF 時發生例外：{e}")
+        # 若自訂 table 仍有相容性問題，退回簡易文字表，確保不中斷
+        st.warning("PDF 表格元件不相容，已退回文字表格。")
+        try:
+            flow_fallback = [
+                title("保單策略（示意）"),
+                p("【重要提醒】本檔所有數字為 AI 根據輸入參數之示意模擬，僅供教育與討論。"),
+                spacer(6),
+                h2("摘要"),
+                p(f"年繳保費 × 年期（幣別：{_currency_name(currency)}）：{_fmt_currency(premium, currency)} × {int(years)} ＝ 總保費 {_fmt_currency(total_premium, currency)}"),
+                p(f"估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜{stance}）"),
+                p(f"第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
+                spacer(6),
+                h2("現金價值與現金流（示意）"),
+            ]
+            flow_fallback.append(p("｜".join(headers)))
+            for r in table_rows:
+                flow_fallback.append(p("｜".join(r)))
+            flow_fallback.append(spacer(6))
+            flow_fallback.append(p("產出日期：" + datetime.now().strftime("%Y/%m/%d")))
+            pdf_bytes = build_branded_pdf_bytes(flow_fallback)
+            st.download_button(
+                "⬇️ 下載保單策略 PDF（文字表格）",
+                data=pdf_bytes,
+                file_name=f"policy_strategy_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as e2:
+            st.error(f"PDF 仍無法建立：{e2}")
