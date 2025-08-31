@@ -2,6 +2,7 @@
 import streamlit as st
 from datetime import datetime
 from typing import List, Dict, Optional
+import pandas as pd  # 用於圖表資料表
 
 # PDF 工具（若專案無此模組，將自動略過下載功能）
 try:
@@ -35,8 +36,7 @@ def _fmt_currency(n: float, currency: str) -> str:
 
 def _estimate_cash_value(premium: float, years: int, irr_pct: float, horizon: int) -> int:
     """
-    以 IRR 為年化報酬率，估算第 horizon 年的「示意現金值」。
-    假設每年年末投入 premium，投入年數 = min(years, horizon)。（僅供會談示意，非商品精算）
+    以 IRR 為年化報酬率，估算第 horizon 年的示意現金值（年末投入模型；僅會談示意）。
     """
     try:
         irr = max(0.0, float(irr_pct) / 100.0)
@@ -129,6 +129,72 @@ def _build_cashflow_table(
 
     return {"timeline": timeline, "cash_flow": cash_flow, "cum": cum, "rows": rows}
 
+# ------------------ 動態現金值模擬（含防穿透） ------------------
+def _simulate_path(
+    premium: float,
+    years: int,
+    irr_pct: float,
+    inflow_enabled: bool,
+    inflow_mode: str,   # "fixed" / "ratio"
+    start_year: int,
+    years_in: int,
+    inflow_amt: float,
+    inflow_ratio_pct: float,
+    sim_years: Optional[int] = None,
+):
+    """
+    年度序列模擬：順序為【投入保費 → 依 IRR 成長 → 進行提領】。
+    提領額若超過可用現金值，會自動降額（防穿透）。
+    回傳：timeline, cv (年末現金值), annual_cf, cum_cf, clamped_years(list)
+    """
+    r = max(0.0, _safe_float(irr_pct)/100.0)
+    T = sim_years or max(_safe_int(years), _safe_int(start_year) + _safe_int(years_in) - 1,  _safe_int(years)+10)
+    T = max(T, 1)
+
+    cv = 0.0
+    cv_series, ann_cf_series, cum_cf_series = [], [], []
+    clamped_years = []
+    cum = 0.0
+
+    for y in range(1, T+1):
+        # 1) 投入保費（若仍在繳費期）
+        premium_y = float(premium) if y <= int(years) else 0.0
+        cv += premium_y
+
+        # 2) 依 IRR 成長
+        cv *= (1.0 + r)
+
+        # 3) 提領（若啟用且在提領區間）
+        withdraw = 0.0
+        if inflow_enabled and (int(start_year) <= y < int(start_year) + int(years_in)):
+            if inflow_mode == "fixed" and float(inflow_amt) > 0:
+                withdraw = float(inflow_amt)
+            elif inflow_mode == "ratio" and float(inflow_ratio_pct) > 0:
+                withdraw = cv * (float(inflow_ratio_pct) / 100.0)
+
+            # 防穿透：若提領超過可用現金值，降額到 cv
+            if withdraw > cv:
+                withdraw = cv
+                clamped_years.append(y)
+
+            cv -= withdraw
+
+        # 年度現金流：提領（+）－保費（－）
+        annual_cf = withdraw - premium_y
+        cum += annual_cf
+
+        cv_series.append(cv)
+        ann_cf_series.append(annual_cf)
+        cum_cf_series.append(cum)
+
+    return {
+        "timeline": list(range(1, T+1)),
+        "cv": cv_series,
+        "annual_cf": ann_cf_series,
+        "cum_cf": cum_cf_series,
+        "clamped_years": clamped_years,
+    }
+
 # ----------------------------- 倍數設定（已減半，與年齡無關） -----------------------------
 FACE_MULTIPLIERS = {
     "保守": {"放大財富傳承": 5, "補足遺產稅": 4, "退休現金流": 3, "企業風險隔離": 4},
@@ -158,11 +224,14 @@ def render():
 
     stance = st.radio("倍數策略強度", ["保守","中性","積極"], index=0, horizontal=True)
 
-    c5, c6 = st.columns(2)
+    c5, c6, c7 = st.columns(3)
     with c5:
         irr = st.slider("示意 IRR（不代表商品保證）", 1.0, 6.0, 3.0, 0.1)
     with c6:
         horizon = st.number_input("現金值觀察年（示意）", min_value=5, max_value=40, value=10)
+    with c7:
+        sim_years = st.number_input("模擬總年數（圖表）", min_value=5, max_value=60,
+                                    value=max(int(years)+10, int(horizon)), help="用於下方動態模擬與折線圖。")
 
     # 摘要（倍數僅依策略強度決定）
     total_premium = _safe_int(premium) * _safe_int(years)
@@ -193,15 +262,14 @@ def render():
                               index=0, horizontal=True, disabled=not inflow_enabled)
         inflow_mode = "fixed" if mode_label == "固定年領金額" else "ratio"
 
-        c7, c8, c9 = st.columns(3)
-        with c7:
+        c8, c9, c10 = st.columns(3)
+        with c8:
             start_year = st.number_input("起領年份（第幾年開始）", min_value=1, max_value=60,
                                          value=int(years) + 1, step=1, disabled=not inflow_enabled)
-        with c8:
+        with c9:
             years_in = st.number_input("領取年數", min_value=1, max_value=60,
                                        value=max(1, 20 - int(years)), step=1, disabled=not inflow_enabled)
-        with c9:
-            # ✅ 正確依 inflow_mode 顯示對應欄位（修正 bug）
+        with c10:
             if inflow_mode == "fixed":
                 inflow_amt = st.number_input("年領金額（元）", min_value=0, step=10_000,
                                              value=300_000, disabled=not inflow_enabled)
@@ -211,7 +279,7 @@ def render():
                                              0.5, 6.0, 2.0, 0.1, disabled=not inflow_enabled)
                 inflow_amt = 0.0
 
-    # 計算表格
+    # 現金流表
     table = _build_cashflow_table(
         currency=currency,
         premium=premium,
@@ -225,10 +293,9 @@ def render():
         inflow_ratio_pct=inflow_ratio_pct,
     )
 
-    # 自動找出第一筆正現金流
+    # 找第一筆正現金流
     first_positive = next((y for y, v in zip(table["timeline"], table["cash_flow"]) if v > 0), None)
 
-    # 提示狀態
     if inflow_enabled:
         if (inflow_mode == "fixed" and _safe_float(inflow_amt) <= 0) or \
            (inflow_mode == "ratio" and _safe_float(inflow_ratio_pct) <= 0):
@@ -238,7 +305,6 @@ def render():
         else:
             st.success(f"第一筆正現金流出現在 **第 {first_positive} 年**。")
 
-    # 先顯示「重點區段」，再顯示完整表
     if inflow_enabled and first_positive:
         start_focus = max(1, first_positive - 1)
         end_focus = min(table["timeline"][-1], first_positive + max(4, _safe_int(years_in) - 1))
@@ -249,7 +315,43 @@ def render():
     st.markdown("**完整年度現金流**")
     st.dataframe(table["rows"], use_container_width=True, hide_index=True)
 
-    # 下載 PDF（若可用）
+    # ------------------ 📈 動態現金值模擬與折線圖 ------------------
+    st.markdown("---")
+    st.markdown("#### 📈 動態現金值模擬（示意）")
+    st.caption("模型順序：先投入保費 → 依 IRR 成長 → 進行提領；若提領超過可用現金值，系統會自動降額（防穿透）。")
+
+    sim = _simulate_path(
+        premium=_safe_float(premium),
+        years=_safe_int(years),
+        irr_pct=_safe_float(irr),
+        inflow_enabled=bool(inflow_enabled),
+        inflow_mode=inflow_mode,
+        start_year=_safe_int(start_year),
+        years_in=_safe_int(years_in),
+        inflow_amt=_safe_float(inflow_amt),
+        inflow_ratio_pct=_safe_float(inflow_ratio_pct),
+        sim_years=_safe_int(sim_years),
+    )
+
+    # 模擬摘要與警示
+    if sim["clamped_years"]:
+        yrs = ", ".join(str(y) for y in sim["clamped_years"][:5])
+        more = "…" if len(sim["clamped_years"]) > 5 else ""
+        st.warning(f"已啟用防穿透：在第 {yrs}{more} 年自動降額提領以避免現金值歸零。")
+    # 損益平衡年（累計現金流 >= 0 的第一年）
+    breakeven = next((y for y, v in zip(sim["timeline"], sim["cum_cf"]) if v >= 0), None)
+    if breakeven:
+        st.success(f"損益平衡年約為 **第 {breakeven} 年**（累計現金流轉正）。")
+
+    df_chart = pd.DataFrame({
+        "現金值(模擬)": sim["cv"],
+        "累計現金流": sim["cum_cf"],
+        "當年度現金流": sim["annual_cf"],
+    }, index=sim["timeline"])
+    df_chart.index.name = "年度"
+    st.line_chart(df_chart, height=320, use_container_width=True)
+
+    # 下載 PDF（若可用；圖表僅在頁面顯示，PDF 不含圖）
     if PDF_AVAILABLE:
         try:
             flow = [
@@ -273,7 +375,7 @@ def render():
                 ])
 
             flow.append(spacer(6))
-            flow.append(h2("年度現金流（示意）"))
+            h2("年度現金流（示意）")
             for y, v, acc in zip(table["timeline"], table["cash_flow"], table["cum"]):
                 if is_twd:
                     flow.append(p(f"第 {y} 年：{_fmt_wan(v)}（累計 {_fmt_wan(acc)}）"))
@@ -282,7 +384,7 @@ def render():
 
             pdf = build_branded_pdf_bytes(flow)
             st.download_button(
-                "⬇️ 下載保單策略 PDF",
+                "⬇️ 下載保單策略 PDF（不含圖）",
                 data=pdf,
                 file_name=f"policy_strategy_{datetime.now().strftime('%Y%m%d')}.pdf",
                 mime="application/pdf",
