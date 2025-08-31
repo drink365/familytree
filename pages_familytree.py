@@ -1,15 +1,10 @@
-# pages_familytree.py — Spouse-first stable layout + fix: clear-all triggers rerun
-# - Spouses ALWAYS adjacent (tight marriage cluster A–mid–B–guard)
-# - No sibling-order constraints to avoid splitting spouses
-# - Children drawn only downward from a junction under the marriage
-# - Uniform penwidth=2 for visible edges
-# - Features: add/delete child, swap spouses, import/export
-# - FIX: "Clear All" now calls _safe_rerun() so the UI refreshes immediately
+# pages_familytree.py — Spouse-first stable layout
+# Fix: draw the visible spouse line as a single s1–s2 edge (not s1–mid & mid–s2),
+# so mid can connect children downward without bending the spouse line.
 
 import json
 import uuid
 from typing import List
-
 import streamlit as st
 import graphviz
 
@@ -41,7 +36,6 @@ def _import_json(text: str):
     obj = json.loads(text)
     persons = {str(k): v for k, v in obj.get("persons", {}).items()}
     marriages = {str(k): v for k, v in obj.get("marriages", {}).items()}
-    # Backward compat: ensure spouse order
     for mid, m in marriages.items():
         if m.get("spouses") and "order" not in m:
             marriages[mid]["order"] = list(m.get("spouses"))
@@ -73,7 +67,7 @@ def add_or_get_marriage(p1: str, p2: str) -> str:
     mid = _uid("m")
     st.session_state.family_tree["marriages"][mid] = {
         "spouses": [a, b],
-        "order": [a, b],   # left -> right
+        "order": [a, b],
         "children": [],
         "divorced": False
     }
@@ -142,6 +136,7 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 
         if len(order) == 2:
             s1, s2 = order
+            # Lock A–mid–B–guard together (highest priority)
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid); sg.node(s2)
@@ -150,9 +145,9 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(s2, guard, style="invis", constraint="true", weight="50000", minlen="0")
+            # Visible spouse line as ONE edge: s1 — s2 (never bends because it's independent of mid)
             ls = "dashed" if divorced else "solid"
-            g.edge(s1, mid, style=ls, constraint="false")
-            g.edge(mid, s2, style=ls, constraint="false")
+            g.edge(s1, s2, style=ls, constraint="false")
         elif len(order) == 1:
             s1 = order[0]
             with g.subgraph(name=f"cluster_{mid}") as sg:
@@ -181,7 +176,6 @@ def _fmt_pid(persons: dict, pid: str) -> str:
 
 def _sidebar_controls():
     st.sidebar.header("📦 匯入 / 匯出")
-
     st.sidebar.download_button(
         label="⬇️ 匯出 JSON",
         data=_export_json().encode("utf-8"),
@@ -192,7 +186,7 @@ def _sidebar_controls():
     if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
         _reset_tree()
         st.sidebar.warning("已清空家族樹")
-        _safe_rerun()  # <<< 立即重繪
+        _safe_rerun()
 
     uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
     if uploaded is not None:
@@ -225,7 +219,7 @@ def _bottom_io_controls():
         if st.button("🧹 全部清空", type="secondary", use_container_width=True, key="bottom_clear_inline"):
             _reset_tree()
             st.warning("已清空家族樹")
-            _safe_rerun()  # <<< 立即重繪
+            _safe_rerun()
 
     with c2:
         st.markdown("**匯入 JSON 檔**")
@@ -327,7 +321,7 @@ def _marriage_manager():
             st.markdown("\n")
             if st.button("⇄ 配偶左右交換"):
                 swap_spouse_order(selected_mid)
-                st.success("已交換左右（保證配偶相鄰）")
+                st.success("已交換左右（配偶仍相鄰）")
                 _safe_rerun()
 
         if addc:
