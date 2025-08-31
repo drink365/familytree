@@ -47,44 +47,6 @@ def _estimate_cash_value(premium: int, years: int, irr_pct: float, horizon: int)
         fv += premium * (1.0 + irr) ** (horizon - t)
     return int(round(fv))
 
-# 年齡分層
-def _age_band(age: int) -> int:
-    """回傳年齡帶索引：0:≤45, 1:46–55, 2:56–65, 3:66–75, 4:≥76"""
-    if age <= 45: return 0
-    if age <= 55: return 1
-    if age <= 65: return 2
-    if age <= 75: return 3
-    return 4
-
-# 倍數表（依策略強度 × 年齡帶）
-# 目標 keys: "放大財富傳承","補足遺產稅","退休現金流","企業風險隔離"
-# 年齡帶順序: ≤45, 46–55, 56–65, 66–75, 76+
-FACE_MULTIPLIERS = {
-    "保守": {
-        "放大財富傳承": [14, 12, 10,  8, 6],
-        "補足遺產稅"  : [12, 10,  8,  6, 5],
-        "退休現金流"  : [ 8,  7,  6,  5, 4],
-        "企業風險隔離": [10,  9,  8,  7, 6],
-    },
-    "中性": {
-        "放大財富傳承": [16, 14, 12, 10, 8],
-        "補足遺產稅"  : [14, 12, 10,  8, 6],
-        "退休現金流"  : [10,  9,  8,  6, 5],
-        "企業風險隔離": [12, 11, 10,  8, 7],
-    },
-    "積極": {
-        "放大財富傳承": [18, 16, 14, 12,10],
-        "補足遺產稅"  : [16, 14, 12, 10, 8],
-        "退休現金流"  : [12, 11, 10,  8, 6],
-        "企業風險隔離": [14, 12, 11,  9, 8],
-    },
-}
-
-def _get_face_mult(goal: str, age: int, stance: str) -> int:
-    stance_tbl = FACE_MULTIPLIERS.get(stance, FACE_MULTIPLIERS["保守"])
-    band = _age_band(int(age))
-    return stance_tbl[goal][band]
-
 def _build_cashflow_table(
     currency: str,
     premium: int,
@@ -147,6 +109,14 @@ def _build_cashflow_table(
 
     return {"timeline": timeline, "cash_flow": cash_flow, "cum": cum, "rows": rows}
 
+# ----------------------------- 倍數設定（已減半，與年齡無關） -----------------------------
+# 目標 keys: "放大財富傳承","補足遺產稅","退休現金流","企業風險隔離"
+FACE_MULTIPLIERS = {
+    "保守": {"放大財富傳承": 5, "補足遺產稅": 4, "退休現金流": 3, "企業風險隔離": 4},
+    "中性": {"放大財富傳承": 6, "補足遺產稅": 5, "退休現金流": 4, "企業風險隔離": 5},
+    "積極": {"放大財富傳承": 7, "補足遺產稅": 6, "退休現金流": 5, "企業風險隔離": 6},
+}
+
 # ----------------------------- Page -----------------------------
 def render():
     st.subheader("📦 保單策略規劃（會談示意）")
@@ -167,19 +137,17 @@ def render():
     with c4:
         goal = st.selectbox("策略目標", ["放大財富傳承","補足遺產稅","退休現金流","企業風險隔離"], index=0)
 
-    c5, c6, c7 = st.columns(3)
-    with c5:
-        age = st.number_input("年齡", min_value=18, max_value=90, value=50, step=1)
-    with c6:
-        irr = st.slider("示意 IRR（不代表商品保證）", 1.0, 6.0, 3.0, 0.1)
-    with c7:
-        horizon = st.number_input("現金值觀察年（示意）", min_value=5, max_value=40, value=10)
-
     stance = st.radio("倍數策略強度", ["保守","中性","積極"], index=0, horizontal=True)
 
-    # 摘要（倍數依年齡與策略強度調整）
+    c5, c6 = st.columns(2)
+    with c5:
+        irr = st.slider("示意 IRR（不代表商品保證）", 1.0, 6.0, 3.0, 0.1)
+    with c6:
+        horizon = st.number_input("現金值觀察年（示意）", min_value=5, max_value=40, value=10)
+
+    # 摘要（倍數僅依策略強度決定）
     total_premium = int(premium) * int(years)
-    face_mult = _get_face_mult(goal, int(age), stance)
+    face_mult = FACE_MULTIPLIERS[stance][goal]
     indicative_face = int(total_premium * face_mult)
     cv_h = _estimate_cash_value(int(premium), int(years), float(irr), int(horizon))
     is_twd = (currency == "TWD")
@@ -187,11 +155,11 @@ def render():
     st.markdown("#### 摘要")
     if is_twd:
         st.write(f"- 年繳保費 × 年期：{_fmt_wan(premium)} × {int(years)} ＝ **總保費 {_fmt_wan(total_premium)}**")
-        st.write(f"- 估計身故保額（倍數示意）：**{_fmt_wan(indicative_face)}**（使用倍數 **{face_mult}×**｜年齡 {int(age)}｜{stance}）")
+        st.write(f"- 估計身故保額（倍數示意）：**{_fmt_wan(indicative_face)}**（使用倍數 **{face_mult}×**｜{stance}）")
         st.write(f"- 第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：**{_fmt_wan(cv_h)}**")
     else:
         st.write(f"- 年繳保費 × 年期：{_fmt_currency(premium, currency)} × {int(years)} ＝ **總保費 {_fmt_currency(total_premium, currency)}**")
-        st.write(f"- 估計身故保額（倍數示意）：**{_fmt_currency(indicative_face, currency)}**（使用倍數 **{face_mult}×**｜年齡 {int(age)}｜{stance}）")
+        st.write(f"- 估計身故保額（倍數示意）：**{_fmt_currency(indicative_face, currency)}**（使用倍數 **{face_mult}×**｜{stance}）")
         st.write(f"- 第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：**{_fmt_currency(cv_h, currency)}**")
 
     st.markdown("---")
@@ -203,12 +171,12 @@ def render():
         mode_label = st.radio("提領模式", ["固定年領金額", "以現金值比例提領"], index=0, horizontal=True, disabled=not inflow_enabled)
         inflow_mode = "fixed" if mode_label == "固定年領金額" else "ratio"
 
-        c8, c9, c10 = st.columns(3)
-        with c8:
+        c7, c8, c9 = st.columns(3)
+        with c7:
             start_year = st.number_input("起領年份（第幾年開始）", min_value=1, max_value=60, value=int(years) + 1, step=1, disabled=not inflow_enabled)
-        with c9:
+        with c8:
             years_in = st.number_input("領取年數", min_value=1, max_value=60, value=max(1, 20 - int(years)), step=1, disabled=not inflow_enabled)
-        with c10:
+        with c9:
             if inflow_mode == "固定年領金額":
                 inflow_amt = st.number_input("年領金額（元）", min_value=0, step=10_000, value=300_000, disabled=not inflow_enabled)
                 inflow_ratio_pct = None
@@ -266,14 +234,14 @@ def render():
             ]
             if is_twd:
                 flow.extend([
-                    p(f"年齊保費 × 年期：{_fmt_wan(premium)} × {int(years)} ＝ 總保費 {_fmt_wan(total_premium)}"),
-                    p(f"估計身故保額（倍數示意）：{_fmt_wan(indicative_face)}（使用倍數 {face_mult}×｜年齡 {int(age)}｜{stance}）"),
+                    p(f"年繳保費 × 年期：{_fmt_wan(premium)} × {int(years)} ＝ 總保費 {_fmt_wan(total_premium)}"),
+                    p(f"估計身故保額（倍數示意）：{_fmt_wan(indicative_face)}（使用倍數 {face_mult}×｜{stance}）"),
                     p(f"第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：{_fmt_wan(cv_h)}"),
                 ])
             else:
                 flow.extend([
                     p(f"年繳保費 × 年期：{_fmt_currency(premium, currency)} × {int(years)} ＝ 總保費 {_fmt_currency(total_premium, currency)}"),
-                    p(f"估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜年齡 {int(age)}｜{stance}）"),
+                    p(f"估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜{stance}）"),
                     p(f"第 {int(horizon)} 年估計現金值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
                 ])
 
