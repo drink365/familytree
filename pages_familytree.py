@@ -1,4 +1,5 @@
-# pages_familytree.py — full version with sibling same-rank & execute-import buttons
+# pages_familytree.py — full, fixed: anchor marriage point, children below parents, siblings same-rank,
+# execute-import buttons, stable marriage selection, width="stretch".
 
 import json
 import uuid
@@ -145,46 +146,52 @@ def render_graph(tree: dict) -> graphviz.Graph:
     for mid, _m in marriages.items():
         g.node(mid, label="", shape="point", width="0.01")
 
-    # 配偶：同一層水平排列、水平線連結
+    # 配偶：同一層水平排列、水平線連結（並錨定婚姻點與父母同層）
     for mid, m in marriages.items():
         spouses = list(m.get("spouses", []))
         divorced = m.get("divorced", False)
         if len(spouses) == 2:
             s1, s2 = spouses
-            # 1) 同層 rank
+
+            # 1) 父母兩人固定在同層
             with g.subgraph(name="rank_{}".format(mid)) as sg:
                 sg.attr(rank="same")
                 sg.node(s1)
                 sg.node(s2)
-            # 2) 強化相鄰的不可見排序
+
+            # 2) 強化相鄰（不可見邊，用來貼近）
             g.edge(s1, s2, style="invis", weight="220", constraint="true")
-            # 3) 可見的配偶線（不影響 rank）
+
+            # 3) 視覺上的配偶線（不影響層級）
             g.edge(s1, s2, style=("dashed" if divorced else "solid"),
                    penwidth="2", constraint="false")
-            # 4) 與婚姻點的連結不影響層級
-            g.edge(s1, mid, style="invis", weight="10", constraint="false")
-            g.edge(s2, mid, style="invis", weight="10", constraint="false")
+
+            # 4) 以「有約束力的不可見邊」把婚姻點錨定在父母同一層
+            g.edge(s1, mid, style="invis", weight="100", minlen="0", constraint="true")
+            g.edge(s2, mid, style="invis", weight="100", minlen="0", constraint="true")
+
         elif len(spouses) == 1:
             s1 = spouses[0]
-            g.edge(s1, mid, style="invis", weight="10", constraint="false")
+            # 單親時也把 mid 錨在同層，避免上飄
+            g.edge(s1, mid, style="invis", weight="80", minlen="0", constraint="true")
 
-    # 兄弟姊妹：同層 + 排序（讓跨家庭夫妻靠攏）
+    # 兄弟姊妹：同層 + 排序（讓跨家庭夫妻靠攏），且子女一定在父母之下
     parent_of = _parents_map(tree)
     spouse_map = _spouse_map(tree)
 
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
 
-        # 0) 強制所有子女同一水平層
+        # 0) 強制所有子女同一水平層（避免兄弟姊妹錯層）
         if children:
             with g.subgraph(name="rank_children_{}".format(mid)) as sgc:
                 sgc.attr(rank="same")
                 for c in children:
                     sgc.node(c)
 
-        # 1) 從婚姻點往下連到每位子女（垂直）
+        # 1) 從婚姻點往下連到每位子女；minlen=1 確保子女在父母下方
         for c in children:
-            g.edge(mid, c, weight="8")
+            g.edge(mid, c, weight="8", minlen="1", constraint="true")
 
         # 2) 兄弟姊妹排序：將與「另一家庭」結婚的孩子推到右側
         if len(children) >= 2:
