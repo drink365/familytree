@@ -1,5 +1,3 @@
-# pages_familytree.py
-
 import json
 import uuid
 from typing import Dict, List, Tuple
@@ -14,20 +12,27 @@ import graphviz
 def _uid(prefix: str = "id") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
+
 def _init_state():
     if "family_tree" not in st.session_state:
         st.session_state.family_tree = {
-            "persons": {},   # pid -> {"name": str, "gender": "男"|"女"|"" , "note": str}
-            "marriages": {}, # mid -> {"spouses": [pid,pid], "children": [pid,...], "divorced": bool}
+            "persons": {},
+            "marriages": {},
         }
     if "last_download" not in st.session_state:
         st.session_state.last_download = ""
 
+
 def _reset_tree():
-    st.session_state.family_tree = {"persons": {}, "marriages": {}}
+    st.session_state.family_tree = {
+        "persons": {},
+        "marriages": {},
+    }
+
 
 def _export_json() -> str:
     return json.dumps(st.session_state.family_tree, ensure_ascii=False, indent=2)
+
 
 def _import_json(text: str):
     obj = json.loads(text)
@@ -101,80 +106,53 @@ def _spouse_map(tree: dict) -> Dict[str, List[Tuple[str, List[str]]]]:
 def render_graph(tree: dict) -> graphviz.Graph:
     g = graphviz.Graph("G", engine="dot")
     g.attr(rankdir="TB", splines="ortho", nodesep="0.35", ranksep="0.6")
-    g.attr("edge", dir="none")
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # Person nodes (gender-based styles). No "(男)/(女)" in labels.
+    # Create person nodes with color and shape by gender
     for pid, p in persons.items():
-        name = p.get("name", pid)
-        note = p.get("note")
-        label = name + (f"\n{note}" if note else "")
+        label = p.get("name", pid)
         gender = p.get("gender", "")
-
         if gender == "男":
-            g.node(pid, label=label, shape="box", style="filled",
-                   fillcolor="#E6F2FF", fontsize="11")
-        elif gender == "女":
-            g.node(pid, label=label, shape="box", style="rounded,filled",
-                   fillcolor="#FFE6E6", fontsize="11")
+            g.node(pid, label=label, shape="box", style="filled", fillcolor="lightblue")
         else:
-            g.node(pid, label=label, shape="box", style="rounded,filled",
-                   fillcolor="white", fontsize="11")
+            g.node(pid, label=label, shape="box", style="rounded,filled", fillcolor="mistyrose")
 
-    # Marriage point nodes
-    for mid, _m in marriages.items():
+    # Invisible point nodes for marriages
+    for mid, m in marriages.items():
         g.node(mid, label="", shape="point", width="0.01")
 
-    # Spouse adjacency on the SAME RANK (horizontal)
+    # Horizontal spouse layout on same rank
     for mid, m in marriages.items():
         spouses = list(m.get("spouses", []))
         divorced = m.get("divorced", False)
-
         if len(spouses) == 2:
             s1, s2 = spouses
-
-            # 1) Put spouses on same horizontal rank
-            with g.subgraph(name=f"rank_{mid}") as sg:
+            with g.subgraph() as sg:
                 sg.attr(rank="same")
-                sg.node(s1)
-                sg.node(s2)
-
-            # 2) Strong invisible order s1 -> s2 (keeps them adjacent)
-            g.edge(s1, s2, style="invis", weight="220", constraint="true")
-
-            # 3) Visible spouse line (horizontal). Do not affect ranks.
-            g.edge(s1, s2, style="dashed" if divorced else "solid",
-                   penwidth="2", constraint="false")
-
-            # 4) Link spouses to marriage point without rank constraints
-            g.edge(s1, mid, style="invis", weight="10", constraint="false")
-            g.edge(s2, mid, style="invis", weight="10", constraint="false")
-
+                sg.edge(s1, s2, style="dashed" if divorced else "solid", penwidth="2", constraint="false")
+                sg.edge(s1, mid, style="invis", weight="200")
+                sg.edge(s2, mid, style="invis", weight="200")
         elif len(spouses) == 1:
             s1 = spouses[0]
-            g.edge(s1, mid, style="invis", weight="10", constraint="false")
+            g.edge(s1, mid, style="invis", weight="120")
 
-    # Children edges & sibling ordering (to help spouses stay adjacent across families)
+    # Children edges & sibling ordering
     parent_of = _parents_map(tree)
     spouse_map = _spouse_map(tree)
-
     for mid, m in marriages.items():
         children = list(m.get("children", []))
-
-        # Draw vertical edges from marriage point to children
         for c in children:
             if c in persons:
                 g.edge(mid, c, weight="8")
 
-        # Sibling ordering heuristic
         if len(children) >= 2:
-            right_pref: List[str] = []
-            neutral: List[str] = []
+            right_pref = []
+            neutral = []
             for c in children:
                 pref = "neutral"
-                for _m2_id, spouses2 in spouse_map.get(c, []):
+                for m2_id, spouses2 in spouse_map.get(c, []):
                     partners = [x for x in spouses2 if x != c]
                     if not partners:
                         continue
@@ -183,13 +161,15 @@ def render_graph(tree: dict) -> graphviz.Graph:
                     if partner_parents and partner_parents != mid:
                         pref = "right"
                         break
-                (right_pref if pref == "right" else neutral).append(c)
-
+                if pref == "right":
+                    right_pref.append(c)
+                else:
+                    neutral.append(c)
             ordered_children = neutral + right_pref
             if len(ordered_children) >= 2:
-                for i in range(len(ordered_children) - 1):
+                for i in range(len(ordered_children)-1):
                     a = ordered_children[i]
-                    b = ordered_children[i + 1]
+                    b = ordered_children[i+1]
                     if a in persons and b in persons:
                         g.edge(a, b, style="invis", weight="150", constraint="true")
 
@@ -201,8 +181,6 @@ def render_graph(tree: dict) -> graphviz.Graph:
 
 def _sidebar_controls():
     st.sidebar.header("📦 匯入 / 匯出")
-
-    # Export (sidebar)
     data_str = _export_json()
     st.sidebar.download_button(
         label="⬇️ 匯出 JSON",
@@ -211,9 +189,7 @@ def _sidebar_controls():
         mime="application/json",
         use_container_width=True,
     )
-
-    # Import (sidebar)
-    uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
+    uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"])
     if uploaded is not None:
         try:
             text = uploaded.read().decode("utf-8")
@@ -221,47 +197,12 @@ def _sidebar_controls():
             st.sidebar.success("已匯入，家族樹已更新")
         except Exception as e:
             st.sidebar.error(f"匯入失敗：{e}")
-
-    # CLEAR ALL (sidebar)
-    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
+    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True):
         _reset_tree()
         st.sidebar.warning("已清空家族樹")
-
     st.sidebar.markdown("---")
-    st.sidebar.caption("提示：配偶以水平線連結（離婚為虛線），子女由婚姻點往下連。")
+    st.sidebar.caption("提示：配偶使用水平線（離婚為虛線），子女由婚姻點往下連。")
 
-def _bottom_io_controls():
-    st.markdown("---")
-    st.subheader("📦 資料匯入 / 匯出")
-    c1, c2, c3 = st.columns([2, 2, 1])
-
-    with c1:
-        st.markdown("**匯出目前資料**")
-        st.download_button(
-            label="⬇️ 匯出 JSON",
-            data=_export_json().encode("utf-8"),
-            file_name="family_tree.json",
-            mime="application/json",
-            use_container_width=True,
-            key="bottom_export",
-        )
-
-    with c2:
-        st.markdown("**匯入 JSON 檔**")
-        uploaded2 = st.file_uploader("選擇檔案", type=["json"], key="bottom_uploader")
-        if uploaded2 is not None:
-            try:
-                text = uploaded2.read().decode("utf-8")
-                _import_json(text)
-                st.success("已匯入，家族樹已更新")
-            except Exception as e:
-                st.error(f"匯入失敗：{e}")
-
-    with c3:
-        st.markdown("**動作**")
-        if st.button("🧹 全部清空", type="secondary", use_container_width=True, key="bottom_clear"):
-            _reset_tree()
-            st.warning("已清空家族樹")
 
 def _person_manager():
     st.subheader("👤 人員管理")
@@ -272,14 +213,13 @@ def _person_manager():
         gender = st.selectbox("性別", ["", "男", "女"], index=0, help="只提供男/女選項")
     with c3:
         note = st.text_input("備註", key="person_note")
-
-    if st.button("新增成員", type="primary"):
+    add = st.button("新增成員", type="primary")
+    if add:
         if not name.strip():
             st.error("請輸入姓名")
         else:
             pid = add_person(name, gender, note)
             st.success(f"已新增：{name}（{pid}）")
-
     if st.session_state.family_tree["persons"]:
         st.dataframe(
             {
@@ -292,82 +232,85 @@ def _person_manager():
             hide_index=True,
         )
 
+
 def _marriage_manager():
     st.subheader("💍 婚姻與子女")
     persons = st.session_state.family_tree.get("persons", {})
-    p_values = list(persons.keys())
+    p_opts = [(v.get("name", k), k) for k, v in persons.items()]
+    p_values = [pid for _, pid in p_opts]
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        s1 = st.selectbox("配偶 A", options=["-"] + p_values,
-                          format_func=lambda x: "-" if x == "-" else f"{persons[x]['name']}｜{x}")
+        s1 = st.selectbox(
+            "配偶 A",
+            options=["-"] + p_values,
+            format_func=lambda x: "-" if x == "-" else f"{persons[x]['name']}｜{x}",
+            key="spouse_a_select"
+        )
     with c2:
-        s2 = st.selectbox("配偶 B", options=["-"] + p_values,
-                          format_func=lambda x: "-" if x == "-" else f"{persons[x]['name']}｜{x}")
+        s2 = st.selectbox(
+            "配偶 B",
+            options=["-"] + p_values,
+            format_func=lambda x: "-" if x == "-" else f"{persons[x]['name']}｜{x}",
+            key="spouse_b_select"
+        )
     with c3:
-        st.markdown("\n")
+        st.markdown("
+")
         make = st.button("建立婚姻")
-
     if make:
         if s1 == "-" or s2 == "-" or s1 == s2:
             st.error("請選擇兩位不同成員作為配偶")
         else:
             mid = add_or_get_marriage(s1, s2)
-            st.success(f"已建立/取得婚姻：{mid}")
-
+            # 記住剛建立的婚姻，避免畫面更新後選擇消失
+            st.session_state["marriage_select"] = mid
+            st.success(f"已建立婚姻：{mid}")
     marriages = st.session_state.family_tree.get("marriages", {})
     if marriages:
         mids = list(marriages.keys())
-
         def _m_label(mid: str) -> str:
             sp = marriages[mid].get("spouses", [])
             names = [persons.get(x, {}).get("name", x) for x in sp]
             return f"{mid}｜{' ↔ '.join(names)}"
-
         selected_mid = st.selectbox(
             "選擇婚姻（用於新增子女/設定離婚）",
             options=mids,
             format_func=_m_label,
-            key="marriage_select"  # 綁定狀態，加入子女後不跳走
+            key="marriage_select"
         )
-
         c4, c5 = st.columns([3, 2])
         with c4:
             child = st.selectbox(
-                "選擇子女（現有成員）",
-                options=["-"] + list(persons.keys()),
-                format_func=lambda x: "-" if x == "-" else f"{persons[x]['name']}｜{x}"
-            )
+            "選擇子女（現有成員）",
+            options=["-"] + list(persons.keys()),
+            format_func=lambda x: "-" if x == "-" else f"{persons[x]['name']}｜{x}",
+            key="child_select"
+        )
         with c5:
             st.markdown("\n")
             addc = st.button("加入子女")
-
         if addc:
             if child == "-":
                 st.error("請選擇一位成員作為子女")
             else:
                 add_child(selected_mid, child)
-                st.session_state["marriage_select"] = selected_mid  # 保持選取
+                # 保留目前選取的婚姻，不跳畫面
+                st.session_state["marriage_select"] = selected_mid
                 st.success("已加入子女")
-
         divorced_now = marriages[selected_mid].get("divorced", False)
         new_divorced = st.checkbox("此婚姻為離婚狀態（配偶線改為虛線）", value=divorced_now)
         if new_divorced != divorced_now:
             toggle_divorce(selected_mid, new_divorced)
             st.info("已更新離婚狀態")
-
         st.markdown("---")
         rows = []
         for mid, m in marriages.items():
             sp = [persons.get(x, {}).get("name", x) for x in m.get("spouses", [])]
             ch = [persons.get(x, {}).get("name", x) for x in m.get("children", [])]
-            rows.append({
-                "mid": mid,
-                "配偶": "、".join(sp),
-                "子女": "、".join(ch),
-                "離婚": "是" if m.get("divorced", False) else "否",
-            })
+            rows.append({"mid": mid, "配偶": "、".join(sp), "子女": "、".join(ch), "離婚": "是" if m.get("divorced", False) else "否"})
         st.dataframe(rows, use_container_width=True, hide_index=True)
+
 
 def _viewer():
     st.subheader("🌳 家族樹")
@@ -385,21 +328,16 @@ def _viewer():
 def main():
     st.set_page_config(page_title="家族樹", page_icon="🌳", layout="wide")
     _init_state()
-
     st.title("🌳 家族樹")
-
     _sidebar_controls()
-
     with st.expander("➕ 建立 / 管理成員與關係", expanded=True):
         _person_manager()
         _marriage_manager()
-
     _viewer()
-    _bottom_io_controls()
 
-# Some hosting frameworks expect a render() entrypoint for pages
+# hosting frameworks entry
+
 def render():
-    """Render entry for multipage apps expecting pages_familytree.render()."""
     main()
 
 if __name__ == "__main__":
