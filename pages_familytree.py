@@ -1,4 +1,4 @@
-# pages_familytree.py  — with "Execute Import" buttons and safe state management
+# pages_familytree.py — full version with sibling same-rank & execute-import buttons
 
 import json
 import uuid
@@ -19,7 +19,6 @@ def _rerun():
     try:
         st.rerun()
     except Exception:
-        # for older versions
         st.experimental_rerun()
 
 def _init_state():
@@ -169,19 +168,25 @@ def render_graph(tree: dict) -> graphviz.Graph:
             s1 = spouses[0]
             g.edge(s1, mid, style="invis", weight="10", constraint="false")
 
-    # 子女邊與兄弟姊妹排序（讓跨家庭夫妻更易相鄰）
+    # 兄弟姊妹：同層 + 排序（讓跨家庭夫妻靠攏）
     parent_of = _parents_map(tree)
     spouse_map = _spouse_map(tree)
 
     for mid, m in marriages.items():
-        children = list(m.get("children", []))
+        children = [c for c in m.get("children", []) if c in persons]
 
-        # 從婚姻點往下連到子女
+        # 0) 強制所有子女同一水平層
+        if children:
+            with g.subgraph(name="rank_children_{}".format(mid)) as sgc:
+                sgc.attr(rank="same")
+                for c in children:
+                    sgc.node(c)
+
+        # 1) 從婚姻點往下連到每位子女（垂直）
         for c in children:
-            if c in persons:
-                g.edge(mid, c, weight="8")
+            g.edge(mid, c, weight="8")
 
-        # 兄弟姊妹排序：將與「另一家庭」結婚的孩子推到右側
+        # 2) 兄弟姊妹排序：將與「另一家庭」結婚的孩子推到右側
         if len(children) >= 2:
             right_pref: List[str] = []
             neutral: List[str] = []
@@ -196,17 +201,15 @@ def render_graph(tree: dict) -> graphviz.Graph:
                     if partner_parents and partner_parents != mid:
                         pref = "right"
                         break
-                if pref == "right":
-                    right_pref.append(c)
-                else:
-                    neutral.append(c)
+                (right_pref if pref == "right" else neutral).append(c)
+
             ordered_children = neutral + right_pref
-            if len(ordered_children) >= 2:
-                for i in range(len(ordered_children) - 1):
-                    a = ordered_children[i]
-                    b = ordered_children[i + 1]
-                    if a in persons and b in persons:
-                        g.edge(a, b, style="invis", weight="150", constraint="true")
+
+            # 用不可見邊固定左右相鄰
+            for i in range(len(ordered_children) - 1):
+                a = ordered_children[i]
+                b = ordered_children[i + 1]
+                g.edge(a, b, style="invis", weight="150", constraint="true")
 
     return g
 
@@ -231,7 +234,7 @@ def _sidebar_controls():
         width="stretch",
     )
 
-    # 匯入（側欄）—— 改為「選檔 + ▶️ 執行匯入」兩步
+    # 匯入（側欄）—— 選檔 + ▶️ 執行匯入
     uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
     if uploaded is not None:
         if st.sidebar.button("▶️ 執行匯入", type="primary"):
