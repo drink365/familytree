@@ -22,7 +22,7 @@ def load_brand():
             "BG": "#F7FAFC",
             "LOGO_SQUARE": "logo2.png",
             "SHOW_SIDEBAR_LOGO": True,
-            "TAGLINE": "說清楚，做得到",
+            "TAGLINE": "財富永續｜基業長青｜幸福永傳",
             "SUBLINE": "把傳承變簡單。",
             "RETINA_FACTOR": 3,
         }
@@ -162,7 +162,7 @@ def render_home():
     st.markdown(
         """
         <div class="signature-band">
-          財富永續｜基業長青｜<span class="mark-ever">幸福永傳</span>
+          財富永續｜基業長青｜幸福永傳</span>
         </div>
         <style>
           .signature-band{
