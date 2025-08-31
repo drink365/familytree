@@ -1,10 +1,12 @@
 # pages_policy.py
+# -*- coding: utf-8 -*-
 import streamlit as st
 from datetime import datetime
 from typing import Optional
 
-# PDF：與其他頁一致的品牌工具
-from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
+# PDF：與其他頁一致的品牌工具 + 相容性表格 helper
+from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
+from utils.pdf_compat import table_compat
 
 # ----------------------------- Helpers -----------------------------
 def _fmt_currency(n: float, currency: str) -> str:
@@ -223,7 +225,7 @@ def render():
         })
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    # ---------------- PDF（參考你那頁的風格，A→B→fallback） ----------------
+    # ---------------- PDF（同品牌風格＋正式表格） ----------------
     try:
         headers = ["年度", "當年度現金流", "累積現金流", "年末現金價值"]
         table_rows = [
@@ -244,25 +246,8 @@ def render():
             h2("現金價值與現金流（示意）"),
         ]
 
-        # 方案 A：明確 data + 欄寬（多數版本支援）
-        table_node = None
-        try:
-            table_node = table(data=[headers] + table_rows, widths=[0.12, 0.29, 0.29, 0.30])
-        except Exception:
-            # 方案 B：位置參數（headers, rows, widths）
-            try:
-                table_node = table(headers, table_rows, widths=[0.12, 0.29, 0.29, 0.30])
-            except Exception:
-                table_node = None
-
-        if table_node is not None:
-            flow.append(table_node)
-        else:
-            # 最後備援：文字表格，確保不中斷
-            flow.append(p("｜".join(headers)))
-            for r in table_rows:
-                flow.append(p("｜".join(r)))
-
+        # 相容呼叫（A/B 自動判斷），欄寬比例可按需要微調
+        flow.append(table_compat(headers, table_rows, widths=[0.12, 0.29, 0.29, 0.30]))
         flow.extend([spacer(6), p("產出日期：" + datetime.now().strftime("%Y/%m/%d"))])
 
         pdf_bytes = build_branded_pdf_bytes(flow)
@@ -274,4 +259,32 @@ def render():
             use_container_width=True,
         )
     except Exception as e:
-        st.error(f"PDF 仍無法建立：{e}")
+        # 極少數真的不相容時，退回文字表（避免空白 PDF）
+        st.warning("PDF 表格相容性異常，已退回文字表格。")
+        try:
+            flow_fallback = [
+                title("保單策略（示意）"),
+                p("【重要提醒】本檔所有數字為 AI 根據輸入參數之示意模擬，僅供教育與討論。"),
+                spacer(6),
+                h2("摘要"),
+                p(f"年繳保費 × 年期（幣別：{_currency_name(currency)}）：{_fmt_currency(premium, currency)} × {int(years)} ＝ 總保費 {_fmt_currency(total_premium, currency)}"),
+                p(f"估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜{stance}）"),
+                p(f"第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}"),
+                spacer(6),
+                h2("現金價值與現金流（示意）"),
+            ]
+            flow_fallback.append(p("｜".join(headers)))
+            for r in table_rows:
+                flow_fallback.append(p("｜".join(r)))
+            flow_fallback.append(spacer(6))
+            flow_fallback.append(p("產出日期：" + datetime.now().strftime("%Y/%m/%d")))
+            pdf_bytes = build_branded_pdf_bytes(flow_fallback)
+            st.download_button(
+                "⬇️ 下載保單策略 PDF（文字表格）",
+                data=pdf_bytes,
+                file_name=f"policy_strategy_{datetime.now().strftime('%Y%m%d')}.pdf",
+                mime="application/pdf",
+                use_container_width=True,
+            )
+        except Exception as e2:
+            st.error(f"PDF 仍無法建立：{e2}")
