@@ -4,9 +4,8 @@ import streamlit as st
 from datetime import datetime
 
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, spacer
-# 若已建立相容小工具（table_compat），PDF 會用正式表格；沒有也會自動退回文字列表
 try:
-    from utils.pdf_compat import table_compat as pdf_table
+    from utils.pdf_compat import table_compat as pdf_table  # 有就用正式表格
 except Exception:
     pdf_table = None
 
@@ -17,7 +16,7 @@ from tax import (
     ESTATE_BRACKETS,
 )
 
-# ===== 小工具：畫面顯示以「萬元」；內部運算仍用「元」 =====
+# ===== 工具：畫面顯示以「萬元」；內部運算用「元」 =====
 def _wan(n: int | float) -> int:
     try:
         return int(round(n / 10000.0))
@@ -28,7 +27,6 @@ def _fmt_wan(n: int | float) -> str:
     return f"{_wan(n):,} 萬元"
 
 def _fmt_pct(x: float) -> str:
-    """百分比好讀格式：整數%不帶小數，否則到兩位小數。"""
     try:
         v = round(float(x) * 100, 2)
         if v.is_integer():
@@ -38,15 +36,41 @@ def _fmt_pct(x: float) -> str:
     except Exception:
         return "—"
 
+# 小型統計卡片（避免大字被截斷）
+def _stat_card(label: str, value: str) -> str:
+    return f"""
+    <div class="stat-card">
+      <div class="stat-label">{label}</div>
+      <div class="stat-value">{value}</div>
+    </div>
+    """
+
 # ============================== Page ==============================
 def render():
     # 標題
     st.subheader("🧾 法稅工具｜法定繼承人與遺產稅試算")
     st.caption("此頁為示意試算，僅供會談討論；正式申報請以主管機關規定與專業人士意見為準。")
 
+    # CSS：小型統計卡片＋紅色百分比
+    st.markdown(
+        """
+        <style>
+        .stat-card{
+            padding:12px 14px;border:1px solid #e5e7eb;border-radius:12px;
+            background:#fff; box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+        }
+        .stat-label{font-size:0.95rem;color:#6b7280;margin-bottom:4px}
+        .stat-value{font-size:1.2rem;font-weight:700;color:#111827;line-height:1.4}
+        .pct-red{color:#c2272d;font-weight:700}
+        .inline-sep{color:#9ca3af;margin:0 .25rem}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     st.divider()
 
-    # ===== ① 家屬結構（決定繼承順位與扣除名額） =====
+    # ===== ① 家屬結構 =====
     st.markdown("### ① 家屬結構")
     st.caption("勾選/輸入家屬狀況，系統自動判定法定繼承人與應繼分，並在後端帶入可用的扣除名額。")
 
@@ -84,23 +108,21 @@ def render():
     order, shares = determine_heirs_and_shares(spouse_alive, child_count, parent_count, sibling_count, grandparent_count)
     display_order = ("配偶＋" + order) if spouse_alive else order
 
-    # 後端計算扣除名額（不顯示在前端）
+    # 後端運算名額（不顯示）
     eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
 
-    # 法定繼承人與應繼分（友善呈現）
+    # 法定繼承人 & 應繼分（比例紅色）
     st.markdown(f"**法定繼承人**：{display_order or '（無）'}")
     if shares:
-        # 以「配偶、子女、父母、兄弟姊妹、祖父母」的語義排序呈現更自然
         key_order = ["配偶", "子女", "父母", "兄弟姊妹", "祖父母"]
         parts = []
         for k in key_order:
             if k in shares:
-                parts.append(f"{k} **{_fmt_pct(shares[k])}**")
-        # 補上其餘（避免自定義 key 遺漏）
+                parts.append(f'{k} <span class="pct-red">{_fmt_pct(shares[k])}</span>')
         for k, v in shares.items():
             if k not in key_order:
-                parts.append(f"{k} **{_fmt_pct(v)}**")
-        st.markdown("**應繼分**：" + "｜".join(parts))
+                parts.append(f'{k} <span class="pct-red">{_fmt_pct(v)}</span>')
+        st.markdown("**應繼分**： " + " <span class='inline-sep'>｜</span> ".join(parts), unsafe_allow_html=True)
     else:
         st.info("目前無可辨識之繼承人（或僅配偶）。")
 
@@ -134,17 +156,17 @@ def render():
     taxable = max(0, int(estate_base - total_deductions))
     result = apply_brackets(taxable, ESTATE_BRACKETS)
 
-    # ===== ③ 試算結果（摘要卡片） =====
+    # ===== ③ 試算結果（小型統計卡片） =====
     st.markdown("### ③ 試算結果")
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("可扣除總額", _fmt_wan(total_deductions))
-    with m2:
-        st.metric("課稅基礎", _fmt_wan(taxable))
-    with m3:
-        st.metric("適用稅率", f"{result['rate']}%")
-    with m4:
-        st.metric("預估應納稅額", _fmt_wan(result["tax"]))
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        st.markdown(_stat_card("可扣除總額", _fmt_wan(total_deductions)), unsafe_allow_html=True)
+    with c2:
+        st.markdown(_stat_card("課稅基礎", _fmt_wan(taxable)), unsafe_allow_html=True)
+    with c3:
+        st.markdown(_stat_card("適用稅率", f"{result['rate']}%"), unsafe_allow_html=True)
+    with c4:
+        st.markdown(_stat_card("預估應納稅額", _fmt_wan(result["tax"])), unsafe_allow_html=True)
 
     with st.expander("查看扣除明細", expanded=False):
         st.write({
@@ -160,16 +182,14 @@ def render():
     # ===== 下載 PDF =====
     st.markdown("### 下載 PDF")
     flow = [
-        # 用 h2；字級不會像 title 那麼大，但會是粗體（符合你的要求）
         h2("遺產稅試算結果"), spacer(6),
         h2("法定繼承人與應繼分"),
         p("法定繼承人：" + (display_order or "（無）")),
-        p("應繼分：" + ("｜".join([f"{k} { _fmt_pct(v) }" for k, v in shares.items()]) if shares else "N/A")),
+        p("應繼分：" + ("｜".join([f"{k} {_fmt_pct(v)}" for k, v in shares.items()]) if shares else "N/A")),
         spacer(6),
         h2("扣除額計算（單位：萬元）"),
     ]
 
-    # 扣除表（PDF：優先正式表格）
     rows = []
     if funeral_capped > 0: rows.append(["喪葬費", "上限 138 萬", _fmt_wan(funeral_capped)])
     if spouse_ded > 0:     rows.append(["配偶扣除", "", _fmt_wan(spouse_ded)])
