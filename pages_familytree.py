@@ -223,7 +223,7 @@ def _sidebar_controls():
     )
 
     # Import
-    uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"])
+    uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
     if uploaded is not None:
         try:
             text = uploaded.read().decode("utf-8")
@@ -232,12 +232,44 @@ def _sidebar_controls():
         except Exception as e:
             st.sidebar.error(f"匯入失敗：{e}")
 
-    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True):
+    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
         _reset_tree()
         st.sidebar.warning("已清空家族樹")
 
     st.sidebar.markdown("---")
     st.sidebar.caption("提示：配偶使用水平線（離婚為虛線），子女由婚姻點往下連。")
+
+
+def _bottom_io_controls():
+    st.markdown("---")
+    st.subheader("📦 資料匯入 / 匯出")
+
+    c1, c2, c3 = st.columns([2, 2, 1])
+    with c1:
+        st.markdown("**匯出目前資料**")
+        st.download_button(
+            label="⬇️ 匯出 JSON",
+            data=_export_json().encode("utf-8"),
+            file_name="family_tree.json",
+            mime="application/json",
+            use_container_width=True,
+            key="bottom_export",
+        )
+    with c2:
+        st.markdown("**匯入 JSON 檔**")
+        uploaded2 = st.file_uploader("選擇檔案", type=["json"], key="bottom_uploader")
+        if uploaded2 is not None:
+            try:
+                text = uploaded2.read().decode("utf-8")
+                _import_json(text)
+                st.success("已匯入，家族樹已更新")
+            except Exception as e:
+                st.error(f"匯入失敗：{e}")
+    with c3:
+        st.markdown("**動作**")
+        if st.button("🧹 全部清空", type="secondary", use_container_width=True, key="bottom_clear"):
+            _reset_tree()
+            st.warning("已清空家族樹")
 
 
 def _person_manager():
@@ -276,7 +308,6 @@ def _marriage_manager():
     st.subheader("💍 婚姻與子女")
     persons = st.session_state.family_tree.get("persons", {})
     p_opts = [(v.get("name", k), k) for k, v in persons.items()]
-    p_labels = [f"{name}｜{pid}" for name, pid in p_opts]
     p_values = [pid for _, pid in p_opts]
 
     c1, c2, c3 = st.columns(3)
@@ -299,6 +330,7 @@ def _marriage_manager():
     if marriages:
         # select marriage row
         mids = list(marriages.keys())
+
         def _m_label(mid: str) -> str:
             sp = marriages[mid].get("spouses", [])
             names = [persons.get(x, {}).get("name", x) for x in sp]
@@ -370,6 +402,14 @@ def main():
         _marriage_manager()
 
     _viewer()
+    _bottom_io_controls()
+
+
+# Some hosting frameworks expect a render() entrypoint for pages
+
+def render():
+    """Render entry for multipage apps expecting pages_familytree.render()."""
+    main()
 
 
 if __name__ == "__main__":
