@@ -1,10 +1,12 @@
-# pages_familytree.py — add "swap spouses left/right" per marriage
-# - Spouses adjacent via s1–mid–s2 (水平；沒子女不往下)
+# pages_familytree.py — spouses horizontal only; add child delete; unify penwidth
+# - Spouses adjacent via s1–mid–s2; spouse line never goes downward
 # - Only marriages with children render a small junction (mid_d) below
 # - Children connect from junction with straight (non-orthogonal) lines
 # - Siblings rank-same; ordering edges are invisible & non-constraining
-# - Import/Export with "▶️ 執行匯入" and "🧹 全部清空"
-# - NEW: per-marriage manual left/right order toggle to reduce crossings
+# - Import/Export with "▶️ 執行匯入" and "🧹 全部清空"; stable selection
+# - Swap spouses left/right per marriage to reduce crossings
+# - NEW: All edges penwidth unified to 2
+# - NEW: Delete children from a selected marriage
 
 import json
 import uuid
@@ -41,11 +43,10 @@ def _import_json(text: str):
     obj = json.loads(text)
     persons = {str(k): v for k, v in obj.get("persons", {}).items()}
     marriages = {str(k): v for k, v in obj.get("marriages", {}).items()}
-    # Backward-compat for "order"
+    # Backward-compat: ensure 'order'
     for mid, m in marriages.items():
-        sp = m.get("spouses", [])
-        if sp and "order" not in m:
-            marriages[mid]["order"] = list(sp)
+        if m.get("spouses") and "order" not in m:
+            marriages[mid]["order"] = list(m.get("spouses"))
     st.session_state.family_tree = {"persons": persons, "marriages": marriages}
     mids = list(marriages.keys())
     st.session_state.selected_mid = (
@@ -68,14 +69,13 @@ def add_or_get_marriage(p1: str, p2: str) -> str:
     a, b = sorted([p1, p2])
     for mid, m in st.session_state.family_tree["marriages"].items():
         if sorted(m.get("spouses", [])) == [a, b]:
-            # ensure order exists
             if "order" not in m:
                 m["order"] = [a, b]
             return mid
     mid = _uid("m")
     st.session_state.family_tree["marriages"][mid] = {
         "spouses": [a, b],
-        "order": [a, b],  # NEW: explicit left->right order
+        "order": [a, b],   # explicit left->right order
         "children": [],
         "divorced": False
     }
@@ -91,8 +91,14 @@ def add_child(mid: str, child_pid: str):
     if m and child_pid not in m["children"]:
         m["children"].append(child_pid)
 
+def remove_children(mid: str, child_ids: List[str]):
+    """Remove selected child ids from a marriage (does not delete persons)."""
+    m = st.session_state.family_tree["marriages"].get(mid)
+    if not m:
+        return
+    m["children"] = [c for c in m.get("children", []) if c not in set(child_ids)]
+
 def swap_spouse_order(mid: str):
-    """LEFT/RIGHT swap for selected marriage."""
     m = st.session_state.family_tree["marriages"].get(mid)
     if not m:
         return
@@ -120,9 +126,9 @@ def _spouse_map(tree: dict) -> Dict[str, List[Tuple[str, List[str]]]]:
 
 def render_graph(tree: dict) -> graphviz.Graph:
     g = graphviz.Graph("G", engine="dot")
-    # 直線/斜直線，不要直角；層距適中
+    # 直線/斜直線；統一線寬 penwidth=2
     g.attr(rankdir="TB", splines="line", nodesep="0.46", ranksep="0.7")
-    g.attr("edge", dir="none")
+    g.attr("edge", dir="none", penwidth="2")
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
@@ -150,7 +156,6 @@ def render_graph(tree: dict) -> graphviz.Graph:
     # 配偶：一定相鄰 s1–mid–s2；配偶線僅水平顯示（不參與布局）
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
-        # 容錯：若資料異常就 fallback
         if len(order) != 2:
             order = m.get("spouses", [])[:2]
         sp = order
@@ -163,16 +168,16 @@ def render_graph(tree: dict) -> graphviz.Graph:
             # 鎖定順序與貼近（不可見、具約束）
             g.edge(s1, mid, style="invis", weight="800", constraint="true", minlen="0")
             g.edge(mid, s2, style="invis", weight="800", constraint="true", minlen="0")
-            # 視覺配偶線（不參與布局）
+            # 視覺配偶線（不參與布局）；線寬同 2
             ls = "dashed" if divorced else "solid"
-            g.edge(s1, mid, style=ls, penwidth="2", constraint="false")
-            g.edge(mid, s2, style=ls, penwidth="2", constraint="false")
+            g.edge(s1, mid, style=ls, constraint="false")
+            g.edge(mid, s2, style=ls, constraint="false")
         elif len(sp) == 1:
             s1 = sp[0]
             with g.subgraph(name=f"rank_single_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid)
-            g.edge(s1, mid, style="solid", penwidth="2", constraint="false")
+            g.edge(s1, mid, style="solid", constraint="false")
             g.edge(s1, mid, style="invis", weight="600", constraint="true", minlen="0")
 
     # 兄弟姊妹：同層；排序邊完全不可見且不約束布局
@@ -192,9 +197,8 @@ def render_graph(tree: dict) -> graphviz.Graph:
                 for c in children:
                     sgc.node(c)
 
-            # 父母到 junction 的短線（可見、具約束）；僅當有子女才畫
-            g.edge(mid, f"{mid}_d", style="solid", penwidth="2",
-                   weight="900", minlen="1", constraint="true")
+            # 父母到 junction 的短線（可見、具約束）
+            g.edge(mid, f"{mid}_d", style="solid", weight="900", minlen="1", constraint="true")
 
             # junction 直線分到每位子女（具約束）
             for c in children:
@@ -355,7 +359,7 @@ def _marriage_manager():
             return f"{mid}｜{' ↔ '.join(names)}"
 
         selected_mid = st.selectbox(
-            "選擇婚姻（用於新增子女/設定離婚/左右交換）",
+            "選擇婚姻（新增/刪除子女、設定離婚、左右交換）",
             options=mids, index=default_index, format_func=_m_label,
         )
         st.session_state.selected_mid = selected_mid
@@ -385,6 +389,27 @@ def _marriage_manager():
                 add_child(selected_mid, child)
                 st.success("已加入子女")
 
+        # --- NEW: 刪除子女 ---
+        m = marriages[selected_mid]
+        current_children = m.get("children", [])
+        if current_children:
+            st.markdown("**刪除子女（只移出此婚姻，不刪除成員）**")
+            del_sel = st.multiselect(
+                "選擇要刪除的子女",
+                options=current_children,
+                format_func=lambda x: _fmt_pid(persons, x),
+                key="del_children_select"
+            )
+            if st.button("🗑️ 刪除子女"):
+                if not del_sel:
+                    st.warning("未選擇任何子女。")
+                else:
+                    remove_children(selected_mid, del_sel)
+                    st.success("已從此婚姻移除選定子女")
+                    _rerun()
+        else:
+            st.info("此婚姻目前沒有子女。")
+
         divorced_now = marriages[selected_mid].get("divorced", False)
         new_divorced = st.checkbox("此婚姻為離婚狀態（配偶線改為虛線）", value=divorced_now)
         if new_divorced != divorced_now:
@@ -393,12 +418,12 @@ def _marriage_manager():
 
         st.markdown("---")
         rows = []
-        for mid, m in marriages.items():
-            order = m.get("order") or m.get("spouses", [])
+        for mid, mm in marriages.items():
+            order = mm.get("order") or mm.get("spouses", [])
             sp_names = [persons.get(x, {}).get("name", x) for x in order]
-            ch = [persons.get(x, {}).get("name", x) for x in m.get("children", [])]
+            ch = [persons.get(x, {}).get("name", x) for x in mm.get("children", [])]
             rows.append({"mid": mid, "配偶(左→右)": "、".join(sp_names),
-                         "子女": "、".join(ch), "離婚": "是" if m.get("divorced", False) else "否"})
+                         "子女": "、".join(ch), "離婚": "是" if mm.get("divorced", False) else "否"})
         st.dataframe(rows, width="stretch", hide_index=True)
 
 def _viewer():
