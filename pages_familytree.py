@@ -1,8 +1,11 @@
 # pages_familytree.py — Spouse-first stable layout with side anchors
-# 修正：
-# 1) 用 child->parent_mid 對應，對每對夫妻建立左右錨定鏈，避免新增兄弟姐妹後左右對調。
-# 2) 夫妻線使用 ports：A:e->mid:w 與 mid:e->B:w，確保短而水平。
-# 其餘：配偶相鄰(強力不可見鎖)、刪子女、左右交換、離婚虛線、清空即時刷新、線條一致等。
+# 版本：移除左側 Sidebar 的匯入／匯出與說明（僅保留頁面下方的匯入／匯出與「全部清空」）
+# 其他重點：
+# - 夫妻相鄰、夫妻線水平（ports）
+# - 新增兄弟姊妹不會使兩邊原生家庭對調（左右錨定鏈）
+# - 線條粗細一致
+# - 刪除子女、配偶左右交換、離婚虛線
+# - 「全部清空」立刻刷新
 
 import json
 import uuid
@@ -129,13 +132,13 @@ def render_graph(tree: dict) -> graphviz.Digraph:
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.03", color="black")
 
-    # 先建 child -> parent_mid 對應（每個人通常只有一組父母）
+    # child -> parent_mid 對應
     parents_of = {}
     for pmid, m in marriages.items():
         for c in m.get("children", []):
             parents_of.setdefault(c, []).append(pmid)
 
-    # 夫妻相鄰(不可見鎖)、夫妻可見線(ports)、左右錨定鏈
+    # 夫妻相鄰鎖／夫妻水平線／左右錨定鏈
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -143,7 +146,7 @@ def render_graph(tree: dict) -> graphviz.Digraph:
         divorced = m.get("divorced", False)
 
         if len(order) == 2:
-            s1, s2 = order  # s1=左、s2=右
+            s1, s2 = order  # 左→右
             # 相鄰鎖
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
@@ -154,12 +157,12 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(s2, guard, style="invis", constraint="true", weight="50000", minlen="0")
 
-            # 可見夫妻線（水平短線）
+            # 夫妻可見線（水平短線）
             ls = "dashed" if divorced else "solid"
             g.edge(f"{s1}:e", f"{mid}:w", style=ls, constraint="false", weight="0", minlen="0")
             g.edge(f"{mid}:e", f"{s2}:w", style=ls, constraint="false", weight="0", minlen="0")
 
-            # **左右錨定**：把 A 的父母 mid 固定在左邊、B 的父母 mid 固定在右邊
+            # 左右錨定：A 的父母 mid 在左、B 的父母 mid 在右
             left_parent  = (parents_of.get(s1) or [None])[0]
             right_parent = (parents_of.get(s2) or [None])[0]
             chain = []
@@ -202,38 +205,12 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 def _fmt_pid(persons: dict, pid: str) -> str:
     return f"{persons.get(pid, {}).get('name', pid)}｜{pid}"
 
-def _sidebar_controls():
-    st.sidebar.header("📦 匯入 / 匯出")
-    st.sidebar.download_button(
-        label="⬇️ 匯出 JSON",
-        data=_export_json().encode("utf-8"),
-        file_name="family_tree.json",
-        mime="application/json",
-        use_container_width=True,
-    )
-    if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
-        _reset_tree()
-        st.sidebar.warning("已清空家族樹")
-        _safe_rerun()
-
-    uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
-    if uploaded is not None:
-        if st.sidebar.button("▶️ 執行匯入", type="primary", use_container_width=True):
-            try:
-                _import_json(uploaded.read().decode("utf-8"))
-                st.sidebar.success("已匯入，家族樹已更新")
-                _safe_rerun()
-            except Exception as e:
-                st.sidebar.error(f"匯入失敗：{e}")
-
-    st.sidebar.markdown("---")
-    st.sidebar.caption("夫妻水平相鄰；有子女時自 mid 向下生成匯流點。")
-
 def _bottom_io_controls():
     st.markdown("---")
     st.subheader("📦 資料匯入 / 匯出")
     c1, c2 = st.columns([2, 2], gap="large")
 
+    # 匯出與清空（頁面專用，無側邊版）
     with c1:
         st.markdown("**匯出目前資料**")
         st.download_button(
@@ -249,6 +226,7 @@ def _bottom_io_controls():
             st.warning("已清空家族樹")
             _safe_rerun()
 
+    # 匯入（頁面專用，無側邊版）
     with c2:
         st.markdown("**匯入 JSON 檔**")
         up2 = st.file_uploader("選擇檔案", type=["json"], key="bottom_uploader")
@@ -412,11 +390,15 @@ def main():
     st.set_page_config(page_title="家族樹", page_icon="🌳", layout="wide")
     _init_state()
     st.title("🌳 家族樹")
-    _sidebar_controls()
+
+    #（已移除 sidebar 的匯入／匯出與說明）
+
     with st.expander("➕ 建立 / 管理成員與關係", expanded=True):
-        _person_manager(); _marriage_manager()
+        _person_manager()
+        _marriage_manager()
+
     _viewer()
-    _bottom_io_controls()
+    _bottom_io_controls()  # 只在頁面下方提供匯入／匯出與「全部清空」
 
 def render():
     main()
