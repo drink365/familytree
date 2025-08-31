@@ -1,14 +1,26 @@
 # pages_policy.py
+import os
+import io
 import streamlit as st
 from datetime import datetime
 from typing import Optional
 
-# PDF（若專案無此模組，將自動略過下載功能）
+# （舊版備援）簡易 PDF 工具：若找不到 ReportLab 會用它輸出文字版
 try:
     from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer  # type: ignore
-    PDF_AVAILABLE = True
+    LEGACY_PDF_AVAILABLE = True
 except Exception:
-    PDF_AVAILABLE = False
+    LEGACY_PDF_AVAILABLE = False
+
+# ReportLab（新版，含 Logo 與表格）
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    REPORTLAB_AVAILABLE = False
 
 # ----------------------------- Helpers -----------------------------
 def _fmt_currency(n: float, currency: str) -> str:
@@ -20,7 +32,7 @@ def _fmt_currency(n: float, currency: str) -> str:
         return "—"
 
 def _fmt_currency_md(n: float, currency: str) -> str:
-    """供 Markdown 使用的貨幣字串（把 $ 轉成 \$，避免被當作 LaTeX）。"""
+    """供 Markdown 使用的貨幣字串（把 $ 轉成 \$，避免被當 LaTeX）。"""
     s = _fmt_currency(n, currency)
     return s.replace("$", "\\$")
 
@@ -115,6 +127,77 @@ FACE_MULTIPLIERS = {
     "積極": {"放大財富傳承": 7, "補足遺產稅": 6, "退休現金流": 5, "企業風險隔離": 6},
 }
 
+# --------------- ReportLab PDF：Logo + 表格（若可用） ---------------
+def _build_pdf_reportlab(
+    title_text: str,
+    summary_lines: list[str],
+    table_headers: list[str],
+    table_rows: list[list[str]],
+    logo_path: Optional[str] = None,
+) -> bytes:
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=36, rightMargin=36, topMargin=48, bottomMargin=36
+    )
+    styles = getSampleStyleSheet()
+    h1 = styles["Heading1"]
+    h2s = styles["Heading2"]
+    normal = styles["Normal"]
+    # 調整字距大小（Heading1 太大可略縮）
+    h1.fontSize = 20
+    h1.leading = 24
+
+    flow = []
+    # Logo（可選）
+    if logo_path and os.path.exists(logo_path):
+        try:
+            img = Image(logo_path)
+            # 縮放到適合的寬度
+            max_w = 140
+            iw, ih = img.drawWidth, img.drawHeight
+            if iw > max_w:
+                ratio = max_w / iw
+                img.drawWidth = iw * ratio
+                img.drawHeight = ih * ratio
+            flow.append(img)
+            flow.append(Spacer(1, 12))
+        except Exception:
+            pass
+
+    flow.append(Paragraph(title_text, h1))
+    flow.append(Spacer(1, 6))
+
+    for s in summary_lines:
+        flow.append(Paragraph(s, normal))
+    flow.append(Spacer(1, 10))
+    flow.append(Paragraph("現金價值與現金流（示意）", h2s))
+    flow.append(Spacer(1, 6))
+
+    # 表格資料
+    data = [table_headers] + table_rows
+    # 欄寬配置（百分比）
+    # 年度 | 當年度現金流 | 累積現金流 | 年末現金價值
+    col_w = [doc.width * 0.12, doc.width * 0.29, doc.width * 0.29, doc.width * 0.30]
+    tbl = Table(data, colWidths=col_w, repeatRows=1)
+    tbl.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 10),
+        ("ALIGN", (0, 0), (0, -1), "CENTER"),
+        ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.whitesmoke),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#9aa0a6")),
+        ("LINEBEFORE", (1, 0), (1, -1), 0.5, colors.HexColor("#9aa0a6")),
+        ("LINEBEFORE", (2, 0), (2, -1), 0.5, colors.HexColor("#9aa0a6")),
+        ("LINEBEFORE", (3, 0), (3, -1), 0.5, colors.HexColor("#9aa0a6")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    flow.append(tbl)
+
+    doc.build(flow)
+    return buf.getvalue()
+
 # ----------------------------- Page -----------------------------
 def render():
     st.subheader("📦 保單策略規劃（會談示意）")
@@ -137,7 +220,13 @@ def render():
     horizon = st.number_input("現金價值觀察年（示意）", min_value=5, max_value=40, value=10)
     SIM_YEARS_FIXED = 20
 
-    # 摘要（移除小圖示；UI 用 Markdown 安全貨幣，PDF 用純文字）
+    # PDF 設定（選填）：Logo 路徑
+    with st.expander("PDF 設定（選填）", expanded=False):
+        st.caption("PDF 將置頂顯示 Logo；若留空或找不到檔案會自動略過。")
+        default_logo = st.session_state.get("pdf_logo_path", "assets/logo.png")
+        logo_path = st.text_input("Logo 檔案路徑", value=default_logo, key="pdf_logo_path")
+
+    # 摘要（Markdown 安全字串）
     total_premium = _safe_int(premium) * _safe_int(years)
     face_mult = FACE_MULTIPLIERS[stance][goal]
     indicative_face = _safe_int(total_premium * face_mult)
@@ -206,7 +295,7 @@ def render():
         years_in=max(0, _safe_int(ss.get("pol_years_in", max(1, 20 - int(years))), 0)),
         inflow_amt=max(0.0, _safe_float(ss.get("pol_inflow_amt", 300_000), 0.0)),
         inflow_ratio_pct=max(0.0, _safe_float(ss.get("pol_inflow_ratio", 2.0), 0.0)),
-        sim_years=20,
+        sim_years=SIM_YEARS_FIXED,
     )
 
     if all(v == 0 for v in sim["annual_cf"]):
@@ -219,7 +308,7 @@ def render():
     if breakeven:
         st.success(f"損益平衡年約為 **第 {breakeven} 年**（累積現金流轉正）。")
 
-    # 表格
+    # 頁面表格
     st.markdown("#### 現金價值與現金流（示意）")
     rows = []
     for y, cv, v, acc in zip(sim["timeline"], sim["cv"], sim["annual_cf"], sim["cum_cf"]):
@@ -231,14 +320,30 @@ def render():
         })
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    # ---------------- PDF（摘要含幣別；下方用文字表格；不含任何 ** 或小圖示） ----------------
-    if PDF_AVAILABLE:
-        try:
-            headers = ["年度", "當年度現金流", "累積現金流", "年末現金價值"]
-            table_rows = [
-                [str(y), _fmt_currency(v, currency), _fmt_currency(acc, currency), _fmt_currency(cv, currency)]
-                for y, v, acc, cv in zip(sim["timeline"], sim["annual_cf"], sim["cum_cf"], sim["cv"])
+    # ---------------- PDF 下載：優先用 ReportLab（Logo + 表格），否則退回簡易版 ----------------
+    try:
+        headers = ["年度", "當年度現金流", "累積現金流", "年末現金價值"]
+        table_rows = [
+            [str(y), _fmt_currency(v, currency), _fmt_currency(acc, currency), _fmt_currency(cv, currency)]
+            for y, v, acc, cv in zip(sim["timeline"], sim["annual_cf"], sim["cum_cf"], sim["cv"])
+        ]
+
+        if REPORTLAB_AVAILABLE:
+            summary_lines = [
+                f"年繳保費 × 年期（幣別：{cur_zh}）：{_fmt_currency(premium, currency)} × {int(years)} ＝ 總保費 {_fmt_currency(total_premium, currency)}",
+                f"估計身故保額（倍數示意）：{_fmt_currency(indicative_face, currency)}（使用倍數 {face_mult}×｜{stance}）",
+                f"第 {int(horizon)} 年估計現金價值（IRR {irr:.1f}%）：{_fmt_currency(cv_h, currency)}",
             ]
+            pdf = _build_pdf_reportlab(
+                title_text="保單策略（示意）",
+                summary_lines=summary_lines,
+                table_headers=headers,
+                table_rows=table_rows,
+                logo_path=logo_path,
+            )
+        elif LEGACY_PDF_AVAILABLE:
+            # 備援：文字表格
+            # 動態等寬表格
             widths = [len(h) for h in headers]
             for r in table_rows:
                 for i, cell in enumerate(r):
@@ -262,8 +367,11 @@ def render():
             ]
             for r in table_rows:
                 flow.append(p(_fmt_row(r)))
-
             pdf = build_branded_pdf_bytes(flow)
+        else:
+            pdf = b""
+
+        if pdf:
             st.download_button(
                 "⬇️ 下載保單策略 PDF",
                 data=pdf,
@@ -271,5 +379,7 @@ def render():
                 mime="application/pdf",
                 use_container_width=True,
             )
-        except Exception:
-            pass
+        else:
+            st.info("目前環境無法產生 PDF（缺少 ReportLab 與內建 PDF 工具）。")
+    except Exception:
+        st.info("建立 PDF 時發生例外，但不影響頁面使用。若需要我幫你排查，請貼出錯訊。")
