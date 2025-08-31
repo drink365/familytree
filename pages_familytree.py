@@ -228,7 +228,7 @@ def _sidebar_controls():
         st.sidebar.warning("已清空家族樹")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("提示：配偶以水平線連結（離婚為虛線），子女由較低的落點以**直線**連接。")
+    st.sidebar.caption("提示：配偶以水平線連結（離婚為虛線），子女自下引點以**直線**連接。")
 
 def _bottom_io_controls():
     st.markdown("---")
