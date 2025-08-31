@@ -1,10 +1,7 @@
-# demo.py（品牌自動載入＋上傳自訂＋情境說明＋新手引導｜安全共存版）
-# 目的：
-# 1) 不影響現有架構（獨立頁面、避免 session key 衝突、set_page_config 安全）
-# 2) 自動讀取 brand.json 與 logo.png/logo2.png；亦支援側邊欄上傳 Logo 與輸入聯絡資訊
-# 3) 三步驟體驗：資產輸入 → 一鍵模擬 → 下載一頁摘要（HTML 可列印 PDF）
-# 4) 內建三個情境模板＋情境說明，能一鍵載入並同步寫入報告
-# 5) 新手引導模式（onboarding）：進度條、提示、上一步／下一步／略過引導
+# demo.py（品牌自動載入＋上傳自訂＋情境說明＋新手引導｜修正版：寬版＋唯一鍵）
+# 說明：
+# - 改為 layout="wide"（若 app.py 已設定，這裡會自動忽略）
+# - 修正 StreamlitDuplicateElementId：step_nav() 加入 key_prefix，三處分別呼叫 step_nav("s1"/"s2"/"s3")
 
 from typing import Dict, Optional
 import base64, json, os, math
@@ -16,7 +13,7 @@ import streamlit as st
 # Page Config（若已被其他頁設定，忽略即可）
 # -----------------------------
 try:
-    st.set_page_config(page_title="影響力｜家族資產地圖 Demo", page_icon="🧭", layout="centered")
+    st.set_page_config(page_title="影響力｜家族資產地圖 Demo", page_icon="🧭", layout="wide")  # 改為寬版
 except Exception:
     pass
 
@@ -160,8 +157,8 @@ def simulate_with_without_insurance(total_assets: int, insurance_benefit: int) -
 # -----------------------------
 def build_summary_html(
     r: Dict[str, int],
-    logo_src: str,               # data uri 或 http(s) url，可為空字串
-    contact_text: str,           # 多行文字；以 \n 換行
+    logo_src: str,
+    contact_text: str,
     scenario_title: Optional[str] = None,
     scenario_desc: Optional[dict] = None,
 ) -> str:
@@ -233,7 +230,7 @@ hr {{ border:none; border-top:1px solid #eee; margin:16px 0; }}
 </html>"""
 
 # -----------------------------
-# Session 狀態（避免與主程式衝突）
+# Session 狀態
 # -----------------------------
 if "demo_assets" not in st.session_state:
     st.session_state.demo_assets = {k: 0 for k in ASSET_CATS}
@@ -249,35 +246,30 @@ if "demo_logo_url" not in st.session_state:
     st.session_state.demo_logo_url = ""
 
 # -----------------------------
-# 嘗試自動載入 ZIP 內的品牌設定（brand.json / logo.png / logo2.png）
+# 嘗試自動載入品牌設定（brand.json / logo.png / logo2.png）
 # -----------------------------
 _brand = load_brand_config()
 if _brand:
-    # 1) 聯絡資訊 CONTACT（若側邊欄尚未自訂）
     if st.session_state.demo_brand_contact == "" or st.session_state.demo_brand_contact.startswith("永傳家族辦公室"):
         contact = _brand.get("CONTACT")
         if contact:
             st.session_state.demo_brand_contact = contact
 
-    # 2) 尋找 LOGO 檔（優先 wide，再用 square），以 data URI 內嵌
     wide = _brand.get("LOGO_WIDE", "")
     square = _brand.get("LOGO_SQUARE", "")
-    logo_candidates = [
-        wide, square,
-        os.path.join("familytree-main", wide),
-        os.path.join("familytree-main", square)
-    ]
+    logo_candidates = [wide, square,
+                       os.path.join("familytree-main", wide),
+                       os.path.join("familytree-main", square)]
     for p in logo_candidates:
         if p and os.path.exists(p):
             st.session_state.demo_logo_data_uri = path_to_data_uri(p)
             break
 
 # -----------------------------
-# 側邊欄：品牌自訂（Logo 與聯絡資訊）
+# 側邊欄：品牌自訂
 # -----------------------------
 with st.sidebar:
     st.subheader("⚙️ 品牌設定（可選）")
-
     uploaded_logo = st.file_uploader("上傳 Logo（PNG/JPG/SVG）", type=["png", "jpg", "jpeg", "svg"])
     if uploaded_logo:
         st.session_state.demo_logo_data_uri = file_to_data_uri(uploaded_logo)
@@ -295,45 +287,53 @@ with st.sidebar:
         help="每一行會在報告中換行顯示",
     )
 
-# 顯示用與報告用的 Logo 來源（上傳 > 網址）
 page_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url
 report_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url
 brand_contact_text = st.session_state.demo_brand_contact
 
 # -----------------------------
-# 新手引導（Onboarding）狀態與工具
+# 新手引導（Onboarding）
 # -----------------------------
 if "demo_onboarding" not in st.session_state:
-    st.session_state.demo_onboarding = True   # 預設打開引導
+    st.session_state.demo_onboarding = True
 if "demo_step" not in st.session_state:
-    st.session_state.demo_step = 1            # 1→2→3
+    st.session_state.demo_step = 1
 if "demo_seen_onboarding" not in st.session_state:
     st.session_state.demo_seen_onboarding = False
 
 def step_enabled(target_step: int) -> bool:
-    """在引導模式下，只開放『目前步驟』；非引導模式則全開。"""
     if not st.session_state.demo_onboarding:
         return True
     return st.session_state.demo_step == target_step
 
 def guide_hint(title: str, bullets: list):
-    """在每一步上方顯示友善提示。"""
     with st.container():
         st.success("✅ " + title)
         for b in bullets:
             st.markdown(f"- {b}")
 
-def step_nav():
-    """步驟導覽控制：上一步／下一步／略過引導。"""
+def step_nav(key_prefix: str):
     c1, c2, c3 = st.columns([1,1,1])
     with c1:
-        st.button("⬅ 上一步", disabled=st.session_state.demo_step <= 1,
-                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step - 1))
+        st.button(
+            "⬅ 上一步",
+            key=f"{key_prefix}_prev",
+            disabled=st.session_state.demo_step <= 1,
+            on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step - 1),
+        )
     with c2:
-        st.button("略過引導", on_click=lambda: st.session_state.update(demo_onboarding=False, demo_seen_onboarding=True))
+        st.button(
+            "略過引導",
+            key=f"{key_prefix}_skip",
+            on_click=lambda: st.session_state.update(demo_onboarding=False, demo_seen_onboarding=True),
+        )
     with c3:
-        st.button("下一步 ➡", disabled=st.session_state.demo_step >= 3,
-                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step + 1))
+        st.button(
+            "下一步 ➡",
+            key=f"{key_prefix}_next",
+            disabled=st.session_state.demo_step >= 3,
+            on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step + 1),
+        )
 
 def onboarding_header():
     if not st.session_state.demo_onboarding:
@@ -367,7 +367,6 @@ st.divider()
 # Step 1
 st.subheader("① 建立家族資產地圖")
 
-# --- 引導提示（Step1）---
 if st.session_state.demo_onboarding and st.session_state.demo_step == 1:
     guide_hint("先建立資產地圖", [
         "可先按「🔎 載入示範數據」或點選三個情境之一。",
@@ -392,7 +391,6 @@ with left:
             st.session_state.demo_result = None
             st.session_state.demo_selected_scenario = None
 
-    # 一鍵載入典型情境
     s1, s2, s3 = st.columns(3)
     with s1:
         if st.button("🏢 創辦人A", disabled=not enabled_step1):
@@ -437,14 +435,13 @@ with right:
     st.metric("目前總資產 (NT$)", f"{total_assets:,.0f}")
 
 if st.session_state.demo_onboarding:
-    step_nav()
+    step_nav("s1")  # ← 唯一鍵前綴
 
 st.divider()
 
 # Step 2
 st.subheader("② 一鍵模擬：有保單 vs 無保單")
 
-# --- 引導提示（Step2）---
 if st.session_state.demo_onboarding and st.session_state.demo_step == 2:
     guide_hint("模擬有／無保單的差異", [
         "系統會先用稅額做為建議保額（可自行調整）。",
@@ -482,14 +479,13 @@ else:
 st.caption("＊法稅提醒：此模擬僅為示意，實務須視受益人、給付方式與最新法令而定。")
 
 if st.session_state.demo_onboarding:
-    step_nav()
+    step_nav("s2")  # ← 唯一鍵前綴
 
 st.divider()
 
 # Step 3
 st.subheader("③ 一頁摘要（可下載）")
 
-# --- 引導提示（Step3）---
 if st.session_state.demo_onboarding and st.session_state.demo_step == 3:
     guide_hint("下載一頁摘要（可列印 PDF）", [
         "檢視頁內摘要是否正確。",
@@ -503,7 +499,6 @@ if st.session_state.get("demo_result"):
     scenario_key = st.session_state.get("demo_selected_scenario")
     desc = SCENARIO_DESCRIPTIONS.get(scenario_key) if scenario_key else None
 
-    # 頁內摘要（含情境說明）
     base_md = f"""
 **總資產**：NT$ {r['總資產']:,.0f}  
 
@@ -528,7 +523,6 @@ if st.session_state.get("demo_result"):
 """
     st.markdown(base_md)
 
-    # 下載單頁 HTML（可列印成 PDF），同步帶入品牌與情境內容
     html = build_summary_html(
         r,
         logo_src=report_logo_src or "",
@@ -547,7 +541,7 @@ else:
     st.info("先完成上一步『一鍵模擬差異』，系統會自動生成摘要。")
 
 if st.session_state.demo_onboarding:
-    step_nav()
+    step_nav("s3")  # ← 唯一鍵前綴
 
 st.write("---")
 st.info("🚀 專業版（規劃中）：進階稅務模擬、更多情境比較、白標報告與客戶 Viewer。如需試用名單，請與我們聯繫。")
