@@ -153,7 +153,7 @@ def render_home():
         if st.button("② 看見風險與稅務缺口 🏛️", use_container_width=True):
             navigate("legacy")  # 或改 navigate("tax")
     with c3:
-        if st.button("③ 設計可持續的現金節奏（萬元） 📦", use_container_width=True):
+        if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True):
             navigate("policy")
 
     st.divider()
