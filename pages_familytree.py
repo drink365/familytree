@@ -1,10 +1,12 @@
-# pages_familytree.py — Add "已故" field; gray fill for deceased persons
+# pages_familytree.py — Family tree with straight spouse line,
+# deceased flag + inline editing & delete in table, and female styling restored.
 
 import json
 import uuid
-from typing import List
+from typing import List, Dict, Any
 import streamlit as st
 import graphviz
+import pandas as pd
 
 # ----------------------------- State & Helpers -----------------------------
 
@@ -89,6 +91,38 @@ def remove_children(mid: str, child_ids: List[str]):
         return
     m["children"] = [c for c in m.get("children", []) if c not in set(child_ids)]
 
+def _delete_person(pid: str):
+    """Remove a person and clean up marriages that reference them."""
+    persons = st.session_state.family_tree["persons"]
+    marriages = st.session_state.family_tree["marriages"]
+
+    if pid not in persons:
+        return
+
+    # 1) Remove from marriages (spouses & children)
+    to_delete_mids = []
+    for mid, m in list(marriages.items()):
+        if pid in m.get("spouses", []):
+            m["spouses"] = [x for x in m["spouses"] if x != pid]
+            # keep order aligned
+            m["order"] = [x for x in (m.get("order") or []) if x != pid]
+        if pid in m.get("children", []):
+            m["children"] = [x for x in m["children"] if x != pid]
+
+        # If no spouses and no children -> drop the marriage
+        if not m.get("spouses") and not m.get("children"):
+            to_delete_mids.append(mid)
+
+        # If order is missing but have spouses, regenerate
+        if m.get("spouses") and not m.get("order"):
+            m["order"] = m["spouses"][:]
+
+    for mid in to_delete_mids:
+        marriages.pop(mid, None)
+
+    # 2) Remove the person
+    persons.pop(pid, None)
+
 # ----------------------------- Rendering -----------------------------
 
 def render_graph(tree: dict) -> graphviz.Digraph:
@@ -96,10 +130,10 @@ def render_graph(tree: dict) -> graphviz.Digraph:
     g.attr(rankdir="TB", splines="line", nodesep="0.5", ranksep="0.9")
     g.attr("edge", dir="none", penwidth="2")
 
-    persons = tree.get("persons", {})
+    persons: Dict[str, Dict[str, Any]] = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # Person nodes with color logic
+    # Person nodes with color/shape logic
     for pid, p in persons.items():
         name = p.get("name", pid)
         note = p.get("note")
@@ -107,24 +141,33 @@ def render_graph(tree: dict) -> graphviz.Digraph:
         label = name + (f"\n{note}" if note else "")
 
         if deceased:
-            fillcolor = "#E0E0E0"  # gray for deceased
+            # deceased overrides gender styling
+            shape = "box"
+            style = "filled"
+            fillcolor = "#E0E0E0"
         else:
             gender = p.get("gender", "")
             if gender == "男":
+                shape = "box"
+                style = "filled"
                 fillcolor = "#E6F2FF"
             elif gender == "女":
+                shape = "box"
+                style = "rounded,filled"   # <-- restore rounded pink style
                 fillcolor = "#FFE6E6"
             else:
+                shape = "box"
+                style = "rounded,filled"
                 fillcolor = "white"
 
-        g.node(pid, label=label, shape="box", style="filled",
+        g.node(pid, label=label, shape=shape, style=style,
                fillcolor=fillcolor, fontsize="11")
 
-    # Mid points for marriages
+    # Marriage mid points — tiny visible dot
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.03", color="black")
 
-    # Spouse lines (straight)
+    # Spouse line (one straight segment), with mid centered by invisible constraints
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -138,7 +181,6 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.node(s1); sg.node(mid); sg.node(s2)
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
-
             ls = "dashed" if divorced else "solid"
             g.edge(s1, s2, style=ls, constraint="true", weight="1800", minlen="0")
 
@@ -169,6 +211,7 @@ def _fmt_pid(persons: dict, pid: str) -> str:
     return f"{persons.get(pid, {}).get('name', pid)}｜{pid}"
 
 def _sidebar_controls():
+    # Per request: sidebar removed.
     return
 
 def _bottom_io_controls():
@@ -205,6 +248,8 @@ def _bottom_io_controls():
 
 def _person_manager():
     st.subheader("👤 人員管理")
+
+    # Create form inputs for adding new person
     c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
     with c1:
         name = st.text_input("姓名*", key="person_name")
@@ -222,18 +267,59 @@ def _person_manager():
             pid = add_person(name, gender, note, deceased)
             st.success(f"已新增：{name}（{pid}）")
 
-    if st.session_state.family_tree["persons"]:
-        st.dataframe(
-            {
-                "pid": list(st.session_state.family_tree["persons"].keys()),
-                "姓名": [v.get("name", "") for v in st.session_state.family_tree["persons"].values()],
-                "性別": [v.get("gender", "") for v in st.session_state.family_tree["persons"].values()],
-                "備註": [v.get("note", "") for v in st.session_state.family_tree["persons"].values()],
-                "已故": ["是" if v.get("deceased") else "" for v in st.session_state.family_tree["persons"].values()],
-            },
-            use_container_width=True,
+    # Editable table
+    persons = st.session_state.family_tree["persons"]
+    if persons:
+        base_rows = []
+        for pid, v in persons.items():
+            base_rows.append({
+                "選取": False,
+                "pid": pid,
+                "姓名": v.get("name", ""),
+                "性別": v.get("gender", ""),
+                "備註": v.get("note", ""),
+                "已故": bool(v.get("deceased", False)),
+            })
+        df = pd.DataFrame(base_rows)
+
+        edited = st.data_editor(
+            df,
             hide_index=True,
+            use_container_width=True,
+            column_config={
+                "選取": st.column_config.CheckboxColumn("選取", default=False),
+                "pid": st.column_config.Column("pid", disabled=True),
+                "姓名": st.column_config.TextColumn("姓名"),
+                "性別": st.column_config.SelectboxColumn("性別", options=["", "男", "女"]),
+                "備註": st.column_config.TextColumn("備註"),
+                "已故": st.column_config.CheckboxColumn("已故", default=False),
+            },
+            key="people_editor",
         )
+
+        csave, cdel = st.columns([1,1])
+        with csave:
+            if st.button("💾 儲存變更", type="primary", use_container_width=True):
+                # write back
+                for _, row in edited.iterrows():
+                    pid = row["pid"]
+                    if pid in persons:
+                        persons[pid]["name"] = row["姓名"].strip() or pid
+                        persons[pid]["gender"] = row["性別"]
+                        persons[pid]["note"] = row["備註"]
+                        persons[pid]["deceased"] = bool(row["已故"])
+                st.success("已套用變更。")
+                _safe_rerun()
+        with cdel:
+            if st.button("🗑️ 刪除所選", type="secondary", use_container_width=True):
+                selected_pids = [row["pid"] for _, row in edited.iterrows() if row["選取"]]
+                if not selected_pids:
+                    st.warning("尚未選取要刪除的成員。")
+                else:
+                    for pid in selected_pids:
+                        _delete_person(pid)
+                    st.success(f"已刪除 {len(selected_pids)} 位成員，並清理關聯。")
+                    _safe_rerun()
 
 def _marriage_manager():
     st.subheader("💍 婚姻與子女")
