@@ -1,17 +1,14 @@
-# demo.py（寬版｜中文不亂碼｜甜甜圈/圓餅切換｜新手引導＋唯一鍵｜品牌自訂＋一頁摘要）
-# 重點：
-# 1) 自動套用中文字型（優先找：fonts/ 與「根目錄」的 NotoSansTC-Regular.ttf）
-# 2) 圖表：甜甜圈/圓餅切換、右側圖例避免重疊、<3% 不在切片上顯示數字
-# 3) 三步驟體驗：資產輸入 → 一鍵模擬 → 下載一頁摘要（HTML 可列印 PDF）
-# 4) 新手引導（進度條＋提示＋上/下步/略過），已修正 Streamlit Duplicate Element（唯一定鍵）
-# 5) 品牌自訂（自動讀 brand.json／logo.png/logo2.png；可上傳 Logo、填聯絡資訊）
+# demo.py（寬版｜中文字一致 NotoSansTC｜甜甜圈/圓餅切換｜新手引導＋唯一鍵｜品牌自訂＋一頁摘要）
+# 更新：
+# - 聯絡信箱改為 123@gracefo.com
+# - 圖表字型強制套用根目錄 NotoSansTC（百分比、自動標註、圖例與標題全一致）
 
 from typing import Dict, Optional
 import base64, json, os, math
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
-from matplotlib import font_manager
+from matplotlib import font_manager, font_manager as fm
 import streamlit as st
 
 # -----------------------------
@@ -120,35 +117,33 @@ def path_to_data_uri(path_or_none: Optional[str]) -> str:
     return f"data:{mime};base64,{b64}"
 
 # -----------------------------
-# 中文字型：自動尋找與套用（含「根目錄」字型）
+# 中文字型：強制套用 NotoSansTC（含根目錄）
 # -----------------------------
 @st.cache_resource(show_spinner=False)
 def _setup_cjk_font() -> str:
     """
-    嘗試找出系統 / 專案的 CJK 字型並設定給 Matplotlib。
-    搜尋順序：
+    依序搜尋：
       1) 專案 fonts/ 目錄
       2) 專案根目錄（NotoSansTC-Regular.ttf / .otf）
       3) 常見系統路徑
-      4) 已安裝字型名稱
-    回傳：已設定的字型名稱（若找不到回傳空字串）。
+      4) 已安裝家族名稱
+    並將 Matplotlib 全域字型設定為該字型（含 legend/百分比/標題）。
     """
-    matplotlib.rcParams["axes.unicode_minus"] = False  # 避免負號變方塊
+    matplotlib.rcParams["axes.unicode_minus"] = False
 
     local_candidates = [
         "fonts/NotoSansTC-Regular.otf",
         "fonts/NotoSansTC-Regular.ttf",
         "fonts/NotoSansCJKtc-Regular.otf",
         "fonts/SourceHanSansTC-Regular.otf",
-        # 根目錄也找
-        "NotoSansTC-Regular.ttf",
+        "NotoSansTC-Regular.ttf",   # 根目錄
         "NotoSansTC-Regular.otf",
     ]
     system_candidates = [
         "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
         "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/System/Library/Fonts/PingFang.ttc",  # macOS
-        "C:/Windows/Fonts/msjh.ttc",           # Windows 微軟正黑
+        "/System/Library/Fonts/PingFang.ttc",
+        "C:/Windows/Fonts/msjh.ttc",
     ]
     family_candidates = [
         "Noto Sans TC", "Noto Sans CJK TC", "Source Han Sans TC",
@@ -160,32 +155,36 @@ def _setup_cjk_font() -> str:
     for path in local_candidates + system_candidates:
         if os.path.exists(path):
             try:
-                font_manager.fontManager.addfont(path)
-                prop = font_manager.FontProperties(fname=path)
+                fm.fontManager.addfont(path)
+                prop = fm.FontProperties(fname=path)
                 chosen_family = prop.get_name()
                 break
             except Exception:
                 pass
 
     if not chosen_family:
-        installed = {f.name for f in font_manager.fontManager.ttflist}
+        installed = {f.name for f in fm.fontManager.ttflist}
         for fam in family_candidates:
             if fam in installed:
                 chosen_family = fam
                 break
 
     if chosen_family:
-        matplotlib.rcParams["font.sans-serif"] = [chosen_family, "DejaVu Sans", "Arial", "sans-serif"]
-        matplotlib.rcParams["font.family"] = "sans-serif"
+        # 全域字型與大小（圖例/標題/標註一致）
+        matplotlib.rcParams.update({
+            "font.family": "sans-serif",
+            "font.sans-serif": [chosen_family, "DejaVu Sans", "Arial", "sans-serif"],
+            "font.size": 11,
+            "legend.fontsize": 10,
+            "axes.titlesize": 12,
+            "axes.labelsize": 11,
+        })
         return chosen_family
     return ""
 
-chosen_font = _setup_cjk_font()
-if not chosen_font:
-    st.warning(
-        "⚠️ 圖表字型未偵測到中文字型，可能出現亂碼。"
-        "建議放置 NotoSansTC-Regular.ttf 於根目錄或 fonts/ 後重新整理。"
-    )
+CHOSEN_FONT = _setup_cjk_font()
+if not CHOSEN_FONT:
+    st.warning("⚠️ 未偵測到中文字型，建議放置 NotoSansTC-Regular.ttf 於根目錄或 fonts/。")
 
 # -----------------------------
 # 稅務計算（示意）
@@ -218,8 +217,8 @@ def simulate_with_without_insurance(total_assets: int, insurance_benefit: int) -
 # -----------------------------
 def build_summary_html(
     r: Dict[str, int],
-    logo_src: str,               # data uri 或 http(s) url，可為空字串
-    contact_text: str,           # 多行文字；以 \n 換行
+    logo_src: str,
+    contact_text: str,
     scenario_title: Optional[str] = None,
     scenario_desc: Optional[dict] = None,
 ) -> str:
@@ -291,7 +290,7 @@ hr {{ border:none; border-top:1px solid #eee; margin:16px 0; }}
 </html>"""
 
 # -----------------------------
-# Session 狀態（避免與主程式衝突）
+# Session 狀態
 # -----------------------------
 if "demo_assets" not in st.session_state:
     st.session_state.demo_assets = {k: 0 for k in ASSET_CATS}
@@ -300,7 +299,7 @@ if "demo_used" not in st.session_state:
 if "demo_selected_scenario" not in st.session_state:
     st.session_state.demo_selected_scenario = None
 if "demo_brand_contact" not in st.session_state:
-    st.session_state.demo_brand_contact = "永傳家族辦公室｜Grace Family Office\nhttps://gracefo.com\nservice@gracefo.com"
+    st.session_state.demo_brand_contact = "永傳家族辦公室｜Grace Family Office\nhttps://gracefo.com\n123@gracefo.com"
 if "demo_logo_data_uri" not in st.session_state:
     st.session_state.demo_logo_data_uri = None
 if "demo_logo_url" not in st.session_state:
@@ -311,7 +310,7 @@ if "demo_logo_url" not in st.session_state:
 # -----------------------------
 _brand = load_brand_config()
 if _brand:
-    if st.session_state.demo_brand_contact == "" or st.session_state.demo_brand_contact.startswith("永傳家族辦公室"):
+    if st.session_state.demo_brand_contact == "" or "gracefo.com" in st.session_state.demo_brand_contact:
         contact = _brand.get("CONTACT")
         if contact:
             st.session_state.demo_brand_contact = contact
@@ -353,12 +352,12 @@ report_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_l
 brand_contact_text = st.session_state.demo_brand_contact
 
 # -----------------------------
-# 新手引導（Onboarding）狀態與工具
+# 新手引導（Onboarding）
 # -----------------------------
 if "demo_onboarding" not in st.session_state:
-    st.session_state.demo_onboarding = True   # 預設開啟
+    st.session_state.demo_onboarding = True
 if "demo_step" not in st.session_state:
-    st.session_state.demo_step = 1            # 1→2→3
+    st.session_state.demo_step = 1
 if "demo_seen_onboarding" not in st.session_state:
     st.session_state.demo_seen_onboarding = False
 
@@ -376,25 +375,16 @@ def guide_hint(title: str, bullets: list):
 def step_nav(key_prefix: str):
     c1, c2, c3 = st.columns([1,1,1])
     with c1:
-        st.button(
-            "⬅ 上一步",
-            key=f"{key_prefix}_prev",
-            disabled=st.session_state.demo_step <= 1,
-            on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step - 1),
-        )
+        st.button("⬅ 上一步", key=f"{key_prefix}_prev",
+                  disabled=st.session_state.demo_step <= 1,
+                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step - 1))
     with c2:
-        st.button(
-            "略過引導",
-            key=f"{key_prefix}_skip",
-            on_click=lambda: st.session_state.update(demo_onboarding=False, demo_seen_onboarding=True),
-        )
+        st.button("略過引導", key=f"{key_prefix}_skip",
+                  on_click=lambda: st.session_state.update(demo_onboarding=False, demo_seen_onboarding=True))
     with c3:
-        st.button(
-            "下一步 ➡",
-            key=f"{key_prefix}_next",
-            disabled=st.session_state.demo_step >= 3,
-            on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step + 1),
-        )
+        st.button("下一步 ➡", key=f"{key_prefix}_next",
+                  disabled=st.session_state.demo_step >= 3,
+                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step + 1))
 
 def onboarding_header():
     if not st.session_state.demo_onboarding:
@@ -403,7 +393,7 @@ def onboarding_header():
     st.progress(pct, text=f"引導進度：第 {st.session_state.demo_step}/3 步")
 
 # -----------------------------
-# 頁面：三步驟體驗
+# 三步驟體驗
 # -----------------------------
 st.title("🧭 三步驟 Demo｜家族資產地圖 × 一鍵模擬 × 報告")
 onboarding_header()
@@ -487,12 +477,11 @@ with right:
 
     st.write("**資產分布**")
     if total_assets > 0:
-        # 品牌色盤（可按需替換）
         brand_colors = ["#1F4A7A", "#C99A2E", "#4CAF50", "#E64A19", "#7E57C2", "#455A64"]
         colors = brand_colors[: len(df_assets)]
 
         chart_style = st.radio("圖表樣式", ["甜甜圈圖（建議）", "圓餅圖"], horizontal=True, key="style_pie")
-        show_pct_threshold = 3  # 小於 3% 不在切片上顯示數字
+        show_pct_threshold = 3
 
         sizes = df_assets["金額"].values
         labels2 = df_assets["類別"].values
@@ -500,7 +489,7 @@ with right:
         fig, ax = plt.subplots(figsize=(6.8, 5.2))
         wedges, texts, autotexts = ax.pie(
             sizes,
-            labels=None,  # 標籤由圖例呈現
+            labels=None,
             autopct=lambda p: f"{p:.1f}%" if p >= show_pct_threshold else "",
             startangle=90,
             colors=colors,
@@ -508,16 +497,29 @@ with right:
         )
         ax.axis("equal")
 
-        # 甜甜圈：加中心留白
         if chart_style.startswith("甜甜圈"):
             centre = plt.Circle((0, 0), 0.55, fc="white")
             ax.add_artist(centre)
 
-        # 右側圖例（含金額）
-        legend_labels = [f"{lbl}：NT$ {val:,.0f}" for lbl, val in zip(labels2, sizes)]
-        ax.legend(wedges, legend_labels, title="資產類別", loc="center left", bbox_to_anchor=(1.02, 0.5))
+        # 強制把百分比與（內部）文字也套用同一字型
+        if CHOSEN_FONT:
+            prop = fm.FontProperties(family=CHOSEN_FONT, size=10)
+            for t in autotexts:
+                t.set_fontproperties(prop)
+            for t in texts:
+                t.set_fontproperties(prop)
 
-        ax.set_title(f"資產分布　｜　總資產 NT$ {total_assets:,.0f}", loc="left", fontsize=12, pad=12)
+        legend_labels = [f"{lbl}：NT$ {val:,.0f}" for lbl, val in zip(labels2, sizes)]
+        legend_prop = fm.FontProperties(family=CHOSEN_FONT, size=10) if CHOSEN_FONT else None
+        legend_title_prop = fm.FontProperties(family=CHOSEN_FONT, size=10, weight="bold") if CHOSEN_FONT else None
+        ax.legend(
+            wedges, legend_labels, title="資產類別",
+            loc="center left", bbox_to_anchor=(1.02, 0.5),
+            prop=legend_prop, title_fontproperties=legend_title_prop,
+        )
+
+        title_prop = fm.FontProperties(family=CHOSEN_FONT, size=12) if CHOSEN_FONT else None
+        ax.set_title(f"資產分布　｜　總資產 NT$ {total_assets:,.0f}", loc="left", fontsize=12, pad=12, fontproperties=title_prop)
         st.pyplot(fig, clear_figure=True)
     else:
         st.info("請輸入金額或先點『載入示範數據』。")
