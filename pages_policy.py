@@ -33,30 +33,45 @@ def _fmt_currency(n: float, currency: str) -> str:
     except Exception:
         return "—"
 
-def _estimate_cash_value(premium: int, years: int, irr_pct: float, horizon: int) -> int:
+def _estimate_cash_value(premium: float, years: int, irr_pct: float, horizon: int) -> int:
     """
     以 IRR 為年化報酬率，估算第 horizon 年的「示意現金值」。
     假設每年年末投入 premium，投入年數 = min(years, horizon)。
     （僅供會談示意，非商品精算）
     """
-    irr = max(0.0, float(irr_pct) / 100.0)
-    horizon = max(1, int(horizon))
-    terms = min(int(years), horizon)
-    fv = 0.0
-    for t in range(1, terms + 1):
-        fv += premium * (1.0 + irr) ** (horizon - t)
-    return int(round(fv))
+    try:
+        irr = max(0.0, float(irr_pct) / 100.0)
+        horizon = max(1, int(horizon))
+        terms = min(int(years), horizon)
+        fv = 0.0
+        for t in range(1, terms + 1):
+            fv += float(premium) * (1.0 + irr) ** (horizon - t)
+        return int(round(fv))
+    except Exception:
+        return 0
+
+def _safe_int(x: Optional[float], default: int = 0) -> int:
+    try:
+        return int(x) if x is not None else default
+    except Exception:
+        return default
+
+def _safe_float(x: Optional[float], default: float = 0.0) -> float:
+    try:
+        return float(x) if x is not None else default
+    except Exception:
+        return default
 
 def _build_cashflow_table(
     currency: str,
-    premium: int,
+    premium: float,
     years: int,
     irr: float,
     inflow_enabled: bool,
     inflow_mode: str,                 # "fixed" or "ratio"
     start_year: int,
     years_in: int,
-    inflow_amt: Optional[int],
+    inflow_amt: Optional[float],
     inflow_ratio_pct: Optional[float],
 ) -> Dict[str, List]:
     """
@@ -67,26 +82,36 @@ def _build_cashflow_table(
       cum:       累計現金流
       rows:      已格式化的顯示列
     """
+    # --- 安全轉型 ---
+    premium_i = _safe_float(premium, 0.0)
+    years_i = _safe_int(years, 0)
+    start_year_i = _safe_int(start_year, 0)
+    years_in_i = _safe_int(years_in, 0)
+    inflow_amt_f = _safe_float(inflow_amt, 0.0)
+    inflow_ratio_f = _safe_float(inflow_ratio_pct, 0.0)
+    irr_f = _safe_float(irr, 0.0)
+
     # 時間軸需涵蓋繳費與提領區間
-    last_year = years
+    last_year = years_i
     if inflow_enabled:
-        last_year = max(years, start_year + years_in - 1)
+        last_year = max(years_i, start_year_i + years_in_i - 1)
+    last_year = max(1, last_year)  # 至少顯示一年，避免空列表
     timeline = list(range(1, last_year + 1))
 
     # 保費支出（負號）
     cash_flow = [0 for _ in timeline]
-    for y in range(1, years + 1):
-        cash_flow[y - 1] -= int(premium)
+    for y in range(1, years_i + 1):
+        cash_flow[y - 1] -= int(round(premium_i))
 
     # 流入（固定金額或比例）
-    if inflow_enabled:
-        for y in range(start_year, start_year + years_in):
+    if inflow_enabled and years_in_i > 0:
+        for y in range(start_year_i, start_year_i + years_in_i):
             if 1 <= y <= last_year:
-                if inflow_mode == "fixed" and inflow_amt:
-                    cash_flow[y - 1] += int(inflow_amt)
-                elif inflow_mode == "ratio" and inflow_ratio_pct:
-                    cv_y = _estimate_cash_value(int(premium), int(years), float(irr), int(y))
-                    cash_flow[y - 1] += int(round(cv_y * (float(inflow_ratio_pct) / 100.0)))
+                if inflow_mode == "fixed" and inflow_amt_f > 0:
+                    cash_flow[y - 1] += int(round(inflow_amt_f))
+                elif inflow_mode == "ratio" and inflow_ratio_f > 0:
+                    cv_y = _estimate_cash_value(premium_i, years_i, irr_f, y)
+                    cash_flow[y - 1] += int(round(cv_y * (inflow_ratio_f / 100.0)))
 
     # 累計
     cum = []
@@ -146,10 +171,10 @@ def render():
         horizon = st.number_input("現金值觀察年（示意）", min_value=5, max_value=40, value=10)
 
     # 摘要（倍數僅依策略強度決定）
-    total_premium = int(premium) * int(years)
+    total_premium = _safe_int(premium) * _safe_int(years)
     face_mult = FACE_MULTIPLIERS[stance][goal]
-    indicative_face = int(total_premium * face_mult)
-    cv_h = _estimate_cash_value(int(premium), int(years), float(irr), int(horizon))
+    indicative_face = _safe_int(total_premium * face_mult)
+    cv_h = _estimate_cash_value(_safe_float(premium), _safe_int(years), _safe_float(irr), _safe_int(horizon))
     is_twd = (currency == "TWD")
 
     st.markdown("#### 摘要")
@@ -168,34 +193,43 @@ def render():
     st.markdown("#### 年度現金流（示意）")
     with st.expander("設定現金流入（可選）", expanded=(goal == "退休現金流")):
         inflow_enabled = st.checkbox("加入正現金流（退休提領／配息／部分解約等示意）", value=(goal == "退休現金流"))
-        mode_label = st.radio("提領模式", ["固定年領金額", "以現金值比例提領"], index=0, horizontal=True, disabled=not inflow_enabled)
+
+        # 先給安全預設，避免 None
+        inflow_amt: Optional[float] = 0.0
+        inflow_ratio_pct: Optional[float] = 0.0
+        mode_label = st.radio("提領模式", ["固定年領金額", "以現金值比例提領"],
+                              index=0, horizontal=True, disabled=not inflow_enabled)
         inflow_mode = "fixed" if mode_label == "固定年領金額" else "ratio"
 
         c7, c8, c9 = st.columns(3)
         with c7:
-            start_year = st.number_input("起領年份（第幾年開始）", min_value=1, max_value=60, value=int(years) + 1, step=1, disabled=not inflow_enabled)
+            start_year = st.number_input("起領年份（第幾年開始）", min_value=1, max_value=60,
+                                         value=int(years) + 1, step=1, disabled=not inflow_enabled)
         with c8:
-            years_in = st.number_input("領取年數", min_value=1, max_value=60, value=max(1, 20 - int(years)), step=1, disabled=not inflow_enabled)
+            years_in = st.number_input("領取年數", min_value=1, max_value=60,
+                                       value=max(1, 20 - int(years)), step=1, disabled=not inflow_enabled)
         with c9:
             if inflow_mode == "固定年領金額":
-                inflow_amt = st.number_input("年領金額（元）", min_value=0, step=10_000, value=300_000, disabled=not inflow_enabled)
-                inflow_ratio_pct = None
+                inflow_amt = st.number_input("年領金額（元）", min_value=0, step=10_000,
+                                             value=300_000, disabled=not inflow_enabled)
+                inflow_ratio_pct = 0.0
             else:
-                inflow_ratio_pct = st.slider("每年提領比例（%／以示意現金值計）", 0.5, 6.0, 2.0, 0.1, disabled=not inflow_enabled)
-                inflow_amt = None
+                inflow_ratio_pct = st.slider("每年提領比例（%／以示意現金值計）",
+                                             0.5, 6.0, 2.0, 0.1, disabled=not inflow_enabled)
+                inflow_amt = 0.0
 
-    # 計算表格
+    # 計算表格（不對 None 做 int/cast，全部在函式內安全處理）
     table = _build_cashflow_table(
         currency=currency,
-        premium=int(premium),
+        premium=premium,
         years=int(years),
-        irr=float(irr),
+        irr=irr,
         inflow_enabled=bool(inflow_enabled),
         inflow_mode=inflow_mode,
         start_year=int(start_year),
         years_in=int(years_in),
-        inflow_amt=int(inflow_amt) if inflow_mode == "fixed" and inflow_enabled else None,
-        inflow_ratio_pct=float(inflow_ratio_pct) if inflow_mode == "ratio" and inflow_enabled else None,
+        inflow_amt=inflow_amt,
+        inflow_ratio_pct=inflow_ratio_pct,
     )
 
     # 自動找出第一筆正現金流
@@ -203,8 +237,8 @@ def render():
 
     # 提示狀態
     if inflow_enabled:
-        if (inflow_mode == "fixed" and (not inflow_amt or inflow_amt <= 0)) or \
-           (inflow_mode == "ratio" and (not inflow_ratio_pct or inflow_ratio_pct <= 0)):
+        if (inflow_mode == "fixed" and _safe_float(inflow_amt) <= 0) or \
+           (inflow_mode == "ratio" and _safe_float(inflow_ratio_pct) <= 0):
             st.info("尚未看到正現金流：因年領金額為 0 或提領比例為 0%。請調整數值。")
         elif first_positive is None:
             st.info("目前參數下沒有出現正現金流（可能是起領年份超出範圍或提領金額過低）。")
@@ -214,7 +248,7 @@ def render():
     # 先顯示「重點區段」，再顯示完整表
     if inflow_enabled and first_positive:
         start_focus = max(1, first_positive - 1)
-        end_focus = min(table["timeline"][-1], first_positive + max(4, int(years_in) - 1))
+        end_focus = min(table["timeline"][-1], first_positive + max(4, _safe_int(years_in) - 1))
         focus_rows = [r for r in table["rows"] if start_focus <= r["年度"] <= end_focus]
         st.markdown(f"**重點區段：第 {start_focus}～{end_focus} 年（含第一筆正現金流）**")
         st.dataframe(focus_rows, use_container_width=True, hide_index=True)
