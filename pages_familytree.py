@@ -1,8 +1,4 @@
-# pages_familytree.py — Spouse-stable layout (clean straight spouse line)
-# - Remove "swap spouse left/right" UI & logic.
-# - Draw ONE straight visible line between spouses (s1—s2).
-# - Keep a tiny visible mid point; use invisible constraints s1↔mid, mid↔s2
-#   so the dot stays centered and children attach downward from mid.
+# pages_familytree.py — Add "已故" field; gray fill for deceased persons
 
 import json
 import uuid
@@ -51,12 +47,13 @@ def _import_json(text: str):
 
 # ----------------------------- Mutators -----------------------------
 
-def add_person(name: str, gender: str = "", note: str = "") -> str:
+def add_person(name: str, gender: str = "", note: str = "", deceased: bool = False) -> str:
     pid = _uid("p")
     st.session_state.family_tree["persons"][pid] = {
         "name": (name or "").strip() or pid,
         "gender": (gender or "").strip(),
         "note": (note or "").strip(),
+        "deceased": bool(deceased),
     }
     return pid
 
@@ -92,8 +89,6 @@ def remove_children(mid: str, child_ids: List[str]):
         return
     m["children"] = [c for c in m.get("children", []) if c not in set(child_ids)]
 
-# （已移除 swap_spouse_order 與相關呼叫）
-
 # ----------------------------- Rendering -----------------------------
 
 def render_graph(tree: dict) -> graphviz.Digraph:
@@ -104,27 +99,32 @@ def render_graph(tree: dict) -> graphviz.Digraph:
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # Person nodes
+    # Person nodes with color logic
     for pid, p in persons.items():
         name = p.get("name", pid)
         note = p.get("note")
+        deceased = p.get("deceased", False)
         label = name + (f"\n{note}" if note else "")
-        gender = p.get("gender", "")
-        if gender == "男":
-            g.node(pid, label=label, shape="box", style="filled",
-                   fillcolor="#E6F2FF", fontsize="11")
-        elif gender == "女":
-            g.node(pid, label=label, shape="box", style="rounded,filled",
-                   fillcolor="#FFE6E6", fontsize="11")
-        else:
-            g.node(pid, label=label, shape="box", style="rounded,filled",
-                   fillcolor="white", fontsize="11")
 
-    # Tiny visible mid point for each marriage
+        if deceased:
+            fillcolor = "#E0E0E0"  # gray for deceased
+        else:
+            gender = p.get("gender", "")
+            if gender == "男":
+                fillcolor = "#E6F2FF"
+            elif gender == "女":
+                fillcolor = "#FFE6E6"
+            else:
+                fillcolor = "white"
+
+        g.node(pid, label=label, shape="box", style="filled",
+               fillcolor=fillcolor, fontsize="11")
+
+    # Mid points for marriages
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.03", color="black")
 
-    # Spouse clusters
+    # Spouse lines (straight)
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -133,20 +133,16 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 
         if len(order) == 2:
             s1, s2 = order
-            # Keep s1, mid, s2 on the same rank and keep mid centered by invisible constraints
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid); sg.node(s2)
-                # These invisible edges center 'mid' between spouses without creating parallel visibles
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
 
-            # Visible spouse line: single straight segment between spouses
             ls = "dashed" if divorced else "solid"
             g.edge(s1, s2, style=ls, constraint="true", weight="1800", minlen="0")
 
         elif len(order) == 1:
-            # Single-parent case: keep a straight line to mid so it looks natural
             s1 = order[0]
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
@@ -154,7 +150,7 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.edge(s1, mid, style="invis", constraint="true", weight="40000", minlen="0")
             g.edge(s1, mid, style="solid", constraint="true", weight="1800", minlen="0")
 
-    # Children: strong downward constraints from mid
+    # Children downward
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
         if not children:
@@ -173,7 +169,6 @@ def _fmt_pid(persons: dict, pid: str) -> str:
     return f"{persons.get(pid, {}).get('name', pid)}｜{pid}"
 
 def _sidebar_controls():
-    # Per request: remove all sidebar import/export and captions.
     return
 
 def _bottom_io_controls():
@@ -210,19 +205,21 @@ def _bottom_io_controls():
 
 def _person_manager():
     st.subheader("👤 人員管理")
-    c1, c2, c3 = st.columns([2, 1, 2])
+    c1, c2, c3, c4 = st.columns([2, 1, 2, 1])
     with c1:
         name = st.text_input("姓名*", key="person_name")
     with c2:
         gender = st.selectbox("性別", ["", "男", "女"], index=0)
     with c3:
         note = st.text_input("備註", key="person_note")
+    with c4:
+        deceased = st.checkbox("已故", key="person_deceased")
 
     if st.button("新增成員", type="primary"):
         if not name.strip():
             st.error("請輸入姓名")
         else:
-            pid = add_person(name, gender, note)
+            pid = add_person(name, gender, note, deceased)
             st.success(f"已新增：{name}（{pid}）")
 
     if st.session_state.family_tree["persons"]:
@@ -232,6 +229,7 @@ def _person_manager():
                 "姓名": [v.get("name", "") for v in st.session_state.family_tree["persons"].values()],
                 "性別": [v.get("gender", "") for v in st.session_state.family_tree["persons"].values()],
                 "備註": [v.get("note", "") for v in st.session_state.family_tree["persons"].values()],
+                "已故": ["是" if v.get("deceased") else "" for v in st.session_state.family_tree["persons"].values()],
             },
             use_container_width=True,
             hide_index=True,
@@ -353,7 +351,7 @@ def main():
     st.set_page_config(page_title="家族樹", page_icon="🌳", layout="wide")
     _init_state()
     st.title("🌳 家族樹")
-    _sidebar_controls()  # 左側依需求保持空白
+    _sidebar_controls()
     with st.expander("➕ 建立 / 管理成員與關係", expanded=True):
         _person_manager(); _marriage_manager()
     _viewer()
