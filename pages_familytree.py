@@ -1,5 +1,5 @@
-# pages_familytree.py — anti-crossing edition with vertical drop node (mid_d)
-# Spouses adjacent (s1–mid–s2), children from a lower drop point to avoid crossings,
+# pages_familytree.py — straight-child-lines edition (no elbows)
+# Spouses adjacent via s1–mid–s2, children from a lower drop point (mid_d) with straight lines,
 # siblings same-rank, execute-import buttons, stable selection, width="stretch".
 
 import json
@@ -44,7 +44,10 @@ def _import_json(text: str):
     marriages = {str(k): v for k, v in obj.get("marriages", {}).items()}
     st.session_state.family_tree = {"persons": persons, "marriages": marriages}
     mids = list(marriages.keys())
-    st.session_state.selected_mid = st.session_state.selected_mid if st.session_state.selected_mid in mids else (mids[-1] if mids else None)
+    st.session_state.selected_mid = (
+        st.session_state.selected_mid if st.session_state.selected_mid in mids
+        else (mids[-1] if mids else None)
+    )
 
 # ------------------------------------------------------------
 # Mutators
@@ -65,7 +68,9 @@ def add_or_get_marriage(p1: str, p2: str) -> str:
         if sorted(m.get("spouses", [])) == [a, b]:
             return mid
     mid = _uid("m")
-    st.session_state.family_tree["marriages"][mid] = {"spouses": [a, b], "children": [], "divorced": False}
+    st.session_state.family_tree["marriages"][mid] = {
+        "spouses": [a, b], "children": [], "divorced": False
+    }
     return mid
 
 def toggle_divorce(mid: str, value: bool):
@@ -102,13 +107,14 @@ def _spouse_map(tree: dict) -> Dict[str, List[Tuple[str, List[str]]]]:
 
 def render_graph(tree: dict) -> graphviz.Graph:
     g = graphviz.Graph("G", engine="dot")
-    g.attr(rankdir="TB", splines="ortho", nodesep="0.46", ranksep="0.8")
+    # 關鍵：用直線/斜直線，不要直角
+    g.attr(rankdir="TB", splines="line", nodesep="0.46", ranksep="0.8")
     g.attr("edge", dir="none")
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # People (style by gender)
+    # Person nodes：性別以框形與底色呈現
     for pid, p in persons.items():
         name = p.get("name", pid)
         note = p.get("note")
@@ -121,12 +127,12 @@ def render_graph(tree: dict) -> graphviz.Graph:
         else:
             g.node(pid, label=label, shape="box", style="rounded,filled", fillcolor="white", fontsize="11")
 
-    # Marriage points (invisible)
+    # 婚姻點與下引點（皆不可見）
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.01", style="invis")
         g.node(f"{mid}_d", label="", shape="point", width="0.01", style="invis")  # drop node
 
-    # Spouses: enforce adjacency s1–mid–s2 (order with invisible constraints; visible line doesn't constrain)
+    # 配偶：同層相鄰（s1–mid–s2）
     for mid, m in marriages.items():
         sp = list(m.get("spouses", []))
         divorced = m.get("divorced", False)
@@ -135,45 +141,43 @@ def render_graph(tree: dict) -> graphviz.Graph:
             with g.subgraph(name=f"rank_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid); sg.node(s2)
-
-            # lock order & closeness
+            # 用不可見邊鎖定順序與貼近
             g.edge(s1, mid, style="invis", weight="500", constraint="true", minlen="0")
             g.edge(mid, s2, style="invis", weight="500", constraint="true", minlen="0")
-
-            # visible spouse lines (do NOT influence layout => avoid crossings)
+            # 可見配偶線（不影響布局）
             line_style = "dashed" if divorced else "solid"
-            g.edge(s1, mid, style=line_style, penwidth="2", constraint="false", tailport="e", headport="w")
-            g.edge(mid, s2, style=line_style, penwidth="2", constraint="false", tailport="e", headport="w")
-
+            g.edge(s1, mid, style=line_style, penwidth="2", constraint="false")
+            g.edge(mid, s2, style=line_style, penwidth="2", constraint="false")
         elif len(sp) == 1:
             s1 = sp[0]
             with g.subgraph(name=f"rank_single_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid)
-            g.edge(s1, mid, style="solid", penwidth="2", constraint="false", tailport="e", headport="w")
-            g.edge(s1, mid, style="invis", weight="400", constraint="true", minlen="0")  # keep together
-            g.edge(mid, f"{mid}_d", style="invis", weight="300", constraint="true", minlen="1")  # prepare drop
+            g.edge(s1, mid, style="solid", penwidth="2", constraint="false")
+            g.edge(s1, mid, style="invis", weight="400", constraint="true", minlen="0")
 
-    # Siblings: same level & ordering; children come from a lower drop node to avoid spouse-line crossings
+    # 兄弟姊妹：同層 + 排序（跨家庭靠攏），並用下引點讓子女線直下
     parent_of = _parents_map(tree)
     spouse_map = _spouse_map(tree)
 
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
 
-        # siblings same rank
+        # 兄弟姊妹同層
         if children:
             with g.subgraph(name=f"rank_children_{mid}") as sgc:
                 sgc.attr(rank="same")
                 for c in children:
                     sgc.node(c)
 
-        # vertical drop: mid -> mid_d (invisible, constraining), then mid_d -> child (visible, constraining)
-        g.edge(mid, f"{mid}_d", style="invis", weight="500", minlen="1", constraint="true", tailport="s", headport="n")
-        for c in children:
-            g.edge(f"{mid}_d", c, weight="300", minlen="1", constraint="true", tailport="s", headport="n")
+        # mid -> mid_d（不可見，錨定向下）
+        g.edge(mid, f"{mid}_d", style="invis", weight="600", minlen="1", constraint="true")
 
-        # order siblings to encourage cross-family adjacency
+        # 由 mid_d 直線（或斜直線）往下連子女
+        for c in children:
+            g.edge(f"{mid}_d", c, weight="400", minlen="1", constraint="true")
+
+        # 排序：把與「另一家庭」結婚的孩子趨向放到右側
         if len(children) >= 2:
             right_pref, neutral = [], []
             for c in children:
@@ -224,7 +228,7 @@ def _sidebar_controls():
         st.sidebar.warning("已清空家族樹")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("提示：配偶以水平線連結（離婚為虛線），子女由較低的落點垂直連接，避免交錯。")
+    st.sidebar.caption("提示：配偶以水平線連結（離婚為虛線），子女由較低的落點以**直線**連接。")
 
 def _bottom_io_controls():
     st.markdown("---")
@@ -296,9 +300,13 @@ def _marriage_manager():
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        s1 = st.selectbox("配偶 A", ["-"] + p_values, format_func=lambda x: "-" if x=="-" else _fmt_pid(persons, x), key="spouse_a_select")
+        s1 = st.selectbox("配偶 A", ["-"] + p_values,
+                          format_func=lambda x: "-" if x=="-" else _fmt_pid(persons, x),
+                          key="spouse_a_select")
     with c2:
-        s2 = st.selectbox("配偶 B", ["-"] + p_values, format_func=lambda x: "-" if x=="-" else _fmt_pid(persons, x), key="spouse_b_select")
+        s2 = st.selectbox("配偶 B", ["-"] + p_values,
+                          format_func=lambda x: "-" if x=="-" else _fmt_pid(persons, x),
+                          key="spouse_b_select")
     with c3:
         st.markdown("\n")
         make = st.button("建立婚姻")
@@ -354,7 +362,10 @@ def _marriage_manager():
         for mid, m in marriages.items():
             sp = [persons.get(x, {}).get("name", x) for x in m.get("spouses", [])]
             ch = [persons.get(x, {}).get("name", x) for x in m.get("children", [])]
-            rows.append({"mid": mid, "配偶": "、".join(sp), "子女": "、".join(ch), "離婚": "是" if m.get("divorced", False) else "否"})
+            rows.append({
+                "mid": mid, "配偶": "、".join(sp), "子女": "、".join(ch),
+                "離婚": "是" if m.get("divorced", False) else "否"
+            })
         st.dataframe(rows, width="stretch", hide_index=True)
 
 def _viewer():
