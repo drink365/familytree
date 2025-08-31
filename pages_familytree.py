@@ -1,6 +1,7 @@
 # pages_familytree.py — Spouse-first stable layout
-# Fix: draw the visible spouse line as a single s1–s2 edge (not s1–mid & mid–s2),
-# so mid can connect children downward without bending the spouse line.
+# Fix: make mid a tiny visible point and draw spouse as two short segments
+# (s1–mid and mid–s2, constraint=false), so the spouse link never turns
+# into a long bent line when mid also connects to children.
 
 import json
 import uuid
@@ -123,11 +124,11 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # Marriage mid points (invisible)
+    # Marriage mid points — now VISIBLE tiny point (so spouse lines stay short & straight)
     for mid in marriages.keys():
-        g.node(mid, label="", shape="point", width="0.01", style="invis")
+        g.node(mid, label="", shape="point", width="0.03", color="black")  # tiny dot
 
-    # Tight marriage clusters: A–mid–B–guard locked together
+    # Tight marriage clusters: A–mid–B–guard locked together (highest priority)
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -136,25 +137,28 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 
         if len(order) == 2:
             s1, s2 = order
-            # Lock A–mid–B–guard together (highest priority)
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid); sg.node(s2)
                 guard = f"{mid}_guard"
                 sg.node(guard, label="", shape="point", width="0.01", style="invis")
+                # strong invisible locks so spouses are adjacent and cannot be split
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(s2, guard, style="invis", constraint="true", weight="50000", minlen="0")
-            # Visible spouse line as ONE edge: s1 — s2 (never bends because it's independent of mid)
+
+            # Visible spouse lines: two short segments via the tiny mid point
             ls = "dashed" if divorced else "solid"
-            g.edge(s1, s2, style=ls, constraint="false")
+            g.edge(s1, mid, style=ls, constraint="false", weight="0", minlen="0")
+            g.edge(mid, s2, style=ls, constraint="false", weight="0", minlen="0")
+
         elif len(order) == 1:
             s1 = order[0]
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid)
                 sg.edge(s1, mid, style="invis", constraint="true", weight="40000", minlen="0")
-            g.edge(s1, mid, style="solid", constraint="false")
+            g.edge(s1, mid, style="solid", constraint="false", weight="0", minlen="0")
 
     # Draw children only downward; no sibling ordering to avoid breaking spouses
     for mid, m in marriages.items():
