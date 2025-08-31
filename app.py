@@ -144,7 +144,6 @@ def render_home():
     with st.container():
         st.markdown("### 《影響力》｜高資產家庭的傳承策略平台")
         st.markdown("**讓每一分資源，都成為你影響力的延伸。**")
-        st.write("我們陪你設計每一分資源，讓它守護最重要的人，延續你真正的價值。")
 
         
         c1, c2, c3 = st.columns(3)
