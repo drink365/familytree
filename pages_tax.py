@@ -45,6 +45,26 @@ def _stat_card(label: str, value: str) -> str:
     </div>
     """
 
+def _order_with_counts(order_text: str,
+                       child_count: int,
+                       parent_count: int,
+                       sibling_count: int,
+                       grandparent_count: int) -> str:
+    """
+    將「第一順序（子女）」這類文字，依當前人數改為「第一順序（子女2名）」等。
+    只在人數 > 0 時加註名數，避免顯示奇怪的 0 名。
+    """
+    t = order_text or ""
+    if ("第一順序" in t and "子女" in t and child_count > 0):
+        return "第一順序（子女{}名）".format(int(child_count))
+    if ("第二順序" in t and "父母" in t and parent_count > 0):
+        return "第二順序（父母{}名）".format(int(parent_count))
+    if ("第三順序" in t and "兄弟姊妹" in t and sibling_count > 0):
+        return "第三順序（兄弟姊妹{}名）".format(int(sibling_count))
+    if ("第四順序" in t and "祖父母" in t and grandparent_count > 0):
+        return "第四順序（祖父母{}名）".format(int(grandparent_count))
+    return t
+
 # ============================== Page ==============================
 def render():
     # 標題
@@ -105,8 +125,13 @@ def render():
     with a5:
         grandparent_count = st.number_input("祖父母存活數（0-2）", min_value=0, max_value=2, step=1, value=ss.get("tx_gparent", 0), key="tx_gparent")
 
-    order, shares = determine_heirs_and_shares(spouse_alive, child_count, parent_count, sibling_count, grandparent_count)
-    display_order = ("配偶＋" + order) if spouse_alive else order
+    order_text, shares = determine_heirs_and_shares(
+        spouse_alive, child_count, parent_count, sibling_count, grandparent_count
+    )
+
+    # 將「第一順序（子女）」加上人數 → 「第一順序（子女2名）」
+    order_text = _order_with_counts(order_text, child_count, parent_count, sibling_count, grandparent_count)
+    display_order = ("配偶＋" + order_text) if spouse_alive else order_text
 
     # 後端運算名額（不顯示）
     eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
