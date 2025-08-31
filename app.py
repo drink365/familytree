@@ -6,7 +6,7 @@ import streamlit as st
 
 # -------------------- App Config --------------------
 st.set_page_config(
-    page_title="影響力｜AI 傳承規劃平台",
+    page_title="影響力｜AI 傳承策略平台",
     page_icon="logo2.png",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -23,8 +23,8 @@ def load_brand():
             "BG": "#F7FAFC",
             "LOGO_SQUARE": "logo2.png",
             "SHOW_SIDEBAR_LOGO": True,
-            "TAGLINE": "說清楚，做得到",
-            "SUBLINE": "把傳承變簡單。",
+            "TAGLINE": "專業合規，智慧工具",
+            "SUBLINE": "讓傳承變簡單。",
             "RETINA_FACTOR": 3,
         }
 
@@ -144,8 +144,9 @@ def render_home():
     with st.container():
         st.markdown("### 《影響力》｜高資產家庭的傳承策略平台")
         st.markdown("**讓每一分資源，都成為你影響力的延伸。**")
-        st.write("我們陪你設計每一分資源的去向，讓它守護最重要的人，延續你真正的價值。")
+        st.write("我們陪你設計每一分資源，讓它守護最重要的人，延續你真正的價值。")
 
+        
         c1, c2, c3 = st.columns(3)
         with c1:
             st.markdown("🏛️ **富足結構**\n\n為資源設計流動性與穩定性，讓財富更有效率地守護人生階段。")
@@ -171,7 +172,7 @@ def render_home():
 
     st.divider()
 
-    # 品牌承諾帶（不特別強調「幸福永傳」）
+    # 品牌承諾帶
     st.markdown(
         """
         <div class="signature-band">財富永續｜基業長青｜幸福永傳</div>
@@ -187,7 +188,7 @@ def render_home():
         unsafe_allow_html=True,
     )
 
-    st.caption(f"《影響力》傳承規劃平台｜{datetime.now().strftime('%Y/%m/%d')}")
+    st.caption(f"《影響力》傳承策略平台｜{datetime.now().strftime('%Y/%m/%d')}")
 
 def _safe_import_and_render(module_name: str):
     try:
