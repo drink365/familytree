@@ -1,4 +1,4 @@
-# pages_familytree.py
+# pages_familytree.py  — with "Execute Import" buttons and safe state management
 
 import json
 import uuid
@@ -13,6 +13,14 @@ import graphviz
 
 def _uid(prefix: str = "id") -> str:
     return "{}_{}".format(prefix, uuid.uuid4().hex[:8])
+
+def _rerun():
+    """兼容新舊版 Streamlit 的 rerun。"""
+    try:
+        st.rerun()
+    except Exception:
+        # for older versions
+        st.experimental_rerun()
 
 def _init_state():
     if "family_tree" not in st.session_state:
@@ -208,7 +216,6 @@ def render_graph(tree: dict) -> graphviz.Graph:
 
 def _fmt_pid(persons: dict, pid: str) -> str:
     name = persons.get(pid, {}).get("name", pid)
-    # 使用全形分隔，避免與 CSV/pipe 混淆
     return "{}｜{}".format(name, pid)
 
 def _sidebar_controls():
@@ -224,18 +231,20 @@ def _sidebar_controls():
         width="stretch",
     )
 
-    # 匯入（側欄）
+    # 匯入（側欄）—— 改為「選檔 + ▶️ 執行匯入」兩步
     uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
     if uploaded is not None:
-        try:
-            text = uploaded.read().decode("utf-8")
-            _import_json(text)
-            st.sidebar.success("已匯入，家族樹已更新")
-        except Exception as e:
-            st.sidebar.error("匯入失敗：{}".format(e))
+        if st.sidebar.button("▶️ 執行匯入", type="primary"):
+            try:
+                text = uploaded.read().decode("utf-8")
+                _import_json(text)
+                st.sidebar.success("已匯入，家族樹已更新")
+                _rerun()  # 立即刷新，讓上方管理區塊顯示資料
+            except Exception as e:
+                st.sidebar.error("匯入失敗：{}".format(e))
 
     # 全部清空（側欄）
-    if st.sidebar.button("🧹 全部清空", type="secondary", width="stretch", key="side_clear"):
+    if st.sidebar.button("🧹 全部清空", type="secondary", key="side_clear"):
         _reset_tree()
         st.sidebar.warning("已清空家族樹")
 
@@ -262,16 +271,18 @@ def _bottom_io_controls():
         st.markdown("**匯入 JSON 檔**")
         uploaded2 = st.file_uploader("選擇檔案", type=["json"], key="bottom_uploader")
         if uploaded2 is not None:
-            try:
-                text = uploaded2.read().decode("utf-8")
-                _import_json(text)
-                st.success("已匯入，家族樹已更新")
-            except Exception as e:
-                st.error("匯入失敗：{}".format(e))
+            if st.button("▶️ 執行匯入", type="primary"):
+                try:
+                    text = uploaded2.read().decode("utf-8")
+                    _import_json(text)
+                    st.success("已匯入，家族樹已更新")
+                    _rerun()  # 立即刷新
+                except Exception as e:
+                    st.error("匯入失敗：{}".format(e))
 
     with c3:
         st.markdown("**動作**")
-        if st.button("🧹 全部清空", type="secondary", width="stretch", key="bottom_clear"):
+        if st.button("🧹 全部清空", type="secondary", key="bottom_clear"):
             _reset_tree()
             st.warning("已清空家族樹")
 
@@ -350,7 +361,7 @@ def _marriage_manager():
             names = [persons.get(x, {}).get("name", x) for x in sp]
             return "{}｜{}".format(mid, " ↔ ".join(names))
 
-        # 注意：不給 key，改用 index 保留選擇，避免與 session_state 賦值衝突
+        # 不給 key，改用 index 保留選擇，避免與 session_state 賦值衝突
         selected_mid = st.selectbox(
             "選擇婚姻（用於新增子女/設定離婚）",
             options=mids,
