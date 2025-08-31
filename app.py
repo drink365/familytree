@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 import streamlit as st
-import runpy  # 新增：用來每次載入 demo.py 都完整執行
+import runpy  # 用來每次載入 demo.py 都完整執行
 
 # -------------------- App Config --------------------
 st.set_page_config(
