@@ -3,7 +3,7 @@
 import streamlit as st
 from datetime import datetime
 
-from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
+from utils.pdf_utils import build_branded_pdf_bytes, p, h2, spacer
 # 若已建立相容小工具（我先前提供的），PDF 會用正式表格；沒有也會自動退回文字列表
 try:
     from utils.pdf_compat import table_compat as pdf_table
@@ -27,9 +27,20 @@ def _wan(n: int | float) -> int:
 def _fmt_wan(n: int | float) -> str:
     return f"{_wan(n):,} 萬元"
 
+def _fmt_pct(x: float) -> str:
+    """百分比好讀格式：整數%不帶小數，否則到兩位小數。"""
+    try:
+        v = round(float(x) * 100, 2)
+        if v.is_integer():
+            return f"{int(v)}%"
+        s = f"{v:.2f}".rstrip("0").rstrip(".")
+        return f"{s}%"
+    except Exception:
+        return "—"
+
 # ============================== Page ==============================
 def render():
-    # 標題（可改成你喜歡的其中一個）
+    # 標題（可改成你喜歡的）
     st.subheader("🧾 法稅工具｜遺產稅試算與法定繼承人")
     st.caption("此頁為示意試算，僅供會談討論；正式申報請以主管機關規定與專業人士意見為準。")
 
@@ -37,7 +48,7 @@ def render():
 
     # ===== ① 家屬結構（決定繼承順位與扣除名額） =====
     st.markdown("### ① 家屬結構")
-    st.caption("勾選/輸入家屬狀況，系統自動判定法定繼承人與應繼分，並帶入可適用的扣除名額。")
+    st.caption("勾選/輸入家屬狀況，系統自動判定法定繼承人與應繼分，並在後端帶入可用的扣除名額。")
 
     ss = st.session_state
     ss.setdefault("tx_spouse", True)
@@ -73,21 +84,16 @@ def render():
     order, shares = determine_heirs_and_shares(spouse_alive, child_count, parent_count, sibling_count, grandparent_count)
     display_order = ("配偶＋" + order) if spouse_alive else order
 
-    b1, b2 = st.columns([2, 1])
-    with b1:
-        st.markdown(f"**法定繼承人**：{display_order or '（無）'}")
-        if shares:
-            st.write({k: f"{v:.2%}" for k, v in shares.items()})
-        else:
-            st.info("目前無可辨識之繼承人（或僅配偶）。")
-    with b2:
-        eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
-        st.markdown("**名額（自動）**")
-        st.write({
-            "配偶": f"{eligible['spouse']} 人",
-            "直系卑親屬": f"{eligible['children']} 人",
-            "直系尊親屬": f"{eligible['ascendants']} 人（最多 2）",
-        })
+    # 後端計算扣除名額（不顯示在前端）
+    eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
+
+    # 法定繼承人與應繼分（友善呈現）
+    st.markdown(f"**法定繼承人**：{display_order or '（無）'}")
+    if shares:
+        parts = [f"{name} **{_fmt_pct(r)}**" for name, r in shares.items()]
+        st.markdown("**應繼分**：" + "｜".join(parts))
+    else:
+        st.info("目前無可辨識之繼承人（或僅配偶）。")
 
     st.divider()
 
@@ -145,10 +151,11 @@ def render():
     # ===== 下載 PDF =====
     st.markdown("### 下載 PDF")
     flow = [
-        title("遺產稅試算結果"), spacer(6),
+        # ⬇︎ 用 h2；字級不會像 title 那麼大，但會是粗體
+        h2("遺產稅試算結果"), spacer(6),
         h2("法定繼承人與應繼分"),
         p("法定繼承人：" + (display_order or "（無）")),
-        p("應繼分：" + (", ".join([f"{k} {v:.2%}" for k, v in shares.items()]) if shares else "N/A")),
+        p("應繼分：" + ("｜".join([f"{k} { _fmt_pct(v) }" for k, v in shares.items()]) if shares else "N/A")),
         spacer(6),
         h2("扣除額計算（單位：萬元）"),
     ]
