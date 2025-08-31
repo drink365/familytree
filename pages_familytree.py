@@ -1,16 +1,13 @@
-# pages_familytree.py — spouses horizontal only; add child delete; unify penwidth
-# - Spouses adjacent via s1–mid–s2; spouse line never goes downward
-# - Only marriages with children render a small junction (mid_d) below
-# - Children connect from junction with straight (non-orthogonal) lines
-# - Siblings rank-same; ordering edges are invisible & non-constraining
-# - Import/Export with "▶️ 執行匯入" and "🧹 全部清空"; stable selection
-# - Swap spouses left/right per marriage to reduce crossings
-# - NEW: All edges penwidth unified to 2
-# - NEW: Delete children from a selected marriage
+# pages_familytree.py — stable layout after spouse-swap
+# - Spouses horizontal only; children drop only when exist (via small junction)
+# - All visible edges use penwidth=2; invisible edges use style="invis" only
+# - Removed sibling-ordering invisible edges to avoid routing side-effects
+# - Per-marriage "swap spouses left/right" to reduce crossings
+# - Add/remove children; import/export; clear all
 
 import json
 import uuid
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 import streamlit as st
 import graphviz
@@ -92,7 +89,6 @@ def add_child(mid: str, child_pid: str):
         m["children"].append(child_pid)
 
 def remove_children(mid: str, child_ids: List[str]):
-    """Remove selected child ids from a marriage (does not delete persons)."""
     m = st.session_state.family_tree["marriages"].get(mid)
     if not m:
         return
@@ -115,18 +111,11 @@ def _parents_map(tree: dict) -> Dict[str, str]:
             out[c] = mid
     return out
 
-def _spouse_map(tree: dict) -> Dict[str, List[Tuple[str, List[str]]]]:
-    out: Dict[str, List[Tuple[str, List[str]]]] = {}
-    for mid, m in tree.get("marriages", {}).items():
-        for s in m.get("spouses", []):
-            out.setdefault(s, []).append((mid, m.get("spouses", [])))
-    return out
-
 # ----------------------------- Rendering -----------------------------
 
 def render_graph(tree: dict) -> graphviz.Graph:
     g = graphviz.Graph("G", engine="dot")
-    # 直線/斜直線；統一線寬 penwidth=2
+    # 直線/斜直線；統一線寬 penwidth=2（僅對可見邊）
     g.attr(rankdir="TB", splines="line", nodesep="0.46", ranksep="0.7")
     g.attr("edge", dir="none", penwidth="2")
 
@@ -165,7 +154,7 @@ def render_graph(tree: dict) -> graphviz.Graph:
             with g.subgraph(name=f"rank_{mid}") as sg:
                 sg.attr(rank="same")
                 sg.node(s1); sg.node(mid); sg.node(s2)
-            # 鎖定順序與貼近（不可見、具約束）
+            # 鎖定順序與貼近（不可見、具約束；不設 penwidth，避免全域覆蓋）
             g.edge(s1, mid, style="invis", weight="800", constraint="true", minlen="0")
             g.edge(mid, s2, style="invis", weight="800", constraint="true", minlen="0")
             # 視覺配偶線（不參與布局）；線寬同 2
@@ -180,47 +169,30 @@ def render_graph(tree: dict) -> graphviz.Graph:
             g.edge(s1, mid, style="solid", constraint="false")
             g.edge(s1, mid, style="invis", weight="600", constraint="true", minlen="0")
 
-    # 兄弟姊妹：同層；排序邊完全不可見且不約束布局
-    parent_of = _parents_map(tree)
-    spouse_map = _spouse_map(tree)
-
+    # 父母→子女（只有有子女才畫）
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
+        if not children:
+            continue
 
-        if children:
-            # 為有子女的婚姻建立「可見下引點」作匯流結
-            g.node(f"{mid}_d", label="", shape="point", width="0.04", color="black")
+        # 可見下引點（小圓點）
+        g.node(f"{mid}_d", label="", shape="point", width="0.04", color="black")
 
-            # 兄弟姊妹同層
-            with g.subgraph(name=f"rank_children_{mid}") as sgc:
-                sgc.attr(rank="same")
-                for c in children:
-                    sgc.node(c)
-
-            # 父母到 junction 的短線（可見、具約束）
-            g.edge(mid, f"{mid}_d", style="solid", weight="900", minlen="1", constraint="true")
-
-            # junction 直線分到每位子女（具約束）
+        # 子女同層
+        with g.subgraph(name=f"rank_children_{mid}") as sgc:
+            sgc.attr(rank="same")
             for c in children:
-                g.edge(f"{mid}_d", c, weight="700", minlen="1", constraint="true")
+                sgc.node(c)
 
-            # 兄弟姊妹排序：把與另一家庭結婚者推右側（完全不可見、不約束）
-            if len(children) >= 2:
-                right_pref, neutral = [], []
-                for c in children:
-                    pref = "neutral"
-                    for _mid2, spouses2 in spouse_map.get(c, []):
-                        partners = [x for x in spouses2 if x != c]
-                        if partners:
-                            partner = partners[0]
-                            if parent_of.get(partner) and parent_of.get(partner) != mid:
-                                pref = "right"; break
-                    (right_pref if pref == "right" else neutral).append(c)
-                ordered = neutral + right_pref
-                for i in range(len(ordered) - 1):
-                    g.edge(ordered[i], ordered[i+1],
-                           style="invis", color="transparent", penwidth="0",
-                           weight="1", constraint="false")
+        # 父母到 junction 的短線（可見、具約束）
+        g.edge(mid, f"{mid}_d", style="solid", weight="900", minlen="1", constraint="true")
+
+        # junction 直線分到每位子女（可見、具約束）
+        for c in children:
+            g.edge(f"{mid}_d", c, style="solid", weight="700", minlen="1", constraint="true")
+
+        # ⚠️ 2025-08：為了穩定，我們不再加入任何「兄弟姊妹排序」的不可見邊
+        # 以避免在特殊布局下出現橫向長線或交錯
 
     return g
 
@@ -389,7 +361,7 @@ def _marriage_manager():
                 add_child(selected_mid, child)
                 st.success("已加入子女")
 
-        # --- NEW: 刪除子女 ---
+        # 刪除子女
         m = marriages[selected_mid]
         current_children = m.get("children", [])
         if current_children:
