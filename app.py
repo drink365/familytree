@@ -1,4 +1,3 @@
-
 # -*- coding: utf-8 -*-
 import json
 import os
@@ -18,7 +17,6 @@ def load_brand():
     try:
         return json.load(open("brand.json", "r", encoding="utf-8"))
     except Exception:
-        # 預設品牌設定
         return {
             "PRIMARY": "#D33B2C",
             "BG": "#F7FAFC",
@@ -26,7 +24,7 @@ def load_brand():
             "SHOW_SIDEBAR_LOGO": True,
             "TAGLINE": "說清楚，做得到",
             "SUBLINE": "把傳承變簡單。",
-            "RETINA_FACTOR": 3
+            "RETINA_FACTOR": 3,
         }
 
 _BRAND = load_brand()
@@ -74,14 +72,14 @@ with st.sidebar:
                 img.save(buf, format="PNG", optimize=True)
                 return base64.b64encode(buf.getvalue()).decode("utf-8")
 
-            b64 = _b64_from_path(sidebar_logo_path, 72*2)  # 2x for small logo
+            b64 = _b64_from_path(sidebar_logo_path, 72 * 2)
             st.markdown(
                 f"""
                 <div class="gfo-logo" style="display:flex;justify-content:center;align-items:center;">
                     <img src="data:image/png;base64,{b64}" class="gfo-logo-img" alt="logo2">
                 </div>
                 """,
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
             st.markdown(
                 """
@@ -91,7 +89,7 @@ with st.sidebar:
                 @media (max-width: 900px)  { .gfo-logo-img { width: 56px !important; } }
                 </style>
                 """,
-                unsafe_allow_html=True
+                unsafe_allow_html=True,
             )
 
     st.markdown('<div class="gfo-caption">《影響力》AI 傳承規劃平台</div>', unsafe_allow_html=True)
@@ -102,7 +100,7 @@ with st.sidebar:
         @media (max-width: 900px) { .gfo-caption { font-size: 0.85rem; } }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
     st.markdown("---")
 
@@ -171,43 +169,47 @@ def logo_b64_highres(path: str, target_px_width: int, mtime: float, size: int):
 
 # -------------------- Pages --------------------
 def render_home():
-    # 首頁 LOGO：高解析輸出 + base64 置左
-    main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH if LOGO_PATH else None)
+    # LOGO（高解析）
+    main_logo_path = "logo.png" if os.path.exists("logo.png") else (LOGO_PATH or None)
     if main_logo_path:
         mtime = os.path.getmtime(main_logo_path); fsize = os.path.getsize(main_logo_path)
         target_css_width = 200
         target_px_width = max(target_css_width * RETINA_FACTOR, 600)
         b64 = logo_b64_highres(main_logo_path, target_px_width, mtime, fsize)
-        st.markdown(
-            f"""
-            <div class="gfo-hero-logo-wrap">
-                <img src="data:image/png;base64,{b64}" class="gfo-hero-logo" alt="logo">
-            </div>
-            """,
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            """
-            <style>
-            .gfo-hero-logo-wrap { display:block; }
-            .gfo-hero-logo { width: 200px !important; height: auto !important; image-rendering: -webkit-optimize-contrast; }
-            @media (max-width: 900px) { .gfo-hero-logo { width: 180px !important; } }
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
+        st.markdown(f'<img src="data:image/png;base64,{b64}" style="width:200px;height:auto;">', unsafe_allow_html=True)
 
-    tagline_text = TAGLINE
-    subline_text = SUBLINE
+    # Hero：一句定位 + 一行揭露
+    st.title("把傳承變成「可驗證的現金流機制」")
+    st.caption("先法律/稅務路徑 → 再財務模型 → 最後選工具（股權/信託/保單/法律）")
+    st.write(":small_blue_diamond: 我們提供保險服務；每張保單在整體設計中都有**角色與數據驗證**（IRR/回本年/壓測）。")
 
-    st.markdown(
-        f"""
-        ### 10 分鐘完成高資產家族 10 年的傳承規劃
+    st.divider()
 
-        {tagline_text}｜{subline_text}
-        """.strip()
-    )
-    st.caption(f"《影響力》傳承策略平台｜永傳家族辦公室｜{datetime.now().strftime('%Y/%m/%d')}")
+    # 三顆主按鈕（直接導頁）
+    st.subheader("快速開始")
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.button("① 家族樹 🌳", use_container_width=True, on_click=navigate, args=("familytree",))
+    with c2:
+        st.button("② 法稅傳承 🏛️", use_container_width=True, on_click=navigate, args=("legacy",))
+    with c3:
+        st.button("③ 保單策略（萬元） 📦", use_container_width=True, on_click=navigate, args=("policy",))
+
+    # 次要入口
+    st.caption("或：🧾 稅務工具｜💬 價值觀探索｜👩‍💼 關於我們")
+    cc1, cc2, cc3 = st.columns(3)
+    with cc1:
+        st.button("🧾 稅務工具", use_container_width=True, on_click=navigate, args=("tax",))
+    with cc2:
+        st.button("💬 價值觀探索", use_container_width=True, on_click=navigate, args=("values",))
+    with cc3:
+        st.button("👩‍💼 關於我們", use_container_width=True, on_click=navigate, args=("about",))
+
+    st.divider()
+
+    # 信任條（極簡）
+    st.markdown("✅ **合規先行**　　✅ **保密優先**　　✅ **跨域團隊（律師/會計師/稅務顧問）**")
+    st.caption(f"《影響力》傳承策略平台｜{datetime.now().strftime('%Y/%m/%d')}")
 
 def _safe_import_and_render(module_name: str):
     try:
