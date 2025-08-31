@@ -4,7 +4,7 @@ from datetime import datetime
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer, table
 
 def render():
-    st.subheader("🗺️ 傳承藍圖（輸入 → 摘要 → PDF）")
+    st.subheader("🗺️ 傳承地圖（輸入 → 摘要 → PDF）")
 
     with st.form("legacy_form"):
         c1, c2, c3 = st.columns(3)
