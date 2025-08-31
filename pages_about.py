@@ -4,7 +4,7 @@ from datetime import date
 from utils.notify import save_contact, send_email
 
 def render():
-    st.subheader("🤝 關於我們 / 聯絡")
+    st.subheader("🤝 聯絡我們")
 
     with st.form("contact_form", clear_on_submit=False):
         c1, c2 = st.columns(2)
