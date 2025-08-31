@@ -1,19 +1,14 @@
-# pages_familytree.py — Stable family tree page for Streamlit
-# Upgrades in this version:
-# - "Clear All" button is directly under "Export JSON" (same style, full width)
-# - Use Digraph and add invisible directed glue edges s1->mid->s2 (constraint=true, weight=10000)
-#   so no node (e.g., a sibling like 玄洲) can ever sit between spouses after swapping
-# - Spouses horizontal only; only marriages with children draw a small junction below
-# - Children lines straight/diagonal; uniform penwidth=2 for visible edges
-# - Add/Delete children; Swap spouses left/right; Import/Export JSON
+# pages_familytree.py — Stable layout (clustered marriages)
+# - Each marriage is kept as a tight mini-block (subgraph with newrank) so no node can slip between spouses
+# - Spouses horizontal only; if there are children a junction below is drawn inside the same block
+# - Visible edges penwidth=2; no sibling ordering edges
+# - Features: add/delete children, swap spouses left/right, import/export, clear-all button under Export
 
 import json
 import uuid
-from typing import Dict, List
-
+from typing import List
 import streamlit as st
 import graphviz
-
 
 # ----------------------------- State & Helpers -----------------------------
 
@@ -43,7 +38,6 @@ def _import_json(text: str):
     obj = json.loads(text)
     persons = {str(k): v for k, v in obj.get("persons", {}).items()}
     marriages = {str(k): v for k, v in obj.get("marriages", {}).items()}
-    # Backward-compat: ensure explicit spouse order
     for mid, m in marriages.items():
         if m.get("spouses") and "order" not in m:
             marriages[mid]["order"] = list(m.get("spouses"))
@@ -53,7 +47,6 @@ def _import_json(text: str):
         st.session_state.selected_mid if st.session_state.selected_mid in mids
         else (mids[-1] if mids else None)
     )
-
 
 # ----------------------------- Mutators -----------------------------
 
@@ -76,7 +69,7 @@ def add_or_get_marriage(p1: str, p2: str) -> str:
     mid = _uid("m")
     st.session_state.family_tree["marriages"][mid] = {
         "spouses": [a, b],
-        "order": [a, b],   # explicit left->right order
+        "order": [a, b],
         "children": [],
         "divorced": False
     }
@@ -106,21 +99,17 @@ def swap_spouse_order(mid: str):
     if len(order) == 2:
         m["order"] = [order[1], order[0]]
 
-
 # ----------------------------- Rendering -----------------------------
 
 def render_graph(tree: dict) -> graphviz.Digraph:
-    # Use Digraph to leverage ordering with directed invisible edges
     g = graphviz.Digraph("G", engine="dot")
-    # Straight/diagonal lines; moderate spacing
     g.attr(rankdir="TB", splines="line", nodesep="0.46", ranksep="0.7")
-    # Uniform penwidth for VISIBLE edges
-    g.attr("edge", dir="none", penwidth="2")
+    g.attr("edge", dir="none", penwidth="2")  # uniform visible lines
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # Person nodes: 男 (box, blue), 女 (rounded box, pink), unknown (rounded white)
+    # person nodes
     for pid, p in persons.items():
         name = p.get("name", pid)
         note = p.get("note")
@@ -136,64 +125,66 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # Invisible mid points for marriages
+    # marriage mid points (invisible)
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.01", style="invis")
 
-    # Spouse links: horizontal only; enforce adjacency with invisible directed glue edges
+    # build each marriage as a tight block
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
             order = m.get("spouses", [])[:2]
-        sp = order
         divorced = m.get("divorced", False)
 
-        if len(sp) == 2:
-            s1, s2 = sp
-            # keep them on same rank
-            with g.subgraph(name=f"rank_{mid}") as sg:
-                sg.attr(rank="same")
+        if len(order) == 2:
+            s1, s2 = order
+            # mini-block subgraph to keep A–mid–B together
+            with g.subgraph(name=f"cluster_{mid}") as sg:
+                sg.attr(rank="same", color="invis", style="invis")
+                sg.attr(newrank="true")  # isolate this rank block
                 sg.node(s1); sg.node(mid); sg.node(s2)
-                # invisible directed chain to force s1, mid, s2 be consecutive
-                sg.edge(s1, mid, style="invis", constraint="true", weight="10000", minlen="0")
-                sg.edge(mid, s2, style="invis", constraint="true", weight="10000", minlen="0")
-            # visible spouse line (non-constraining)
+                # add an invisible guard to enforce tight adjacency
+                guard = f"{mid}_guard"
+                sg.node(guard, label="", shape="point", width="0.01", style="invis")
+                # strong invisible chain (ordering AND tightness)
+                sg.edge(s1, mid, style="invis", constraint="true", weight="20000", minlen="0")
+                sg.edge(mid, s2, style="invis", constraint="true", weight="20000", minlen="0")
+                sg.edge(s2, guard, style="invis", constraint="true", weight="20000", minlen="0")
+            # visible spouse line（不參與整體佈局）
             ls = "dashed" if divorced else "solid"
             g.edge(s1, mid, style=ls, constraint="false")
             g.edge(mid, s2, style=ls, constraint="false")
 
-        elif len(sp) == 1:
-            s1 = sp[0]
-            with g.subgraph(name=f"rank_single_{mid}") as sg:
-                sg.attr(rank="same")
+        elif len(order) == 1:
+            s1 = order[0]
+            with g.subgraph(name=f"cluster_{mid}") as sg:
+                sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid)
-                sg.edge(s1, mid, style="invis", constraint="true", weight="800", minlen="0")
+                sg.edge(s1, mid, style="invis", constraint="true", weight="15000", minlen="0")
             g.edge(s1, mid, style="solid", constraint="false")
 
-    # Parents -> children (draw only when children exist)
+    # parents → children (only when exists), junction inside marriage block
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
         if not children:
             continue
 
-        # Visible junction below the marriage
-        g.node(f"{mid}_d", label="", shape="point", width="0.04", color="black")
+        jn = f"{mid}_d"
+        g.node(jn, label="", shape="point", width="0.04", color="black")
 
-        # Keep children on same rank
+        # keep children on same rank
         with g.subgraph(name=f"rank_children_{mid}") as sgc:
             sgc.attr(rank="same")
             for c in children:
                 sgc.node(c)
 
-        # From marriage mid to junction (visible, constraining)
-        g.edge(mid, f"{mid}_d", style="solid", weight="900", minlen="1", constraint="true")
-
-        # From junction to each child (visible, constraining)
+        # vertical from mid to junction (visible)
+        g.edge(mid, jn, style="solid", weight="900", minlen="1", constraint="true")
+        # junction to each child
         for c in children:
-            g.edge(f"{mid}_d", c, style="solid", weight="700", minlen="1", constraint="true")
+            g.edge(jn, c, style="solid", weight="700", minlen="1", constraint="true")
 
     return g
-
 
 # ----------------------------- UI -----------------------------
 
@@ -210,7 +201,6 @@ def _sidebar_controls():
         mime="application/json",
         use_container_width=True,
     )
-    # 也在側邊提供清空（保留舊有位置）
     if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
         _reset_tree()
         st.sidebar.warning("已清空家族樹")
@@ -226,13 +216,11 @@ def _sidebar_controls():
                 st.sidebar.error(f"匯入失敗：{e}")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("夫妻僅水平連線；有子女時才從夫妻下方的小圓點分支到子女（直/斜直線）。")
-
+    st.sidebar.caption("夫妻僅水平連線；有子女時才在下方生成匯流點並直線分支到子女。")
 
 def _bottom_io_controls():
     st.markdown("---")
     st.subheader("📦 資料匯入 / 匯出")
-    # 依你的要求：把「全部清空」直接放在「匯出 JSON」下方，同欄同樣樣式
     c1, c2 = st.columns([2, 2], gap="large")
 
     with c1:
@@ -261,14 +249,13 @@ def _bottom_io_controls():
                 except Exception as e:
                     st.error(f"匯入失敗：{e}")
 
-
 def _person_manager():
     st.subheader("👤 人員管理")
     c1, c2, c3 = st.columns([2, 1, 2])
     with c1:
         name = st.text_input("姓名*", key="person_name")
     with c2:
-        gender = st.selectbox("性別", ["", "男", "女"], index=0, help="只提供男/女選項")
+        gender = st.selectbox("性別", ["", "男", "女"], index=0)
     with c3:
         note = st.text_input("備註", key="person_note")
 
@@ -290,7 +277,6 @@ def _person_manager():
             use_container_width=True,
             hide_index=True,
         )
-
 
 def _marriage_manager():
     st.subheader("💍 婚姻與子女")
@@ -362,7 +348,6 @@ def _marriage_manager():
                 st.success("已加入子女")
                 _safe_rerun()
 
-        # 刪除子女
         m = marriages[selected_mid]
         current_children = m.get("children", [])
         if current_children:
@@ -400,7 +385,6 @@ def _marriage_manager():
                          "子女": "、".join(ch), "離婚": "是" if mm.get("divorced", False) else "否"})
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
-
 def _viewer():
     st.subheader("🌳 家族樹")
     tree = st.session_state.family_tree
@@ -409,7 +393,6 @@ def _viewer():
         return
     g = render_graph(tree)
     st.graphviz_chart(g, use_container_width=True)
-
 
 # ----------------------------- Entry -----------------------------
 
@@ -423,7 +406,7 @@ def main():
     _viewer()
     _bottom_io_controls()
 
-def render():  # for multi-page apps
+def render():
     main()
 
 if __name__ == "__main__":
