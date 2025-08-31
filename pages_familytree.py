@@ -1,5 +1,5 @@
 # pages_familytree.py — Family tree with straight spouse line,
-# deceased flag + inline editing & delete in table, and female styling restored.
+# deceased flag + inline editing & delete, female styling fixed (rounded when deceased)
 
 import json
 import uuid
@@ -104,16 +104,14 @@ def _delete_person(pid: str):
     for mid, m in list(marriages.items()):
         if pid in m.get("spouses", []):
             m["spouses"] = [x for x in m["spouses"] if x != pid]
-            # keep order aligned
             m["order"] = [x for x in (m.get("order") or []) if x != pid]
         if pid in m.get("children", []):
             m["children"] = [x for x in m["children"] if x != pid]
 
-        # If no spouses and no children -> drop the marriage
+        # If empty marriage, remove
         if not m.get("spouses") and not m.get("children"):
             to_delete_mids.append(mid)
 
-        # If order is missing but have spouses, regenerate
         if m.get("spouses") and not m.get("order"):
             m["order"] = m["spouses"][:]
 
@@ -133,32 +131,25 @@ def render_graph(tree: dict) -> graphviz.Digraph:
     persons: Dict[str, Dict[str, Any]] = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # Person nodes with color/shape logic
+    # Person nodes with color/shape logic (deceased overrides only the fillcolor)
     for pid, p in persons.items():
         name = p.get("name", pid)
         note = p.get("note")
         deceased = p.get("deceased", False)
+        gender = p.get("gender", "")
         label = name + (f"\n{note}" if note else "")
 
-        if deceased:
-            # deceased overrides gender styling
-            shape = "box"
-            style = "filled"
-            fillcolor = "#E0E0E0"
+        # base style by gender
+        if gender == "男":
+            shape = "box";         style = "filled";          fillcolor = "#E6F2FF"
+        elif gender == "女":
+            shape = "box";         style = "rounded,filled";  fillcolor = "#FFE6E6"
         else:
-            gender = p.get("gender", "")
-            if gender == "男":
-                shape = "box"
-                style = "filled"
-                fillcolor = "#E6F2FF"
-            elif gender == "女":
-                shape = "box"
-                style = "rounded,filled"   # <-- restore rounded pink style
-                fillcolor = "#FFE6E6"
-            else:
-                shape = "box"
-                style = "rounded,filled"
-                fillcolor = "white"
+            shape = "box";         style = "rounded,filled";  fillcolor = "white"
+
+        # deceased: keep shape/style (so females stay rounded), just change fill
+        if deceased:
+            fillcolor = "#E0E0E0"
 
         g.node(pid, label=label, shape=shape, style=style,
                fillcolor=fillcolor, fontsize="11")
@@ -304,7 +295,7 @@ def _person_manager():
                 for _, row in edited.iterrows():
                     pid = row["pid"]
                     if pid in persons:
-                        persons[pid]["name"] = row["姓名"].strip() or pid
+                        persons[pid]["name"] = (row["姓名"] or "").strip() or pid
                         persons[pid]["gender"] = row["性別"]
                         persons[pid]["note"] = row["備註"]
                         persons[pid]["deceased"] = bool(row["已故"])
