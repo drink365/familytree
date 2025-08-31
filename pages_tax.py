@@ -5,7 +5,8 @@ from datetime import datetime
 
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, spacer
 try:
-    from utils.pdf_compat import table_compat as pdf_table  # 有就用正式表格；沒有會自動退回文字
+    # 若專案提供了表格相容工具，PDF 會用正式表格；否則自動退回文字列
+    from utils.pdf_compat import table_compat as pdf_table
 except Exception:
     pdf_table = None
 
@@ -16,7 +17,7 @@ from tax import (
     ESTATE_BRACKETS,
 )
 
-# ===== 工具：畫面顯示以「萬元」；內部運算用「元」 =====
+# ------------ helpers ------------
 def _wan(n: int | float) -> int:
     try:
         return int(round(n / 10000.0))
@@ -36,7 +37,6 @@ def _fmt_pct(x: float) -> str:
     except Exception:
         return "—"
 
-# 小型統計卡片（避免大字被截斷）
 def _stat_card(label: str, value: str) -> str:
     return f"""
     <div class="stat-card">
@@ -45,39 +45,15 @@ def _stat_card(label: str, value: str) -> str:
     </div>
     """
 
-def _order_with_counts(order_text: str,
-                       child_count: int,
-                       parent_count: int,
-                       sibling_count: int,
-                       grandparent_count: int) -> str:
-    """
-    將「第一順序（子女）」依人數改為「第一順序（子女2名）」等；人數為 0 時不加註。
-    """
-    t = order_text or ""
-    if ("第一順序" in t and "子女" in t and child_count > 0):
-        return f"第一順序（子女{int(child_count)}名）"
-    if ("第二順序" in t and "父母" in t and parent_count > 0):
-        return f"第二順序（父母{int(parent_count)}名）"
-    if ("第三順序" in t and "兄弟姊妹" in t and sibling_count > 0):
-        return f"第三順序（兄弟姊妹{int(sibling_count)}名）"
-    if ("第四順序" in t and "祖父母" in t and grandparent_count > 0):
-        return f"第四順序（祖父母{int(grandparent_count)}名）"
-    return t
-
-# ============================== Page ==============================
+# ------------ page ------------
 def render():
-    # 標題
     st.subheader("🧾 法稅工具｜法定繼承人與遺產稅試算")
     st.caption("此頁為示意試算，僅供會談討論；正式申報請以主管機關規定與專業人士意見為準。")
 
-    # CSS：小型統計卡片＋紅色百分比（與全站紅色系一致）
     st.markdown(
         """
         <style>
-        .stat-card{
-            padding:12px 14px;border:1px solid #e5e7eb;border-radius:12px;
-            background:#fff; box-shadow: 0 1px 0 rgba(0,0,0,0.02);
-        }
+        .stat-card{padding:12px 14px;border:1px solid #e5e7eb;border-radius:12px;background:#fff;box-shadow:0 1px 0 rgba(0,0,0,0.02)}
         .stat-label{font-size:0.95rem;color:#6b7280;margin-bottom:4px}
         .stat-value{font-size:1.2rem;font-weight:700;color:#111827;line-height:1.4}
         .pct-red{color:#c2272d;font-weight:700}
@@ -89,9 +65,9 @@ def render():
 
     st.divider()
 
-    # ===== ① 家屬結構 =====
+    # ① 家屬結構
     st.markdown("### ① 家屬結構")
-    st.caption("勾選/輸入家屬狀況，系統自動判定法定繼承人與應繼分，並在後端帶入可用的扣除名額。")
+    st.caption("勾選/輸入家屬狀況，系統自動判定法定繼承人與應繼分，並於後端帶入可用扣除名額。")
 
     ss = st.session_state
     ss.setdefault("tx_spouse", True)
@@ -100,7 +76,6 @@ def render():
     ss.setdefault("tx_sibling", 0)
     ss.setdefault("tx_gparent", 0)
 
-    # 快速情境
     c0a, c0b, c0c, _ = st.columns([1.3, 1.3, 1.3, 3])
     with c0a:
         if st.button("一鍵：配偶＋2子女", use_container_width=True):
@@ -124,17 +99,28 @@ def render():
     with a5:
         grandparent_count = st.number_input("祖父母存活數（0-2）", min_value=0, max_value=2, step=1, value=ss.get("tx_gparent", 0), key="tx_gparent")
 
+    def _order_with_counts(order_text: str) -> str:
+        t = order_text or ""
+        if ("第一順序" in t and "子女" in t and child_count > 0):
+            return f"第一順序（子女{int(child_count)}名）"
+        if ("第二順序" in t and "父母" in t and parent_count > 0):
+            return f"第二順序（父母{int(parent_count)}名）"
+        if ("第三順序" in t and "兄弟姊妹" in t and sibling_count > 0):
+            return f"第三順序（兄弟姊妹{int(sibling_count)}名）"
+        if ("第四順序" in t and "祖父母" in t and grandparent_count > 0):
+            return f"第四順序（祖父母{int(grandparent_count)}名）"
+        return t
+
     order_text_raw, shares = determine_heirs_and_shares(
         spouse_alive, child_count, parent_count, sibling_count, grandparent_count
     )
-    order_text = _order_with_counts(order_text_raw, child_count, parent_count, sibling_count, grandparent_count)
+    order_text = _order_with_counts(order_text_raw)
 
-    # 正確呈現「法定繼承人」文案
     has_others = (child_count > 0) or (parent_count > 0) or (sibling_count > 0) or (grandparent_count > 0)
     if spouse_alive and not has_others:
-        display_order = "配偶"  # 僅有配偶
+        display_order = "配偶"
     elif (not spouse_alive) and not has_others:
-        display_order = "（無繼承人，視為國庫）"  # 完全沒有繼承人
+        display_order = "（無繼承人，視為國庫）"
     else:
         parts = []
         if spouse_alive:
@@ -143,10 +129,8 @@ def render():
             parts.append(order_text)
         display_order = "＋".join(parts) if parts else "（無繼承人，視為國庫）"
 
-    # 後端運算名額（不顯示於前端）
     eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
 
-    # 法定繼承人 & 應繼分（頁面：百分比紅色）
     st.markdown(f"**法定繼承人**：{display_order}")
     if shares:
         key_order = ["配偶", "子女", "父母", "兄弟姊妹", "祖父母"]
@@ -157,15 +141,13 @@ def render():
         for k, v in shares.items():
             if k not in key_order:
                 parts.append(f'{k} <span class="pct-red">{_fmt_pct(v)}</span>')
-        st.markdown("**應繼分**： " + " <span class='inline-sep'>｜</span> ".join(parts),
-                    unsafe_allow_html=True)
+        st.markdown("**應繼分**： " + " <span class='inline-sep'>｜</span> ".join(parts), unsafe_allow_html=True)
     else:
-        # 只有在「真的沒有任何繼承人」時才顯示
         st.info("目前無可辨識之繼承人。")
 
     st.divider()
 
-    # ===== ② 遺產與扣除（單位：萬元） =====
+    # ② 遺產與扣除（萬）
     st.markdown("### ② 遺產與扣除（單位：萬元）")
     cA, cB, cC = st.columns(3)
     with cA:
@@ -179,12 +161,10 @@ def render():
         st.text_input("直系卑親屬人數（自動 ×56 萬）", value=str(eligible["children"]), disabled=True)
         st.text_input("直系尊親屬人數（自動 ×138 萬｜最多 2）", value=str(eligible["ascendants"]), disabled=True)
 
-    # 換算回元
     estate_base   = int(estate_base_wan * 10000)
     funeral       = int(funeral_wan * 10000)
     basic_ex      = int(basic_ex_wan * 10000)
 
-    # 扣除金額（元）
     funeral_capped = min(funeral, 1_380_000)
     amt_children   = eligible["children"] * 560_000
     amt_asc        = eligible["ascendants"] * 1_380_000
@@ -193,17 +173,13 @@ def render():
     taxable = max(0, int(estate_base - total_deductions))
     result = apply_brackets(taxable, ESTATE_BRACKETS)
 
-    # ===== ③ 試算結果（小型統計卡片） =====
+    # ③ 試算結果（小型卡）
     st.markdown("### ③ 試算結果")
     c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.markdown(_stat_card("可扣除總額", _fmt_wan(total_deductions)), unsafe_allow_html=True)
-    with c2:
-        st.markdown(_stat_card("課稅基礎", _fmt_wan(taxable)), unsafe_allow_html=True)
-    with c3:
-        st.markdown(_stat_card("適用稅率", f"{result['rate']}%"), unsafe_allow_html=True)
-    with c4:
-        st.markdown(_stat_card("預估應納稅額", _fmt_wan(result["tax"])), unsafe_allow_html=True)
+    with c1: st.markdown(_stat_card("可扣除總額", _fmt_wan(total_deductions)), unsafe_allow_html=True)
+    with c2: st.markdown(_stat_card("課稅基礎", _fmt_wan(taxable)), unsafe_allow_html=True)
+    with c3: st.markdown(_stat_card("適用稅率", f"{result['rate']}%"), unsafe_allow_html=True)
+    with c4: st.markdown(_stat_card("預估應納稅額", _fmt_wan(result["tax"])), unsafe_allow_html=True)
 
     with st.expander("查看扣除明細", expanded=False):
         st.write({
@@ -216,23 +192,19 @@ def render():
 
     st.divider()
 
-    # ===== 下載 PDF =====
+    # 下載 PDF（※ 已移除「價值觀摘要」段落）
     st.markdown("### 下載 PDF")
     flow = [
         h2("遺產稅試算結果"), spacer(6),
         h2("法定繼承人與應繼分"),
         p("法定繼承人：" + (display_order or "（無）")),
     ]
-
-    # PDF 應繼分：以紅字呈現整段（若底層不支援顏色，將自動以黑字落回）
     if shares:
         share_str = "｜".join([f"{k} {_fmt_pct(v)}" for k, v in shares.items()])
-        flow.append(p("應繼分："))
-        # 嘗試使用 color 參數；若 utils 不支援會自動忽略並以黑字呈現
         try:
-            flow.append(p(share_str, color="#c2272d"))
+            flow += [p("應繼分："), p(share_str, color="#c2272d")]
         except Exception:
-            flow.append(p(share_str))
+            flow += [p("應繼分：" + share_str)]
     else:
         flow.append(p("應繼分：N/A"))
 
@@ -243,7 +215,7 @@ def render():
     if spouse_ded > 0:     rows.append(["配偶扣除", "", _fmt_wan(spouse_ded)])
     if basic_ex > 0:       rows.append(["基本免稅", "", _fmt_wan(basic_ex)])
     if amt_children > 0:   rows.append(["直系卑親屬", f"{eligible['children']} 人 × 56 萬", _fmt_wan(amt_children)])
-    if amt_asc > 0:        rows.append(["直系尊親屚", f"{eligible['ascendants']} 人 × 138 萬（最多 2）", _fmt_wan(amt_asc)])
+    if amt_asc > 0:        rows.append(["直系尊親屬", f"{eligible['ascendants']} 人 × 138 萬（最多 2）", _fmt_wan(amt_asc)])
 
     if pdf_table and rows:
         try:
