@@ -1,5 +1,5 @@
-# pages_familytree.py — full, fixed: anchor marriage point, children below parents, siblings same-rank,
-# execute-import buttons, stable marriage selection, width="stretch".
+# pages_familytree.py — spouses adjacent via s1–mid–s2, children vertical from mid,
+# anchor mid on parents' rank, siblings same-rank, execute-import buttons, stable selection.
 
 import json
 import uuid
@@ -142,38 +142,41 @@ def render_graph(tree: dict) -> graphviz.Graph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # 婚姻點（不可見小點）
+    # 婚姻點（不可見，僅作為接點；線仍可見）
     for mid, _m in marriages.items():
-        g.node(mid, label="", shape="point", width="0.01")
+        g.node(mid, label="", shape="point", width="0.01", style="invis")
 
-    # 配偶：同一層水平排列、水平線連結（並錨定婚姻點與父母同層）
+    # 配偶：同一層水平排列，並用 s1—mid—s2（可見）連接；同時錨定 mid 與父母同層
     for mid, m in marriages.items():
         spouses = list(m.get("spouses", []))
         divorced = m.get("divorced", False)
         if len(spouses) == 2:
             s1, s2 = spouses
 
-            # 1) 父母兩人固定在同層
+            # 1) 父母 + mid 固定在同一層，且保持 s1, mid, s2 的順序
             with g.subgraph(name="rank_{}".format(mid)) as sg:
                 sg.attr(rank="same")
                 sg.node(s1)
+                sg.node(mid)
                 sg.node(s2)
 
-            # 2) 強化相鄰（不可見邊，用來貼近）
-            g.edge(s1, s2, style="invis", weight="220", constraint="true")
+            # 2) 用不可見邊強化順序與貼近（避免他人插入）
+            g.edge(s1, mid, style="invis", weight="300", constraint="true", minlen="0")
+            g.edge(mid, s2, style="invis", weight="300", constraint="true", minlen="0")
 
-            # 3) 視覺上的配偶線（不影響層級）
-            g.edge(s1, s2, style=("dashed" if divorced else "solid"),
-                   penwidth="2", constraint="false")
-
-            # 4) 以「有約束力的不可見邊」把婚姻點錨定在父母同一層
-            g.edge(s1, mid, style="invis", weight="100", minlen="0", constraint="true")
-            g.edge(s2, mid, style="invis", weight="100", minlen="0", constraint="true")
+            # 3) 可見的配偶線：s1—mid、mid—s2（離婚則虛線）
+            style_line = "dashed" if divorced else "solid"
+            g.edge(s1, mid, style=style_line, penwidth="2", constraint="true", minlen="0")
+            g.edge(mid, s2, style=style_line, penwidth="2", constraint="true", minlen="0")
 
         elif len(spouses) == 1:
             s1 = spouses[0]
-            # 單親時也把 mid 錨在同層，避免上飄
-            g.edge(s1, mid, style="invis", weight="80", minlen="0", constraint="true")
+            with g.subgraph(name="rank_single_{}".format(mid)) as sg:
+                sg.attr(rank="same")
+                sg.node(s1)
+                sg.node(mid)
+            # 讓 mid 與單親同層並以實線呈現
+            g.edge(s1, mid, style="solid", penwidth="2", constraint="true", minlen="0")
 
     # 兄弟姊妹：同層 + 排序（讓跨家庭夫妻靠攏），且子女一定在父母之下
     parent_of = _parents_map(tree)
@@ -191,7 +194,7 @@ def render_graph(tree: dict) -> graphviz.Graph:
 
         # 1) 從婚姻點往下連到每位子女；minlen=1 確保子女在父母下方
         for c in children:
-            g.edge(mid, c, weight="8", minlen="1", constraint="true")
+            g.edge(mid, c, weight="80", minlen="1", constraint="true")
 
         # 2) 兄弟姊妹排序：將與「另一家庭」結婚的孩子推到右側
         if len(children) >= 2:
@@ -212,7 +215,7 @@ def render_graph(tree: dict) -> graphviz.Graph:
 
             ordered_children = neutral + right_pref
 
-            # 用不可見邊固定左右相鄰
+            # 用不可見邊固定左右相鄰（高 weight 保持相鄰）
             for i in range(len(ordered_children) - 1):
                 a = ordered_children[i]
                 b = ordered_children[i + 1]
