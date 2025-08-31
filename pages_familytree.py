@@ -1,6 +1,8 @@
-# pages_familytree.py — Spouse-first stable layout (clean straight spouse edges)
-# Keep spouse link always short & straight; avoid curved/offset edges by
-# removing parallel invisible edges between the same endpoints.
+# pages_familytree.py — Spouse-stable layout (clean straight spouse line)
+# - Remove "swap spouse left/right" UI & logic.
+# - Draw ONE straight visible line between spouses (s1—s2).
+# - Keep a tiny visible mid point; use invisible constraints s1↔mid, mid↔s2
+#   so the dot stays centered and children attach downward from mid.
 
 import json
 import uuid
@@ -90,19 +92,12 @@ def remove_children(mid: str, child_ids: List[str]):
         return
     m["children"] = [c for c in m.get("children", []) if c not in set(child_ids)]
 
-def swap_spouse_order(mid: str):
-    m = st.session_state.family_tree["marriages"].get(mid)
-    if not m:
-        return
-    order = m.get("order") or m.get("spouses", [])[:]
-    if len(order) == 2:
-        m["order"] = [order[1], order[0]]
+# （已移除 swap_spouse_order 與相關呼叫）
 
 # ----------------------------- Rendering -----------------------------
 
 def render_graph(tree: dict) -> graphviz.Digraph:
     g = graphviz.Digraph("G", engine="dot")
-    # TB: parents on top, children below; keep lines straight
     g.attr(rankdir="TB", splines="line", nodesep="0.5", ranksep="0.9")
     g.attr("edge", dir="none", penwidth="2")
 
@@ -125,7 +120,7 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # Marriage mid points — tiny visible dot so spouse edges stay short & straight
+    # Tiny visible mid point for each marriage
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.03", color="black")
 
@@ -138,37 +133,34 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 
         if len(order) == 2:
             s1, s2 = order
-            # Lock s1, mid, s2 on the same rank; use a guard anchor to avoid parallel edges
+            # Keep s1, mid, s2 on the same rank and keep mid centered by invisible constraints
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid); sg.node(s2)
-                guard = f"{mid}_guard"
-                sg.node(guard, label="", shape="point", width="0.01", style="invis")
-                # Use guard to keep adjacency without creating parallel edges s1-mid / mid-s2
-                sg.edge(s1, guard, style="invis", constraint="true", weight="40000", minlen="0")
-                sg.edge(guard, s2, style="invis", constraint="true", weight="40000", minlen="0")
+                # These invisible edges center 'mid' between spouses without creating parallel visibles
+                sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
+                sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
 
-            # Visible spouse edges — constraints with decent weight to stay straight & short
+            # Visible spouse line: single straight segment between spouses
             ls = "dashed" if divorced else "solid"
-            g.edge(s1, mid, style=ls, constraint="true", weight="2000", minlen="0")
-            g.edge(mid, s2, style=ls, constraint="true", weight="2000", minlen="0")
+            g.edge(s1, s2, style=ls, constraint="true", weight="1800", minlen="0")
 
         elif len(order) == 1:
+            # Single-parent case: keep a straight line to mid so it looks natural
             s1 = order[0]
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid)
-            # single spouse case: keep edge straight (no parallel invisible edge)
-            g.edge(s1, mid, style="solid", constraint="true", weight="2000", minlen="0")
+                sg.edge(s1, mid, style="invis", constraint="true", weight="40000", minlen="0")
+            g.edge(s1, mid, style="solid", constraint="true", weight="1800", minlen="0")
 
-    # Children: draw downward; keep strong vertical constraints
+    # Children: strong downward constraints from mid
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
         if not children:
             continue
         jn = f"{mid}_d"
         g.node(jn, label="", shape="point", width="0.04", color="black")
-        # Strong vertical link from marriage to downstream junction
         g.edge(mid, jn, style="solid", weight="1200", minlen="1", constraint="true")
         for c in children:
             g.edge(jn, c, style="solid", weight="900", minlen="1", constraint="true")
@@ -280,16 +272,16 @@ def _marriage_manager():
         def _m_label(mid: str) -> str:
             m = marriages[mid]
             order = m.get("order") or m.get("spouses", [])
-            names = [persons.get(x, {}).get("name", x) for x in order]
+            names = [persons.get(x, {}).get('name', x) for x in order]
             return f"{mid}｜{' ↔ '.join(names)}"
 
         selected_mid = st.selectbox(
-            "選擇婚姻（新增/刪除子女、設定離婚、左右交換）",
+            "選擇婚姻（新增/刪除子女、設定離婚）",
             options=mids, index=default_index, format_func=_m_label,
         )
         st.session_state.selected_mid = selected_mid
 
-        c4, c5, c6 = st.columns([3, 2, 2])
+        c4, c5 = st.columns([3, 2])
         with c4:
             child = st.selectbox(
                 "選擇子女（現有成員）",
@@ -300,12 +292,6 @@ def _marriage_manager():
         with c5:
             st.markdown("\n")
             addc = st.button("加入子女")
-        with c6:
-            st.markdown("\n")
-            if st.button("⇄ 配偶左右交換"):
-                swap_spouse_order(selected_mid)
-                st.success("已交換左右（配偶仍相鄰）")
-                _safe_rerun()
 
         if addc:
             if child == "-":
@@ -348,7 +334,7 @@ def _marriage_manager():
             order = mm.get("order") or mm.get("spouses", [])
             sp_names = [persons.get(x, {}).get("name", x) for x in order]
             ch = [persons.get(x, {}).get("name", x) for x in mm.get("children", [])]
-            rows.append({"mid": mid, "配偶(左→右)": "、".join(sp_names),
+            rows.append({"mid": mid, "配偶": "、".join(sp_names),
                          "子女": "、".join(ch), "離婚": "是" if mm.get("divorced", False) else "否"})
         st.dataframe(rows, use_container_width=True, hide_index=True)
 
@@ -371,7 +357,7 @@ def main():
     with st.expander("➕ 建立 / 管理成員與關係", expanded=True):
         _person_manager(); _marriage_manager()
     _viewer()
-    _bottom_io_controls()  # 若也想拿掉底部匯入/匯出，告訴我我再幫你移除
+    _bottom_io_controls()
 
 def render():
     main()
