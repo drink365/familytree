@@ -5,7 +5,7 @@ from datetime import datetime
 
 from utils.pdf_utils import build_branded_pdf_bytes, p, h2, spacer
 try:
-    from utils.pdf_compat import table_compat as pdf_table  # 有就用正式表格
+    from utils.pdf_compat import table_compat as pdf_table  # 有就用正式表格；沒有會自動退回文字
 except Exception:
     pdf_table = None
 
@@ -70,7 +70,7 @@ def render():
     st.subheader("🧾 法稅工具｜法定繼承人與遺產稅試算")
     st.caption("此頁為示意試算，僅供會談討論；正式申報請以主管機關規定與專業人士意見為準。")
 
-    # CSS：小型統計卡片＋紅色百分比
+    # CSS：小型統計卡片＋紅色百分比（與全站紅色系一致）
     st.markdown(
         """
         <style>
@@ -129,16 +129,13 @@ def render():
     )
     order_text = _order_with_counts(order_text_raw, child_count, parent_count, sibling_count, grandparent_count)
 
-    # --- 正確呈現「法定繼承人」的文案 ---
+    # 正確呈現「法定繼承人」文案
     has_others = (child_count > 0) or (parent_count > 0) or (sibling_count > 0) or (grandparent_count > 0)
     if spouse_alive and not has_others:
-        # 僅有配偶
-        display_order = "配偶"
+        display_order = "配偶"  # 僅有配偶
     elif (not spouse_alive) and not has_others:
-        # 完全沒有繼承人
-        display_order = "（無繼承人，視為國庫）"
+        display_order = "（無繼承人，視為國庫）"  # 完全沒有繼承人
     else:
-        # 其他情境：配偶 + 對應順位（若有）
         parts = []
         if spouse_alive:
             parts.append("配偶")
@@ -149,7 +146,7 @@ def render():
     # 後端運算名額（不顯示於前端）
     eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
 
-    # 法定繼承人 & 應繼分（比例紅色）
+    # 法定繼承人 & 應繼分（頁面：百分比紅色）
     st.markdown(f"**法定繼承人**：{display_order}")
     if shares:
         key_order = ["配偶", "子女", "父母", "兄弟姊妹", "祖父母"]
@@ -160,9 +157,11 @@ def render():
         for k, v in shares.items():
             if k not in key_order:
                 parts.append(f'{k} <span class="pct-red">{_fmt_pct(v)}</span>')
-        st.markdown("**應繼分**： " + " <span class='inline-sep'>｜</span> ".join(parts), unsafe_allow_html=True)
+        st.markdown("**應繼分**： " + " <span class='inline-sep'>｜</span> ".join(parts),
+                    unsafe_allow_html=True)
     else:
-        st.info("目前無可辨識之繼承人（或僅配偶）。")
+        # 只有在「真的沒有任何繼承人」時才顯示
+        st.info("目前無可辨識之繼承人。")
 
     st.divider()
 
@@ -223,17 +222,28 @@ def render():
         h2("遺產稅試算結果"), spacer(6),
         h2("法定繼承人與應繼分"),
         p("法定繼承人：" + (display_order or "（無）")),
-        p("應繼分：" + ("｜".join([f"{k} {_fmt_pct(v)}" for k, v in shares.items()]) if shares else "N/A")),
-        spacer(6),
-        h2("扣除額計算（單位：萬元）"),
     ]
+
+    # PDF 應繼分：以紅字呈現整段（若底層不支援顏色，將自動以黑字落回）
+    if shares:
+        share_str = "｜".join([f"{k} {_fmt_pct(v)}" for k, v in shares.items()])
+        flow.append(p("應繼分："))
+        # 嘗試使用 color 參數；若 utils 不支援會自動忽略並以黑字呈現
+        try:
+            flow.append(p(share_str, color="#c2272d"))
+        except Exception:
+            flow.append(p(share_str))
+    else:
+        flow.append(p("應繼分：N/A"))
+
+    flow += [spacer(6), h2("扣除額計算（單位：萬元）")]
 
     rows = []
     if funeral_capped > 0: rows.append(["喪葬費", "上限 138 萬", _fmt_wan(funeral_capped)])
     if spouse_ded > 0:     rows.append(["配偶扣除", "", _fmt_wan(spouse_ded)])
     if basic_ex > 0:       rows.append(["基本免稅", "", _fmt_wan(basic_ex)])
     if amt_children > 0:   rows.append(["直系卑親屬", f"{eligible['children']} 人 × 56 萬", _fmt_wan(amt_children)])
-    if amt_asc > 0:        rows.append(["直系尊親屬", f"{eligible['ascendants']} 人 × 138 萬（最多 2）", _fmt_wan(amt_asc)])
+    if amt_asc > 0:        rows.append(["直系尊親屚", f"{eligible['ascendants']} 人 × 138 萬（最多 2）", _fmt_wan(amt_asc)])
 
     if pdf_table and rows:
         try:
