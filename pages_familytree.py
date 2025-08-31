@@ -1,9 +1,10 @@
-# pages_familytree.py — Spouse-first stable layout
-# - Spouses ALWAYS adjacent (highest priority). Each marriage is a tight mini-block: A–mid–B(+guard)
-# - No sibling ordering or "keep-siblings-together" constraints at all
-# - Children only add a lightweight downward junction; they never split spouses
-# - Spouses horizontal only; draw downward only if children exist
-# - Uniform penwidth=2; add/delete child; swap spouses; import/export; clear-all under export
+# pages_familytree.py — Spouse-first stable layout + fix: clear-all triggers rerun
+# - Spouses ALWAYS adjacent (tight marriage cluster A–mid–B–guard)
+# - No sibling-order constraints to avoid splitting spouses
+# - Children drawn only downward from a junction under the marriage
+# - Uniform penwidth=2 for visible edges
+# - Features: add/delete child, swap spouses, import/export
+# - FIX: "Clear All" now calls _safe_rerun() so the UI refreshes immediately
 
 import json
 import uuid
@@ -106,14 +107,13 @@ def swap_spouse_order(mid: str):
 
 def render_graph(tree: dict) -> graphviz.Digraph:
     g = graphviz.Digraph("G", engine="dot")
-    # 不做世代水平排序，避免全局長橫線；一切以婚姻小區塊為主
     g.attr(rankdir="TB", splines="line", nodesep="0.5", ranksep="0.9")
-    g.attr("edge", dir="none", penwidth="2")  # 可見線條統一粗細
+    g.attr("edge", dir="none", penwidth="2")  # visible lines unified
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
 
-    # Person nodes：男=方框淺藍、女=圓角淺紅、未知=白色圓角
+    # Person nodes
     for pid, p in persons.items():
         name = p.get("name", pid)
         note = p.get("note")
@@ -129,11 +129,11 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # 建立每段婚姻的不可見 mid 點
+    # Marriage mid points (invisible)
     for mid in marriages.keys():
         g.node(mid, label="", shape="point", width="0.01", style="invis")
 
-    # 把每段婚姻做成「緊密小區塊」：A, mid, B, guard 形成不可見強力鏈，保證相鄰且不能被插隊
+    # Tight marriage clusters: A–mid–B–guard locked together
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -147,15 +147,12 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.node(s1); sg.node(mid); sg.node(s2)
                 guard = f"{mid}_guard"
                 sg.node(guard, label="", shape="point", width="0.01", style="invis")
-                # 強力不可見鏈：任何情況都優先維持 A–mid–B 緊鄰
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(s2, guard, style="invis", constraint="true", weight="50000", minlen="0")
-            # 可見夫妻線（僅顯示，不參與全局佈局）
             ls = "dashed" if divorced else "solid"
             g.edge(s1, mid, style=ls, constraint="false")
             g.edge(mid, s2, style=ls, constraint="false")
-
         elif len(order) == 1:
             s1 = order[0]
             with g.subgraph(name=f"cluster_{mid}") as sg:
@@ -164,20 +161,14 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.edge(s1, mid, style="invis", constraint="true", weight="40000", minlen="0")
             g.edge(s1, mid, style="solid", constraint="false")
 
-    # 有子女才往下畫：mid → jn (可見垂直)，jn → child (可見)
-    # 不再對兄弟姊妹做任何不可見排序或靠攏，以免影響婚姻相鄰
+    # Draw children only downward; no sibling ordering to avoid breaking spouses
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
         if not children:
             continue
-
         jn = f"{mid}_d"
         g.node(jn, label="", shape="point", width="0.04", color="black")
-
-        # mid to junction：為了直覺垂直往下，給一定的 weight 但遠小於婚姻內的 50000，避免去拉別處
         g.edge(mid, jn, style="solid", weight="1200", minlen="1", constraint="true")
-
-        # junction to each child：同理維持垂直/斜直往下，不加任何兄弟姊妹排序
         for c in children:
             g.edge(jn, c, style="solid", weight="900", minlen="1", constraint="true")
 
@@ -201,6 +192,7 @@ def _sidebar_controls():
     if st.sidebar.button("🧹 全部清空", type="secondary", use_container_width=True, key="side_clear"):
         _reset_tree()
         st.sidebar.warning("已清空家族樹")
+        _safe_rerun()  # <<< 立即重繪
 
     uploaded = st.sidebar.file_uploader("⬆️ 匯入 JSON 檔", type=["json"], key="side_uploader")
     if uploaded is not None:
@@ -213,7 +205,7 @@ def _sidebar_controls():
                 st.sidebar.error(f"匯入失敗：{e}")
 
     st.sidebar.markdown("---")
-    st.sidebar.caption("夫妻僅水平連線；有子女時才在下方生成匯流點並直線/斜直線分支。")
+    st.sidebar.caption("夫妻僅水平連線；有子女時才在下方生成匯流點並直/斜直線分支。")
 
 def _bottom_io_controls():
     st.markdown("---")
@@ -233,6 +225,7 @@ def _bottom_io_controls():
         if st.button("🧹 全部清空", type="secondary", use_container_width=True, key="bottom_clear_inline"):
             _reset_tree()
             st.warning("已清空家族樹")
+            _safe_rerun()  # <<< 立即重繪
 
     with c2:
         st.markdown("**匯入 JSON 檔**")
