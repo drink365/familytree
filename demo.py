@@ -1,23 +1,24 @@
-# demo.py（品牌自動載入＋上傳自訂＋情境說明＋新手引導｜修正版：寬版＋圖表優化＋唯一鍵）
-# 功能：
-# 1) 不影響現有架構（獨立頁面；set_page_config 包 try/except）
-# 2) 自動讀 brand.json 與 logo.png/logo2.png；也可側欄上傳 Logo、輸入聯絡資訊
+# demo.py（寬版｜中文不亂碼｜甜甜圈/圓餅切換｜新手引導＋唯一鍵｜品牌自訂＋一頁摘要）
+# 重點：
+# 1) 自動套用中文字型（優先找：fonts/ 與「根目錄」的 NotoSansTC-Regular.ttf）
+# 2) 圖表：甜甜圈/圓餅切換、右側圖例避免重疊、<3% 不在切片上顯示數字
 # 3) 三步驟體驗：資產輸入 → 一鍵模擬 → 下載一頁摘要（HTML 可列印 PDF）
-# 4) 三個情境模板＋情境說明
-# 5) 新手引導模式：進度條、提示、上一步／下一步／略過（修正重複 ID）
-# 6) 圖表優化：可切換 甜甜圈/圓餅、右側圖例避免文字重疊，小片段不擠
+# 4) 新手引導（進度條＋提示＋上/下步/略過），已修正 Streamlit Duplicate Element（唯一定鍵）
+# 5) 品牌自訂（自動讀 brand.json／logo.png/logo2.png；可上傳 Logo、填聯絡資訊）
 
 from typing import Dict, Optional
 import base64, json, os, math
 import pandas as pd
+import matplotlib
 import matplotlib.pyplot as plt
+from matplotlib import font_manager
 import streamlit as st
 
 # -----------------------------
 # Page Config（若已被其他頁設定，忽略即可）
 # -----------------------------
 try:
-    st.set_page_config(page_title="影響力｜家族資產地圖 Demo", page_icon="🧭", layout="wide")  # 寬版
+    st.set_page_config(page_title="影響力｜家族資產地圖 Demo", page_icon="🧭", layout="wide")
 except Exception:
     pass
 
@@ -117,6 +118,74 @@ def path_to_data_uri(path_or_none: Optional[str]) -> str:
     data = open(path_or_none, "rb").read()
     b64 = base64.b64encode(data).decode("utf-8")
     return f"data:{mime};base64,{b64}"
+
+# -----------------------------
+# 中文字型：自動尋找與套用（含「根目錄」字型）
+# -----------------------------
+@st.cache_resource(show_spinner=False)
+def _setup_cjk_font() -> str:
+    """
+    嘗試找出系統 / 專案的 CJK 字型並設定給 Matplotlib。
+    搜尋順序：
+      1) 專案 fonts/ 目錄
+      2) 專案根目錄（NotoSansTC-Regular.ttf / .otf）
+      3) 常見系統路徑
+      4) 已安裝字型名稱
+    回傳：已設定的字型名稱（若找不到回傳空字串）。
+    """
+    matplotlib.rcParams["axes.unicode_minus"] = False  # 避免負號變方塊
+
+    local_candidates = [
+        "fonts/NotoSansTC-Regular.otf",
+        "fonts/NotoSansTC-Regular.ttf",
+        "fonts/NotoSansCJKtc-Regular.otf",
+        "fonts/SourceHanSansTC-Regular.otf",
+        # 根目錄也找
+        "NotoSansTC-Regular.ttf",
+        "NotoSansTC-Regular.otf",
+    ]
+    system_candidates = [
+        "/usr/share/fonts/truetype/noto/NotoSansTC-Regular.otf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",  # macOS
+        "C:/Windows/Fonts/msjh.ttc",           # Windows 微軟正黑
+    ]
+    family_candidates = [
+        "Noto Sans TC", "Noto Sans CJK TC", "Source Han Sans TC",
+        "Microsoft JhengHei", "PingFang TC", "PingFang HK",
+        "SimHei", "Heiti TC",
+    ]
+
+    chosen_family = ""
+    for path in local_candidates + system_candidates:
+        if os.path.exists(path):
+            try:
+                font_manager.fontManager.addfont(path)
+                prop = font_manager.FontProperties(fname=path)
+                chosen_family = prop.get_name()
+                break
+            except Exception:
+                pass
+
+    if not chosen_family:
+        installed = {f.name for f in font_manager.fontManager.ttflist}
+        for fam in family_candidates:
+            if fam in installed:
+                chosen_family = fam
+                break
+
+    if chosen_family:
+        matplotlib.rcParams["font.sans-serif"] = [chosen_family, "DejaVu Sans", "Arial", "sans-serif"]
+        matplotlib.rcParams["font.family"] = "sans-serif"
+        return chosen_family
+    return ""
+
+chosen_font = _setup_cjk_font()
+if not chosen_font:
+    st.warning(
+        "⚠️ 圖表字型未偵測到中文字型，可能出現亂碼。"
+        "建議放置 NotoSansTC-Regular.ttf 於根目錄或 fonts/ 後重新整理。"
+    )
 
 # -----------------------------
 # 稅務計算（示意）
@@ -418,12 +487,6 @@ with right:
 
     st.write("**資產分布**")
     if total_assets > 0:
-        # 字型（若有 NotoSansTC，避免中文亂碼；沒有也無妨）
-        try:
-            plt.rcParams['font.family'] = ['Noto Sans CJK TC', 'Noto Sans TC', 'Microsoft JhengHei', 'PingFang TC', 'sans-serif']
-        except Exception:
-            pass
-
         # 品牌色盤（可按需替換）
         brand_colors = ["#1F4A7A", "#C99A2E", "#4CAF50", "#E64A19", "#7E57C2", "#455A64"]
         colors = brand_colors[: len(df_assets)]
