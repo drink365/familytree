@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 import streamlit as st
+import runpy  # 新增：用來每次載入 demo.py 都完整執行
 
 # -------------------- App Config --------------------
 st.set_page_config(
@@ -96,6 +97,8 @@ for label, key, icon in [
     ("保單策略", "policy", "📦"),
     ("價值觀探索", "values", "💬"),
     ("聯絡我們", "about", "👩‍💼"),
+    # 新增：Demo 導覽按鈕
+    ("Demo（互動試用）", "demo", "🧭"),
 ]:
     nav_button(label, key, icon)
 
@@ -140,19 +143,43 @@ def render_home():
         b64 = logo_b64_highres(main_logo_path, target_px_width, mtime, fsize)
         st.markdown(f'<img src="data:image/png;base64,{b64}" style="width:200px;height:auto;">', unsafe_allow_html=True)
 
-    # 《影響力》傳承策略平台（精簡文案，不提工具名）
-    with st.container():
-        st.markdown("### 《影響力》｜高資產家庭的傳承策略平台")
-        st.markdown("**讓每一分資源，都成為你影響力的延伸。**")
+    # 主標題與簡短說明
+    st.markdown("### 《影響力》｜高資產家庭的傳承策略平台")
+    st.markdown("**讓每一分資源，都成為你影響力的延伸。**")
 
-        
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            st.markdown("🏛️ **富足結構**\n\n為資源設計流動性與穩定性，讓財富更有效率地守護人生階段。")
-        with c2:
-            st.markdown("🛡️ **風險預備**\n\n以合規與風險管理建立防線，為關鍵時刻預留餘裕。")
-        with c3:
-            st.markdown("🌱 **價值傳遞**\n\n不只是金錢，更是精神、信任與選擇，成就跨世代的連結。")
+    # 🚀 新訪客入口：體驗 Demo（首頁第一屏就能看到）
+    st.markdown("---")
+    st.subheader("👋 第一次來？先體驗 3 分鐘互動 Demo")
+    st.caption("這是示範版，讓你快速了解功能，資料僅供體驗，非正式財務建議。")
+
+    st.markdown(
+        """
+        <style>
+        .demo-btn button {
+            background-color: #1F4A7A !important;
+            color: #fff !important;
+            font-size: 1.1rem !important;
+            font-weight: 600 !important;
+            padding: 12px 20px !important;
+            border-radius: 8px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    if st.button("🚀 立即體驗互動 Demo", key="btn_demo", use_container_width=True):
+        navigate("demo")
+
+    st.markdown("---")
+
+    # 平台三大特色
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("🏛️ **富足結構**\n\n為資源設計流動性與穩定性，讓財富更有效率地守護人生階段。")
+    with c2:
+        st.markdown("🛡️ **風險預備**\n\n以合規與風險管理建立防線，為關鍵時刻預留餘裕。")
+    with c3:
+        st.markdown("🌱 **價值傳遞**\n\n不只是金錢，更是精神、信任與選擇，成就跨世代的連結。")
 
     st.divider()
     st.subheader("從這裡開始")
@@ -166,7 +193,7 @@ def render_home():
         if st.button("② 看見風險與稅務缺口 🏛️", use_container_width=True):
             navigate("legacy")  # 或改 navigate("tax")
     with c3:
-        if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True):  # 已移除「（萬元）」字樣
+        if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True):
             navigate("policy")
 
     st.divider()
@@ -206,6 +233,9 @@ def _page_tax(): _safe_import_and_render("pages_tax")
 def _page_policy(): _safe_import_and_render("pages_policy")
 def _page_values(): _safe_import_and_render("pages_values")
 def _page_about(): _safe_import_and_render("pages_about")
+def _page_demo():
+    # 每次進入 Demo 都重新執行 demo.py，互動狀態正確
+    runpy.run_path("demo.py", run_name="__main__")
 
 _ROUTES = {
     "home": render_home,
@@ -215,6 +245,8 @@ _ROUTES = {
     "policy": _page_policy,
     "values": _page_values,
     "about": _page_about,
+    # 新增：Demo 路由
+    "demo": _page_demo,
 }
 
 _ROUTES.get(page, render_home)()
