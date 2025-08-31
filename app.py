@@ -138,8 +138,6 @@ def render_home():
 
     # Hero（精簡）
     st.title("留下的不只財富，更是愛與責任。")
-    st.caption("少紛爭、多世代安穩——合規、現金節奏、家族共識一次到位。")
-    st.caption("私密保護｜數字可檢核｜專業共作")
 
     st.divider()
     st.subheader("從這裡開始")
