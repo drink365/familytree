@@ -99,21 +99,14 @@ def _build_tasks(princ_list, ways_list, weights, red_flags):
 
 # ---------------- 情境模板 ----------------
 def _apply_template(name: str):
-    """將情境模板載入到 session_state，並重新整理畫面。"""
     ss = st.session_state
     # 清空
-    ss.val_pri_sel = []
-    ss.val_pri_custom = ""
-    ss.val_princ_sel = []
-    ss.val_princ_custom = ""
-    ss.val_ways_sel = []
-    ss.val_ways_custom = ""
+    ss.val_pri_sel = []; ss.val_pri_custom = ""
+    ss.val_princ_sel = []; ss.val_princ_custom = ""
+    ss.val_ways_sel = []; ss.val_ways_custom = ""
     ss.val_weights = _ensure_weight_keys({})
-    ss.val_cross = False
-    ss.val_special = False
-    ss.val_equity = False
-    ss.val_wont = ["", "", ""]
-    ss.val_notes = ""
+    ss.val_cross = False; ss.val_special = False; ss.val_equity = False
+    ss.val_wont = ["", "", ""]; ss.val_notes = ""
 
     if name == "二代接班":
         ss.val_pri_sel = ["子女", "配偶"]
@@ -317,7 +310,6 @@ def render():
     if cross_border:   red_flags.append("涉及跨境（台／陸／美等）")
     if special_care:   red_flags.append("家族成員需特別照護")
     if equity_dispute: red_flags.append("股權／合夥可能爭議")
-
     tasks = _build_tasks(princ_list, ways_list, weights, red_flags)
 
     # ======= 顯示 =======
@@ -347,7 +339,7 @@ def render():
             unsafe_allow_html=True
         )
 
-    wont = [x for x in [no1.strip(), no2.strip(), no3.strip()] if x.strip()]
+    wont = [x for x in [ss.val_wont[0].strip(), ss.val_wont[1].strip(), ss.val_wont[2].strip()] if x.strip()]
     if wont:
         st.markdown(
             f"<div class='card'><h4>Won’t-do List（不做清單）</h4>{'；'.join([escape(x) for x in wont])}</div>",
@@ -373,13 +365,16 @@ def render():
             unsafe_allow_html=True
         )
 
+    # ✅ 改為「靜態清單」呈現，不再使用 checkbox，避免點選導致摘要消失
     st.markdown("#### 建議下一步")
-    for i, t in enumerate(tasks, 1):
-        st.checkbox(f"{i}. {t}", value=False, key=f"task_{i}")
+    if tasks:
+        st.markdown("\n".join([f"- {i}. {escape(t)}" for i, t in enumerate(tasks, 1)]))
+    else:
+        st.markdown("- 1. 彙整家族資產並標註可配置金額")
 
-    if notes.strip():
+    if ss.val_notes.strip():
         st.markdown(
-            f"<div class='card'><h4>補充說明</h4><div style='color:#374151;line-height:1.6;'>{escape(notes)}</div></div>",
+            f"<div class='card'><h4>補充說明</h4><div style='color:#374151;line-height:1.6;'>{escape(ss.val_notes)}</div></div>",
             unsafe_allow_html=True
         )
 
@@ -394,7 +389,7 @@ def render():
             p("傳承方式：" + _join(ways_list)),
             spacer(6),
             p("重要性權重（0–5）："),
-            p("、".join([f"{k}：{v}" for k, v in weights.items()])),
+            p("、".join([f"{k}：{v}" for k, v in ss.val_weights.items()])),
             p("前三優先：" + top3_text),
             spacer(6),
             p("建議價值宣言："),
@@ -416,8 +411,8 @@ def render():
         for i, t in enumerate(tasks, 1):
             flow.append(p(f"{i}. {t}"))
 
-        if notes.strip():
-            flow += [spacer(6), p("補充說明："), p(notes.strip())]
+        if ss.val_notes.strip():
+            flow += [spacer(6), p("補充說明："), p(ss.val_notes.strip())]
 
         flow += [spacer(6), p("產出日期：" + datetime.now().strftime("%Y/%m/%d"))]
 
