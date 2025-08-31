@@ -1,7 +1,6 @@
 # pages_familytree.py — Spouse-first stable layout
-# Fix: make mid a tiny visible point and draw spouse as two short segments
-# (s1–mid and mid–s2, constraint=false), so the spouse link never turns
-# into a long bent line when mid also connects to children.
+# Goal: keep spouse link always short & straight while allowing global LR reordering.
+# Change: make visible spouse edges constraint=true with high weight (no bends).
 
 import json
 import uuid
@@ -37,6 +36,7 @@ def _import_json(text: str):
     obj = json.loads(text)
     persons = {str(k): v for k, v in obj.get("persons", {}).items()}
     marriages = {str(k): v for k, v in obj.get("marriages", {}).items()}
+    # backfill order for old data
     for mid, m in marriages.items():
         if m.get("spouses") and "order" not in m:
             marriages[mid]["order"] = list(m.get("spouses"))
@@ -102,8 +102,9 @@ def swap_spouse_order(mid: str):
 
 def render_graph(tree: dict) -> graphviz.Digraph:
     g = graphviz.Digraph("G", engine="dot")
+    # TB: parents on top, children below; keep lines straight
     g.attr(rankdir="TB", splines="line", nodesep="0.5", ranksep="0.9")
-    g.attr("edge", dir="none", penwidth="2")  # visible lines unified
+    g.attr("edge", dir="none", penwidth="2")
 
     persons = tree.get("persons", {})
     marriages = tree.get("marriages", {})
@@ -124,11 +125,11 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.node(pid, label=label, shape="box", style="rounded,filled",
                    fillcolor="white", fontsize="11")
 
-    # Marriage mid points — now VISIBLE tiny point (so spouse lines stay short & straight)
+    # Marriage mid points — tiny visible dot so spouse edges stay short & straight
     for mid in marriages.keys():
-        g.node(mid, label="", shape="point", width="0.03", color="black")  # tiny dot
+        g.node(mid, label="", shape="point", width="0.03", color="black")
 
-    # Tight marriage clusters: A–mid–B–guard locked together (highest priority)
+    # Spouse clusters
     for mid, m in marriages.items():
         order = m.get("order") or m.get("spouses", [])
         if len(order) != 2:
@@ -137,20 +138,21 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 
         if len(order) == 2:
             s1, s2 = order
+            # Lock s1, mid, s2 tightly on the same rank
             with g.subgraph(name=f"cluster_{mid}") as sg:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid); sg.node(s2)
                 guard = f"{mid}_guard"
                 sg.node(guard, label="", shape="point", width="0.01", style="invis")
-                # strong invisible locks so spouses are adjacent and cannot be split
+                # Strong invisible constraints keep spouses adjacent
                 sg.edge(s1, mid, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(mid, s2, style="invis", constraint="true", weight="50000", minlen="0")
                 sg.edge(s2, guard, style="invis", constraint="true", weight="50000", minlen="0")
 
-            # Visible spouse lines: two short segments via the tiny mid point
+            # Visible spouse edges: also constraints to avoid odd bends
             ls = "dashed" if divorced else "solid"
-            g.edge(s1, mid, style=ls, constraint="false", weight="0", minlen="0")
-            g.edge(mid, s2, style=ls, constraint="false", weight="0", minlen="0")
+            g.edge(s1, mid, style=ls, constraint="true", weight="2000", minlen="0")
+            g.edge(mid, s2, style=ls, constraint="true", weight="2000", minlen="0")
 
         elif len(order) == 1:
             s1 = order[0]
@@ -158,15 +160,17 @@ def render_graph(tree: dict) -> graphviz.Digraph:
                 sg.attr(rank="same", color="invis", style="invis", newrank="true")
                 sg.node(s1); sg.node(mid)
                 sg.edge(s1, mid, style="invis", constraint="true", weight="40000", minlen="0")
-            g.edge(s1, mid, style="solid", constraint="false", weight="0", minlen="0")
+            # single spouse case: keep edge straight too
+            g.edge(s1, mid, style="solid", constraint="true", weight="2000", minlen="0")
 
-    # Draw children only downward; no sibling ordering to avoid breaking spouses
+    # Children: draw downward; keep strong vertical constraints
     for mid, m in marriages.items():
         children = [c for c in m.get("children", []) if c in persons]
         if not children:
             continue
         jn = f"{mid}_d"
         g.node(jn, label="", shape="point", width="0.04", color="black")
+        # Strong vertical link from marriage to downstream junction
         g.edge(mid, jn, style="solid", weight="1200", minlen="1", constraint="true")
         for c in children:
             g.edge(jn, c, style="solid", weight="900", minlen="1", constraint="true")
@@ -179,7 +183,7 @@ def _fmt_pid(persons: dict, pid: str) -> str:
     return f"{persons.get(pid, {}).get('name', pid)}｜{pid}"
 
 def _sidebar_controls():
-    # 已依需求移除左側的「匯入 / 匯出」按鈕與「夫妻僅…」說明（保留空白側邊欄）
+    # Per request: remove all sidebar import/export and captions.
     return
 
 def _bottom_io_controls():
@@ -365,11 +369,11 @@ def main():
     st.set_page_config(page_title="家族樹", page_icon="🌳", layout="wide")
     _init_state()
     st.title("🌳 家族樹")
-    _sidebar_controls()  # 左側目前為空（依需求移除匯入/匯出與說明）
+    _sidebar_controls()  # 左側依需求保持空白
     with st.expander("➕ 建立 / 管理成員與關係", expanded=True):
         _person_manager(); _marriage_manager()
     _viewer()
-    _bottom_io_controls()  # 保留底部的匯入/匯出功能
+    _bottom_io_controls()  # 保留底部匯入/匯出（如要移除可再告訴我）
 
 def render():
     main()
