@@ -51,18 +51,17 @@ def _order_with_counts(order_text: str,
                        sibling_count: int,
                        grandparent_count: int) -> str:
     """
-    將「第一順序（子女）」這類文字，依當前人數改為「第一順序（子女2名）」等。
-    只在人數 > 0 時加註名數，避免顯示奇怪的 0 名。
+    將「第一順序（子女）」依人數改為「第一順序（子女2名）」等；人數為 0 時不加註。
     """
     t = order_text or ""
     if ("第一順序" in t and "子女" in t and child_count > 0):
-        return "第一順序（子女{}名）".format(int(child_count))
+        return f"第一順序（子女{int(child_count)}名）"
     if ("第二順序" in t and "父母" in t and parent_count > 0):
-        return "第二順序（父母{}名）".format(int(parent_count))
+        return f"第二順序（父母{int(parent_count)}名）"
     if ("第三順序" in t and "兄弟姊妹" in t and sibling_count > 0):
-        return "第三順序（兄弟姊妹{}名）".format(int(sibling_count))
+        return f"第三順序（兄弟姊妹{int(sibling_count)}名）"
     if ("第四順序" in t and "祖父母" in t and grandparent_count > 0):
-        return "第四順序（祖父母{}名）".format(int(grandparent_count))
+        return f"第四順序（祖父母{int(grandparent_count)}名）"
     return t
 
 # ============================== Page ==============================
@@ -125,19 +124,33 @@ def render():
     with a5:
         grandparent_count = st.number_input("祖父母存活數（0-2）", min_value=0, max_value=2, step=1, value=ss.get("tx_gparent", 0), key="tx_gparent")
 
-    order_text, shares = determine_heirs_and_shares(
+    order_text_raw, shares = determine_heirs_and_shares(
         spouse_alive, child_count, parent_count, sibling_count, grandparent_count
     )
+    order_text = _order_with_counts(order_text_raw, child_count, parent_count, sibling_count, grandparent_count)
 
-    # 將「第一順序（子女）」加上人數 → 「第一順序（子女2名）」
-    order_text = _order_with_counts(order_text, child_count, parent_count, sibling_count, grandparent_count)
-    display_order = ("配偶＋" + order_text) if spouse_alive else order_text
+    # --- 正確呈現「法定繼承人」的文案 ---
+    has_others = (child_count > 0) or (parent_count > 0) or (sibling_count > 0) or (grandparent_count > 0)
+    if spouse_alive and not has_others:
+        # 僅有配偶
+        display_order = "配偶"
+    elif (not spouse_alive) and not has_others:
+        # 完全沒有繼承人
+        display_order = "（無繼承人，視為國庫）"
+    else:
+        # 其他情境：配偶 + 對應順位（若有）
+        parts = []
+        if spouse_alive:
+            parts.append("配偶")
+        if order_text and "無繼承人" not in order_text:
+            parts.append(order_text)
+        display_order = "＋".join(parts) if parts else "（無繼承人，視為國庫）"
 
-    # 後端運算名額（不顯示）
+    # 後端運算名額（不顯示於前端）
     eligible = eligible_deduction_counts_by_heirs(spouse_alive, shares)
 
     # 法定繼承人 & 應繼分（比例紅色）
-    st.markdown(f"**法定繼承人**：{display_order or '（無）'}")
+    st.markdown(f"**法定繼承人**：{display_order}")
     if shares:
         key_order = ["配偶", "子女", "父母", "兄弟姊妹", "祖父母"]
         parts = []
@@ -153,7 +166,7 @@ def render():
 
     st.divider()
 
-    # ===== ② 遺產與扣除（萬） =====
+    # ===== ② 遺產與扣除（單位：萬元） =====
     st.markdown("### ② 遺產與扣除（單位：萬元）")
     cA, cB, cC = st.columns(3)
     with cA:
