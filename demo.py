@@ -1,18 +1,27 @@
-# demo.py（寬版｜統一 NotoSansTC｜HTML+PDF 雙下載｜無引導）
-# 修正：
-# - 取消新手引導功能（所有操作直接可用）
-# - 摘要區改為純 HTML 渲染並去除縮排，避免被 Markdown 當成程式碼區塊
-# - 全頁與圖表統一使用 NotoSansTC（優先載入根目錄/ fonts/，找不到再用系統字型）
+# demo.py（寬版｜統一 NotoSansTC｜HTML+內建品牌PDF 雙下載｜無引導）
+# - 內建 PDF：沿用 utils/pdf_utils.py 的品牌頁首/頁尾樣式（LOGO/色票/字型）
+# - 標題已縮小並加粗（h2）
+# - 全頁與圖表使用 NotoSansTC（根目錄或 fonts/ 內）
 # - 聯絡信箱：123@gracefo.com
 
 from typing import Dict, Optional
 import base64, json, os, math
+from textwrap import dedent
+
 import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import font_manager as fm
 import streamlit as st
-from textwrap import dedent
+
+# ============== 讀取你專案的 PDF 工具（品牌頁首/頁尾） ==============
+try:
+    # 你 ZIP 內的模組
+    from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
+    from utils.pdf_compat import table_compat
+    HAVE_BRANDED_PDF = True
+except Exception:
+    HAVE_BRANDED_PDF = False
 
 # -----------------------------
 # Page Config（若已被其他頁設定，忽略即可）
@@ -26,10 +35,7 @@ except Exception:
 # 全站字型注入（HTML/CSS 用）
 # -----------------------------
 def _embed_font_css() -> str:
-    """
-    優先讀取根目錄 / fonts/ 的 NotoSansTC-Regular.ttf（或 .otf），以 data:uri 形式注入 CSS。
-    回傳：CSS 可用的 font-family 名稱。
-    """
+    """優先注入本地 NotoSansTC 為 data:uri，讓頁面中文字與下載 HTML 一致。"""
     candidates = [
         "NotoSansTC-Regular.ttf", "NotoSansTC-Regular.otf",
         "fonts/NotoSansTC-Regular.ttf", "fonts/NotoSansTC-Regular.otf",
@@ -63,7 +69,7 @@ html, body, [data-testid="stAppViewContainer"] * {{
                 return "NotoSansTC_Local"
             except Exception:
                 pass
-    # 後備（若沒找到本地字型檔）
+    # 後備
     st.markdown(
         """
 <style>
@@ -162,7 +168,6 @@ SCENARIOS = {
         "保單": 5_000_000, "海外資產": 6_000_000, "其他資產": 2_000_000,
     },
 }
-
 SCENARIO_DESCRIPTIONS = {
     "創辦人A｜公司占比高": {
         "適用對象": "第一代創辦人、股權集中、資產波動度高",
@@ -298,69 +303,7 @@ hr {{ border:none; border-top:1px solid #eee; margin:16px 0; }}
 </html>"""
 
 # -----------------------------
-# 可選：直接產 PDF（自動偵測 reportlab）
-# -----------------------------
-def build_summary_pdf_bytes(r: Dict[str,int], contact_text: str,
-                            scenario_title: Optional[str]=None, scenario_desc: Optional[dict]=None) -> bytes:
-    from io import BytesIO
-    try:
-        from reportlab.pdfgen import canvas
-        from reportlab.lib.pagesizes import A4
-        from reportlab.lib.units import mm
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-    except Exception as e:
-        raise RuntimeError("reportlab_not_installed") from e
-
-    # 註冊中文字型
-    font_candidates = [
-        "NotoSansTC-Regular.ttf", "NotoSansTC-Regular.otf",
-        "fonts/NotoSansTC-Regular.ttf", "fonts/NotoSansTC-Regular.otf",
-    ]
-    font_name, loaded = "NotoSansTC", False
-    for p in font_candidates:
-        if os.path.exists(p):
-            try:
-                pdfmetrics.registerFont(TTFont(font_name, p)); loaded=True; break
-            except Exception: pass
-    if not loaded: font_name = "Helvetica"
-
-    buf = BytesIO(); w,h = A4; c = canvas.Canvas(buf, pagesize=A4)
-    c.setTitle("家族資產 × 策略摘要（示意）")
-    c.setFont(font_name, 16); c.drawString(20*mm, h-25*mm, "家族資產 × 策略摘要（示意）")
-    y = h-40*mm; c.setFont(font_name, 11)
-
-    lines = [
-        f"總資產：NT$ {r['總資產']:,.0f}",
-        f"稅基：NT$ {r['稅基']:,.0f}",
-        f"預估遺產稅：NT$ {r['遺產稅']:,.0f}",
-        f"建議保額：NT$ {r['建議保額']:,.0f}",
-        "",
-        "情境比較：",
-        f"・無保單：可用資金 NT$ {r['無保單_可用資金']:,.0f}",
-        f"・有保單（理賠金 NT$ {r['建議保額']:,.0f}）：可用資金 NT$ {r['有保單_可用資金']:,.0f}",
-        f"差異：提升可動用現金 NT$ {r['差異']:,.0f}",
-    ]
-    for s in lines: c.drawString(20*mm, y, s); y -= 7*mm
-
-    if scenario_title and scenario_desc:
-        y -= 3*mm; c.setFont(font_name, 12)
-        c.drawString(20*mm, y, f"情境說明｜{scenario_title}"); y -= 8*mm; c.setFont(font_name, 11)
-        for s in [
-            f"適用對象：{scenario_desc.get('適用對象','')}",
-            f"常見痛點：{scenario_desc.get('常見痛點','')}",
-            f"建議邏輯：{scenario_desc.get('建議邏輯','')}",
-        ]:
-            c.drawString(20*mm, y, s); y -= 7*mm
-
-    y -= 3*mm; c.setFont(font_name, 10); c.drawString(20*mm, y, "聯絡資訊："); y -= 6*mm
-    for line in (contact_text or "").split("\n"): c.drawString(26*mm, y, line); y -= 6*mm
-    y -= 4*mm; c.setFont(font_name, 9)
-    c.drawString(20*mm, y, "備註：本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。")
-    c.showPage(); c.save(); pdf = buf.getvalue(); buf.close(); return pdf
-
-# -----------------------------
-# Session 狀態
+# Session 狀態 & 品牌設定
 # -----------------------------
 if "demo_assets" not in st.session_state: st.session_state.demo_assets = {k: 0 for k in ASSET_CATS}
 if "demo_used" not in st.session_state: st.session_state.demo_used = False
@@ -370,7 +313,6 @@ if "demo_brand_contact" not in st.session_state:
 if "demo_logo_data_uri" not in st.session_state: st.session_state.demo_logo_data_uri = None
 if "demo_logo_url" not in st.session_state: st.session_state.demo_logo_url = ""
 
-# 自動載入品牌設定（brand.json / logo.png / logo2.png）
 _brand = load_brand_config()
 if _brand:
     contact = _brand.get("CONTACT")
@@ -397,11 +339,11 @@ brand_contact_text = st.session_state.demo_brand_contact
 # -----------------------------
 # 頁面內容
 # -----------------------------
+# 標題：縮小一號並加粗（h2）
 st.markdown(
     "<h2 style='font-weight:800; margin:0 0 4px 0;'>🧭 三步驟 Demo｜家族資產地圖 × 一鍵模擬 × 報告（簡化版）</h2>",
     unsafe_allow_html=True,
 )
-
 if page_logo_src: st.image(page_logo_src, width=150)
 st.caption("3 分鐘看懂、5 分鐘產出成果。示意版，非正式稅務或法律建議。")
 chips = ["① 建立資產地圖","② 一鍵模擬差異","③ 生成一頁摘要"]
@@ -521,7 +463,7 @@ if r:
     scenario_key = st.session_state.get("demo_selected_scenario")
     desc = SCENARIO_DESCRIPTIONS.get(scenario_key) if scenario_key else None
 
-    # 內頁摘要（純 HTML，去除縮排，避免被 Markdown 當成 code block）
+    # 內頁摘要（純 HTML，避免 $ 被 LaTeX 解析）
     summary_html = dedent(f"""\
 <div class="summary" style="font-size:15px; line-height:1.9;">
   <p><strong>總資產</strong>：NT$ {r['總資產']:,.0f}</p>
@@ -559,15 +501,53 @@ if r:
     st.download_button("⬇️ 下載一頁摘要（HTML，可列印成 PDF）", data=html,
                        file_name="家族資產_策略摘要_demo.html", mime="text/html")
 
-    # 下載：PDF（若環境有 reportlab）
-    try:
-        pdf_bytes = build_summary_pdf_bytes(r, contact_text=brand_contact_text,
-                                            scenario_title=scenario_key, scenario_desc=desc)
-        st.download_button("⬇️ 下載一頁摘要（PDF，含中文字型）", data=pdf_bytes,
-                           file_name="家族資產_策略摘要_demo.pdf", mime="application/pdf")
-    except RuntimeError as e:
-        if str(e) == "reportlab_not_installed":
-            st.caption("（若需直接 PDF：請在環境安裝 reportlab）")
+    # 下載：PDF（沿用你專案的品牌 PDF 模組）
+    if HAVE_BRANDED_PDF:
+        story = []
+        story.append(title("家族資產 × 策略摘要（示意）"))
+        story.append(spacer(8))
+
+        # KPI 區
+        story.append(p(f"總資產：NT$ {r['總資產']:,.0f}"))
+        story.append(p(f"稅基：NT$ {r['稅基']:,.0f}"))
+        story.append(p(f"預估遺產稅：NT$ {r['遺產稅']:,.0f}"))
+        story.append(p(f"建議保額：NT$ {r['建議保額']:,.0f}"))
+        story.append(spacer(6))
+
+        # 情境比較（表格；若失敗自動退回段落）
+        headers = ["情境", "可用資金"]
+        rows = [
+            ["無保單", f"NT$ {r['無保單_可用資金']:,.0f}"],
+            ["有保單（理賠金）", f"NT$ {r['有保單_可用資金']:,.0f}"],
+            ["差異（提升現金）", f"NT$ {r['差異']:,.0f}"],
+        ]
+        try:
+            story.append(table_compat(headers, rows, widths=[0.35, 0.65]))
+        except Exception:
+            story.append(p(f"無保單：NT$ {r['無保單_可用資金']:,.0f}"))
+            story.append(p(f"有保單：NT$ {r['有保單_可用資金']:,.0f}"))
+            story.append(p(f"差異：NT$ {r['差異']:,.0f}"))
+        story.append(spacer(6))
+
+        # 情境說明
+        if scenario_key and desc:
+            story.append(h2(f"情境說明｜{scenario_key}"))
+            story.append(p(f"適用對象：{desc.get('適用對象','')}"))
+            story.append(p(f"常見痛點：{desc.get('常見痛點','')}"))
+            story.append(p(f"建議邏輯：{desc.get('建議邏輯','')}"))
+            story.append(spacer(4))
+
+        story.append(p("備註：本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。", style="small"))
+
+        pdf_bytes = build_branded_pdf_bytes(story)  # 由內建模組注入品牌頁首/頁尾/LOGO
+        st.download_button(
+            "⬇️ 下載一頁摘要（PDF｜品牌頁首/頁尾）",
+            data=pdf_bytes,
+            file_name="家族資產_策略摘要_demo.pdf",
+            mime="application/pdf",
+        )
+    else:
+        st.caption("（偵測不到內建 PDF 模組：請確認 utils/pdf_utils.py 是否可被匯入）")
 else:
     st.info("先完成上一步『一鍵模擬差異』，系統會自動生成摘要。")
 
