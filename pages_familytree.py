@@ -196,6 +196,14 @@ def render_graph(tree: dict) -> graphviz.Digraph:
 
     return g
 
+@st.cache_data(show_spinner=False)
+def _build_graph_cached(tree_json: str) -> str:
+    """根據 family_tree 的 JSON 建立 DOT 字串，作為可快取結果。"""
+    import graphviz as _gv
+    data = json.loads(tree_json)
+    g = render_graph(data)  # 使用原本的邏輯建圖
+    return g.source
+
 # ----------------------------- UI -----------------------------
 
 def _fmt_pid(persons: dict, pid: str) -> str:
@@ -419,8 +427,11 @@ def _viewer():
     if not tree["persons"]:
         st.info("尚未建立任何成員。請先於上方區塊新增人員，並建立婚姻與子女。")
         return
-    g = render_graph(tree)
-    st.graphviz_chart(g, use_container_width=True)
+    # 以 JSON 當 key 快取：未變更資料時不重算圖
+    key = json.dumps(tree, sort_keys=True, ensure_ascii=False)
+    dot = _build_graph_cached(key)
+    import graphviz as _gv
+    st.graphviz_chart(_gv.Source(dot), use_container_width=True)
 
 # ----------------------------- Entry -----------------------------
 
