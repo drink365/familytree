@@ -1,7 +1,7 @@
 # demo.py（寬版｜統一 NotoSansTC｜HTML + 內建品牌PDF｜無引導｜含保費現值與淨提升）
 # - 沿用 utils/pdf_utils.build_branded_pdf_bytes（品牌頁首/頁尾/LOGO/色票/字型）
 # - 相容墊片：pdf_p/pdf_h2/pdf_title/pdf_spacer，避免 p/h2/title/spacer 不是 callable 時報錯
-# - 主標題 h2 粗體、中文字型一致、Email 為 123@gracefo.com
+# - 主標題改用 st.header()，風格與其他頁一致；Email 為 123@gracefo.com
 # - 新增：保費現值（躉繳/年繳＋折現率）與「淨提升（扣保費現值）」指標
 
 from typing import Dict, Optional
@@ -318,7 +318,6 @@ def build_summary_html(r: Dict[str, int], logo_src: str, contact_text: str,
       <li><strong>建議邏輯：</strong>{scenario_desc.get('建議邏輯','')}</li>
     </ul>
   </div>"""
-    # 若有保費現值與淨提升，組成區塊
     premium_block = ""
     if "保費現值" in r and "淨提升" in r:
         premium_block = f"""
@@ -413,15 +412,19 @@ brand_contact_text = st.session_state.demo_brand_contact
 # -----------------------------
 # 頁面內容
 # -----------------------------
+# ✅ 標題：使用 Streamlit 原生 header，風格與其他頁一致
+st.header("🧭 三步驟 Demo｜家族資產地圖 × 一鍵模擬 × 報告（簡化版）")
 
-st.subheader("🧭 三步驟 Demo｜家族資產地圖 × 一鍵模擬 × 報告（簡化版）")
 if page_logo_src: st.image(page_logo_src, width=150)
 st.caption("3 分鐘看懂、5 分鐘產出成果。示意版，非正式稅務或法律建議。")
 chips = ["① 建立資產地圖","② 一鍵模擬差異","③ 生成一頁摘要"]
 c1,c2,c3 = st.columns(3)
 for col, text in zip([c1,c2,c3], chips):
     with col:
-        st.markdown(f'<div style="display:inline-block;padding:4px 10px;border-radius:999px;background:#eef;">{text}</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div style="display:inline-block;padding:4px 10px;border-radius:999px;background:#eef;">{}</div>'.format(text),
+            unsafe_allow_html=True
+        )
 
 st.divider()
 
@@ -563,7 +566,7 @@ if r:
     scenario_key = st.session_state.get("demo_selected_scenario")
     desc = SCENARIO_DESCRIPTIONS.get(scenario_key) if scenario_key else None
 
-    # 內頁摘要（純 HTML，避免 $ 被 LaTeX 解析）
+    # 內頁摘要（純 HTML）
     summary_html = dedent(f"""\
 <div class="summary" style="font-size:15px; line-height:1.9;">
   <p><strong>總資產</strong>：NT$ {r['總資產']:,.0f}</p>
@@ -596,14 +599,14 @@ if r:
 """)
     st.markdown(summary_html, unsafe_allow_html=True)
 
-    # 下載：HTML（保底）
+    # 下載：HTML
     logo_src = (st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url or "")
     html = build_summary_html(r, logo_src=logo_src, contact_text=brand_contact_text,
                               scenario_title=scenario_key, scenario_desc=desc)
     st.download_button("⬇️ 下載一頁摘要（HTML，可列印成 PDF）", data=html,
                        file_name="家族資產_策略摘要_demo.html", mime="text/html")
 
-    # 下載：PDF（沿用你專案的品牌 PDF 模組，並使用相容墊片）
+    # 下載：PDF（沿用你專案的品牌 PDF 模組）
     if HAVE_BRANDED_PDF and callable(build_branded_pdf_bytes):
         story = []
         story.append(pdf_title("家族資產 × 策略摘要（示意）"))
