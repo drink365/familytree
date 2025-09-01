@@ -3,6 +3,8 @@ import json
 import os
 import runpy
 from datetime import datetime
+import importlib
+import importlib.util
 import streamlit as st
 
 # -------------------- App Config --------------------
@@ -39,6 +41,7 @@ if not os.path.exists(LOGO_PATH):
 
 # -------------------- Router helpers --------------------
 def navigate(key: str):
+    # 只更新參數，不做其他副作用
     st.query_params.update({"page": key})
 
 def get_page_from_query() -> str:
@@ -87,7 +90,7 @@ def nav_button(label: str, page_key: str, icon: str):
     if st.sidebar.button(f"{icon} {label}", use_container_width=True, key=f"nav_{page_key}"):
         navigate(page_key)
 
-# 全部用 emoji，避免出現 keyboard_double_arrow_right 字樣
+# 全部用 emoji，避免 material icon 漂字
 for label, key, icon in [
     ("首頁", "home", "🏠"),
     ("家族樹", "familytree", "🌳"),
@@ -166,7 +169,7 @@ def render_home():
         if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True, key="go_policy"):
             navigate("policy")
 
-    # 額外加一個明顯的 Demo CTA
+    # 明顯的 Demo CTA
     st.markdown("")
     if st.button("➡️ 先看互動 Demo（3 分鐘）", use_container_width=True, key="go_demo_main"):
         navigate("demo")
@@ -189,8 +192,9 @@ def render_home():
     st.caption(f"《影響力》傳承策略平台｜{datetime.now().strftime('%Y/%m/%d')}")
 
 def _safe_import_and_render(module_name: str):
+    # 僅用於 pages_*，避免任何地方 import demo
     try:
-        mod = __import__(module_name, fromlist=['render'])
+        mod = importlib.import_module(module_name)
         if hasattr(mod, "render"):
             mod.render()
         else:
@@ -206,9 +210,10 @@ def _page_policy(): _safe_import_and_render("pages_policy")
 def _page_values(): _safe_import_and_render("pages_values")
 def _page_about(): _safe_import_and_render("pages_about")
 
-# Demo 頁改用 runpy 執行單檔（不用 render()）
 def _page_demo():
+    """嚴格只在 page == 'demo' 時，才動態執行 demo.py。"""
     try:
+        # 用 run_path 在隔離命名空間執行，不污染當前模組，也避免被其他 import 觸發
         runpy.run_path("demo.py", run_name="__main__")
     except Exception as e:
         st.error(f"執行 demo.py 失敗：{e}")
@@ -224,4 +229,15 @@ _ROUTES = {
     "demo": _page_demo,
 }
 
+# ------- 安全護欄：若 demo 被意外 import，不讓它畫面跑出來 -------
+# 有些情況第三方/舊檔會 `import demo`（會執行頂層 UI）。我們把常見名稱從 sys.modules 移除。
+import sys
+for alias in ("demo",):
+    if alias in sys.modules and page != "demo":
+        del sys.modules[alias]
+
+# ------- 單一入口：依 query 參數執行對應頁 -------
 _ROUTES.get(page, render_home)()
+
+# （可選）調試：顯示目前頁籤與查詢參數
+# st.caption(f"DEBUG page={page}, query={dict(st.query_params)}")
