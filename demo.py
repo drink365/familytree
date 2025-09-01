@@ -1,8 +1,7 @@
-# demo.py（寬版｜統一 NotoSansTC｜HTML+內建品牌PDF 雙下載｜無引導）
-# - 內建 PDF：沿用 utils/pdf_utils.py 的品牌頁首/頁尾樣式（LOGO/色票/字型）
-# - 標題已縮小並加粗（h2）
-# - 全頁與圖表使用 NotoSansTC（根目錄或 fonts/ 內）
-# - 聯絡信箱：123@gracefo.com
+# demo.py（寬版｜統一 NotoSansTC｜HTML + 內建品牌PDF｜無引導）
+# - 沿用 utils/pdf_utils.build_branded_pdf_bytes（品牌頁首/頁尾/LOGO/色票/字型）
+# - 提供相容墊片：pdf_p/pdf_h2/pdf_title/pdf_spacer，避免 p/h2/title/spacer 不是 callable 時報錯
+# - 主標題 h2 粗體、中文字型一致、Email 為 123@gracefo.com
 
 from typing import Dict, Optional
 import base64, json, os, math
@@ -14,14 +13,56 @@ import matplotlib.pyplot as plt
 from matplotlib import font_manager as fm
 import streamlit as st
 
-# ============== 讀取你專案的 PDF 工具（品牌頁首/頁尾） ==============
+# =========================
+# 內建品牌 PDF 模組：相容墊片
+# =========================
+_pdf = None
+HAVE_BRANDED_PDF = False
+build_branded_pdf_bytes = None
+
 try:
-    # 你 ZIP 內的模組
-    from utils.pdf_utils import build_branded_pdf_bytes, p, h2, title, spacer
-    from utils.pdf_compat import table_compat
-    HAVE_BRANDED_PDF = True
+    import utils.pdf_utils as _pdf  # 你的 ZIP 內模組
+    build_branded_pdf_bytes = getattr(_pdf, "build_branded_pdf_bytes", None)
+    HAVE_BRANDED_PDF = callable(build_branded_pdf_bytes)
 except Exception:
     HAVE_BRANDED_PDF = False
+
+def pdf_p(text: str, **kw):
+    """安全 Paragraph wrapper：優先使用你模組的 p()；否則用 ReportLab Paragraph 退回。"""
+    fn = getattr(_pdf, "p", None) if _pdf else None
+    if callable(fn):
+        return fn(text, **kw)
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    style_name = kw.get("style") or "BodyText"
+    styles = getSampleStyleSheet()
+    style = styles[style_name] if style_name in styles else styles["BodyText"]
+    return Paragraph(text, style)
+
+def pdf_h2(text: str, **kw):
+    fn = getattr(_pdf, "h2", None) if _pdf else None
+    if callable(fn):
+        return fn(text, **kw)
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    styles = getSampleStyleSheet()
+    return Paragraph(text, styles["Heading2"])
+
+def pdf_title(text: str, **kw):
+    fn = getattr(_pdf, "title", None) if _pdf else None
+    if callable(fn):
+        return fn(text, **kw)
+    from reportlab.platypus import Paragraph
+    from reportlab.lib.styles import getSampleStyleSheet
+    styles = getSampleStyleSheet()
+    return Paragraph(text, styles["Title"])
+
+def pdf_spacer(h: float = 6, **kw):
+    fn = getattr(_pdf, "spacer", None) if _pdf else None
+    if callable(fn):
+        return fn(h, **kw)
+    from reportlab.platypus import Spacer
+    return Spacer(0, h)  # points 為單位，已足夠
 
 # -----------------------------
 # Page Config（若已被其他頁設定，忽略即可）
@@ -501,45 +542,46 @@ if r:
     st.download_button("⬇️ 下載一頁摘要（HTML，可列印成 PDF）", data=html,
                        file_name="家族資產_策略摘要_demo.html", mime="text/html")
 
-    # 下載：PDF（沿用你專案的品牌 PDF 模組）
-    if HAVE_BRANDED_PDF:
+    # 下載：PDF（沿用你專案的品牌 PDF 模組，並使用相容墊片）
+    if HAVE_BRANDED_PDF and callable(build_branded_pdf_bytes):
         story = []
-        story.append(title("家族資產 × 策略摘要（示意）"))
-        story.append(spacer(8))
+        story.append(pdf_title("家族資產 × 策略摘要（示意）"))
+        story.append(pdf_spacer(8))
 
         # KPI 區
-        story.append(p(f"總資產：NT$ {r['總資產']:,.0f}"))
-        story.append(p(f"稅基：NT$ {r['稅基']:,.0f}"))
-        story.append(p(f"預估遺產稅：NT$ {r['遺產稅']:,.0f}"))
-        story.append(p(f"建議保額：NT$ {r['建議保額']:,.0f}"))
-        story.append(spacer(6))
+        story.append(pdf_p(f"總資產：NT$ {r['總資產']:,.0f}"))
+        story.append(pdf_p(f"稅基：NT$ {r['稅基']:,.0f}"))
+        story.append(pdf_p(f"預估遺產稅：NT$ {r['遺產稅']:,.0f}"))
+        story.append(pdf_p(f"建議保額：NT$ {r['建議保額']:,.0f}"))
+        story.append(pdf_spacer(6))
 
-        # 情境比較（表格；若失敗自動退回段落）
-        headers = ["情境", "可用資金"]
-        rows = [
-            ["無保單", f"NT$ {r['無保單_可用資金']:,.0f}"],
-            ["有保單（理賠金）", f"NT$ {r['有保單_可用資金']:,.0f}"],
-            ["差異（提升現金）", f"NT$ {r['差異']:,.0f}"],
-        ]
+        # 情境比較（優先用 table_compat）
         try:
+            from utils.pdf_compat import table_compat
+            headers = ["情境", "可用資金"]
+            rows = [
+                ["無保單", f"NT$ {r['無保單_可用資金']:,.0f}"],
+                ["有保單（理賠金）", f"NT$ {r['有保單_可用資金']:,.0f}"],
+                ["差異（提升現金）", f"NT$ {r['差異']:,.0f}"],
+            ]
             story.append(table_compat(headers, rows, widths=[0.35, 0.65]))
         except Exception:
-            story.append(p(f"無保單：NT$ {r['無保單_可用資金']:,.0f}"))
-            story.append(p(f"有保單：NT$ {r['有保單_可用資金']:,.0f}"))
-            story.append(p(f"差異：NT$ {r['差異']:,.0f}"))
-        story.append(spacer(6))
+            story.append(pdf_p(f"無保單：NT$ {r['無保單_可用資金']:,.0f}"))
+            story.append(pdf_p(f"有保單：NT$ {r['有保單_可用資金']:,.0f}"))
+            story.append(pdf_p(f"差異：NT$ {r['差異']:,.0f}"))
 
-        # 情境說明
+        story.append(pdf_spacer(6))
+
         if scenario_key and desc:
-            story.append(h2(f"情境說明｜{scenario_key}"))
-            story.append(p(f"適用對象：{desc.get('適用對象','')}"))
-            story.append(p(f"常見痛點：{desc.get('常見痛點','')}"))
-            story.append(p(f"建議邏輯：{desc.get('建議邏輯','')}"))
-            story.append(spacer(4))
+            story.append(pdf_h2(f"情境說明｜{scenario_key}"))
+            story.append(pdf_p(f"適用對象：{desc.get('適用對象','')}"))
+            story.append(pdf_p(f"常見痛點：{desc.get('常見痛點','')}"))
+            story.append(pdf_p(f"建議邏輯：{desc.get('建議邏輯','')}"))
+            story.append(pdf_spacer(4))
 
-        story.append(p("備註：本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。", style="small"))
+        story.append(pdf_p("備註：本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。"))
 
-        pdf_bytes = build_branded_pdf_bytes(story)  # 由內建模組注入品牌頁首/頁尾/LOGO
+        pdf_bytes = build_branded_pdf_bytes(story)  # 由你的模組注入品牌頁首/頁尾/LOGO/色票/字型
         st.download_button(
             "⬇️ 下載一頁摘要（PDF｜品牌頁首/頁尾）",
             data=pdf_bytes,
@@ -547,7 +589,7 @@ if r:
             mime="application/pdf",
         )
     else:
-        st.caption("（偵測不到內建 PDF 模組：請確認 utils/pdf_utils.py 是否可被匯入）")
+        st.caption("（偵測不到內建 PDF 模組：請確認 utils/pdf_utils.py 可被匯入）")
 else:
     st.info("先完成上一步『一鍵模擬差異』，系統會自動生成摘要。")
 
