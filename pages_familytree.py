@@ -1,14 +1,18 @@
 # pages_familytree.py — Family tree with straight spouse line,
 # deceased flag + inline editing & delete, female styling fixed (rounded when deceased)
+# v1.1 (2025-09-01) — order可控/交換左右、防呆、婚姻刪除、匯入清理、渲染快取、JSON meta
 
 import json
 import uuid
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 import streamlit as st
 import graphviz
 import pandas as pd
+from datetime import datetime
 
 # ----------------------------- State & Helpers -----------------------------
+
+APP_VERSION = "1.1"
 
 def _uid(prefix: str = "id") -> str:
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
@@ -30,16 +34,35 @@ def _reset_tree():
     st.session_state.selected_mid = None
 
 def _export_json() -> str:
-    return json.dumps(st.session_state.family_tree, ensure_ascii=False, indent=2)
+    payload = {
+        "_meta": {
+            "version": APP_VERSION,
+            "exported_at": datetime.now().isoformat(timespec="seconds"),
+        },
+        "persons": st.session_state.family_tree.get("persons", {}),
+        "marriages": st.session_state.family_tree.get("marriages", {}),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 def _import_json(text: str):
     obj = json.loads(text)
     persons = {str(k): v for k, v in obj.get("persons", {}).items()}
     marriages = {str(k): v for k, v in obj.get("marriages", {}).items()}
-    # backfill order for old data
-    for mid, m in marriages.items():
-        if m.get("spouses") and "order" not in m:
-            marriages[mid]["order"] = list(m.get("spouses"))
+
+    # backfill & cleanup
+    valid_pids = set(persons.keys())
+    for mid, m in list(marriages.items()):
+        sp = [x for x in (m.get("spouses") or []) if x in valid_pids]
+        ch = [x for x in (m.get("children") or []) if x in valid_pids]
+        ord2 = [x for x in (m.get("order") or sp) if x in sp]
+        if not ord2:
+            ord2 = sp[:]
+        marriages[mid]["spouses"] = sp
+        marriages[mid]["children"] = ch
+        marriages[mid]["order"] = ord2
+        if not sp and not ch:
+            marriages.pop(mid, None)
+
     st.session_state.family_tree = {"persons": persons, "marriages": marriages}
     mids = list(marriages.keys())
     st.session_state.selected_mid = (
@@ -60,16 +83,18 @@ def add_person(name: str, gender: str = "", note: str = "", deceased: bool = Fal
     return pid
 
 def add_or_get_marriage(p1: str, p2: str) -> str:
+    """spouses 以排序後集合保存；order 以『輸入順序』保存（決定左右）。"""
     a, b = sorted([p1, p2])
-    for mid, m in st.session_state.family_tree["marriages"].items():
+    marriages = st.session_state.family_tree["marriages"]
+    for mid, m in marriages.items():
         if sorted(m.get("spouses", [])) == [a, b]:
-            if "order" not in m:
-                m["order"] = [a, b]
+            if "order" not in m or not m["order"]:
+                m["order"] = [p1, p2]
             return mid
     mid = _uid("m")
-    st.session_state.family_tree["marriages"][mid] = {
+    marriages[mid] = {
         "spouses": [a, b],
-        "order": [a, b],
+        "order": [p1, p2],
         "children": [],
         "divorced": False
     }
@@ -80,7 +105,22 @@ def toggle_divorce(mid: str, value: bool):
     if m:
         m["divorced"] = bool(value)
 
+def _can_add_child(mid: str, child_pid: str) -> Tuple[bool, str]:
+    marriages = st.session_state.family_tree["marriages"]
+    persons = st.session_state.family_tree["persons"]
+    m = marriages.get(mid)
+    if not m or child_pid not in persons:
+        return False, "資料錯誤：找不到婚姻或成員。"
+    if child_pid in (m.get("spouses") or []):
+        return False, "不可將配偶加入為子女。"
+    if child_pid in m.get("children", []):
+        return False, "此子女已存在於該婚姻。"
+    return True, ""
+
 def add_child(mid: str, child_pid: str):
+    ok, msg = _can_add_child(mid, child_pid)
+    if not ok:
+        st.error(msg); return
     m = st.session_state.family_tree["marriages"].get(mid)
     if m and child_pid not in m["children"]:
         m["children"].append(child_pid)
@@ -95,11 +135,8 @@ def _delete_person(pid: str):
     """Remove a person and clean up marriages that reference them."""
     persons = st.session_state.family_tree["persons"]
     marriages = st.session_state.family_tree["marriages"]
-
     if pid not in persons:
         return
-
-    # 1) Remove from marriages (spouses & children)
     to_delete_mids = []
     for mid, m in list(marriages.items()):
         if pid in m.get("spouses", []):
@@ -107,18 +144,12 @@ def _delete_person(pid: str):
             m["order"] = [x for x in (m.get("order") or []) if x != pid]
         if pid in m.get("children", []):
             m["children"] = [x for x in m["children"] if x != pid]
-
-        # If empty marriage, remove
         if not m.get("spouses") and not m.get("children"):
             to_delete_mids.append(mid)
-
         if m.get("spouses") and not m.get("order"):
             m["order"] = m["spouses"][:]
-
     for mid in to_delete_mids:
         marriages.pop(mid, None)
-
-    # 2) Remove the person
     persons.pop(pid, None)
 
 # ----------------------------- Rendering -----------------------------
@@ -195,6 +226,11 @@ def render_graph(tree: dict) -> graphviz.Digraph:
             g.edge(jn, c, style="solid", weight="900", minlen="1", constraint="true")
 
     return g
+
+# 渲染快取：以序列化字串作為 key
+@st.cache_data(show_spinner=False)
+def _graph_cached(tree_json: str) -> graphviz.Digraph:
+    return render_graph(json.loads(tree_json))
 
 # ----------------------------- UI -----------------------------
 
@@ -315,15 +351,16 @@ def _person_manager():
 def _marriage_manager():
     st.subheader("💍 婚姻與子女")
     persons = st.session_state.family_tree.get("persons", {})
-    p_values = list(persons.keys())
+    # 依顯示姓名排序，方便選取
+    p_values = sorted(list(persons.keys()), key=lambda x: persons.get(x, {}).get("name", x))
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        s1 = st.selectbox("配偶 A", ["-"] + p_values,
+        s1 = st.selectbox("配偶 A（左側）", ["-"] + p_values,
                           format_func=lambda x: "-" if x=="-" else _fmt_pid(persons, x),
                           key="spouse_a_select")
     with c2:
-        s2 = st.selectbox("配偶 B", ["-"] + p_values,
+        s2 = st.selectbox("配偶 B（右側）", ["-"] + p_values,
                           format_func=lambda x: "-" if x=="-" else _fmt_pid(persons, x),
                           key="spouse_b_select")
     with c3:
@@ -335,7 +372,7 @@ def _marriage_manager():
             st.error("請選擇兩位不同成員作為配偶")
         else:
             st.session_state.selected_mid = add_or_get_marriage(s1, s2)
-            st.success(f"已建立婚姻：{st.session_state.selected_mid}")
+            st.success(f"已建立/載入婚姻：{st.session_state.selected_mid}")
 
     marriages = st.session_state.family_tree.get("marriages", {})
     if marriages:
@@ -351,16 +388,27 @@ def _marriage_manager():
             return f"{mid}｜{' ↔ '.join(names)}"
 
         selected_mid = st.selectbox(
-            "選擇婚姻（新增/刪除子女、設定離婚）",
+            "選擇婚姻（新增/刪除子女、設定離婚、交換左右）",
             options=mids, index=default_index, format_func=_m_label,
         )
         st.session_state.selected_mid = selected_mid
+
+        # 交換左右
+        m = marriages[selected_mid]
+        order = m.get("order") or m.get("spouses", [])
+        c_swap1, c_swap2 = st.columns([1,3])
+        with c_swap1:
+            if st.button("⇄ 交換左右", use_container_width=True):
+                if len(order) == 2:
+                    m["order"] = [order[1], order[0]]
+                    st.success("已交換左右順序")
+                    _safe_rerun()
 
         c4, c5 = st.columns([3, 2])
         with c4:
             child = st.selectbox(
                 "選擇子女（現有成員）",
-                ["-"] + list(persons.keys()),
+                ["-"] + p_values,
                 format_func=lambda x: "-" if x=="-" else _fmt_pid(persons, x),
                 key="child_select",
             )
@@ -373,7 +421,7 @@ def _marriage_manager():
                 st.error("請選擇一位成員作為子女")
             else:
                 add_child(selected_mid, child)
-                st.success("已加入子女")
+                # add_child 內含防呆與提示
                 _safe_rerun()
 
         m = marriages[selected_mid]
@@ -403,11 +451,21 @@ def _marriage_manager():
             st.info("已更新離婚狀態")
             _safe_rerun()
 
+        # 刪除整段婚姻（不刪任何人）
         st.markdown("---")
+        c_del_m1, _ = st.columns([1,3])
+        with c_del_m1:
+            if st.button("🗑️ 刪除此婚姻", use_container_width=True):
+                marriages.pop(selected_mid, None)
+                st.success("已刪除該婚姻（不影響成員資料）")
+                st.session_state.selected_mid = list(marriages.keys())[-1] if marriages else None
+                _safe_rerun()
+
+        # 概覽表
         rows = []
         for mid, mm in marriages.items():
-            order = mm.get("order") or mm.get("spouses", [])
-            sp_names = [persons.get(x, {}).get("name", x) for x in order]
+            ord2 = mm.get("order") or mm.get("spouses", [])
+            sp_names = [persons.get(x, {}).get("name", x) for x in ord2]
             ch = [persons.get(x, {}).get("name", x) for x in mm.get("children", [])]
             rows.append({"mid": mid, "配偶": "、".join(sp_names),
                          "子女": "、".join(ch), "離婚": "是" if mm.get("divorced", False) else "否"})
@@ -419,7 +477,8 @@ def _viewer():
     if not tree["persons"]:
         st.info("尚未建立任何成員。請先於上方區塊新增人員，並建立婚姻與子女。")
         return
-    g = render_graph(tree)
+    tree_json = json.dumps(tree, ensure_ascii=False, sort_keys=True)
+    g = _graph_cached(tree_json)
     st.graphviz_chart(g, use_container_width=True)
 
 # ----------------------------- Entry -----------------------------
