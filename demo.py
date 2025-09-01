@@ -1,8 +1,9 @@
-# demo.py（寬版｜統一 NotoSansTC｜HTML + 內建品牌PDF｜無引導｜含保費現值與淨提升）
+# demo.py（寬版｜與其他頁相同標題風格｜HTML + 內建品牌PDF｜無引導｜含保費現值與淨提升）
+# - 取消頁內全域字型覆蓋，回到 Streamlit Theme 預設 → h2 跟其他頁一致
+# - Matplotlib 仍設定 CJK 字型避免圖表亂碼
 # - 沿用 utils/pdf_utils.build_branded_pdf_bytes（品牌頁首/頁尾/LOGO/色票/字型）
-# - 相容墊片：pdf_p/pdf_h2/pdf_title/pdf_spacer，避免 p/h2/title/spacer 不是 callable 時報錯
-# - 主標題改用 st.header()，風格與其他頁一致；Email 為 123@gracefo.com
-# - 新增：保費現值（躉繳/年繳＋折現率）與「淨提升（扣保費現值）」指標
+# - 相容墊片：pdf_p/pdf_h2/pdf_title/pdf_spacer
+# - Email 為 123@gracefo.com；新增保費現值（躉繳/年繳＋折現率）與「淨提升（扣保費現值）」
 
 from typing import Dict, Optional
 import base64, json, os, math
@@ -20,7 +21,6 @@ import streamlit as st
 _pdf = None
 HAVE_BRANDED_PDF = False
 build_branded_pdf_bytes = None
-
 try:
     import utils.pdf_utils as _pdf  # 你的專案模組
     build_branded_pdf_bytes = getattr(_pdf, "build_branded_pdf_bytes", None)
@@ -29,7 +29,6 @@ except Exception:
     HAVE_BRANDED_PDF = False
 
 def pdf_p(text: str, **kw):
-    """安全 Paragraph wrapper：優先使用你模組的 p()；否則用 ReportLab Paragraph 退回。"""
     fn = getattr(_pdf, "p", None) if _pdf else None
     if callable(fn):
         return fn(text, **kw)
@@ -63,7 +62,7 @@ def pdf_spacer(h: float = 6, **kw):
     if callable(fn):
         return fn(h, **kw)
     from reportlab.platypus import Spacer
-    return Spacer(0, h)  # 以 points 為單位
+    return Spacer(0, h)
 
 # -----------------------------
 # Page Config（若已被其他頁設定，忽略即可）
@@ -74,60 +73,7 @@ except Exception:
     pass
 
 # -----------------------------
-# 全站字型注入（HTML/CSS 用）
-# -----------------------------
-def _embed_font_css() -> str:
-    """優先注入本地 NotoSansTC 為 data:uri，讓頁面中文字與下載 HTML 一致。"""
-    candidates = [
-        "NotoSansTC-Regular.ttf", "NotoSansTC-Regular.otf",
-        "fonts/NotoSansTC-Regular.ttf", "fonts/NotoSansTC-Regular.otf",
-        "fonts/NotoSansCJKtc-Regular.otf", "fonts/SourceHanSansTC-Regular.otf",
-    ]
-    for p in candidates:
-        if os.path.exists(p):
-            try:
-                b64 = base64.b64encode(open(p, "rb").read()).decode("utf-8")
-                fmt = "truetype" if p.lower().endswith(".ttf") else "opentype"
-                st.markdown(
-                    f"""
-<style>
-@font-face {{
-  font-family: 'NotoSansTC_Local';
-  src: url(data:font/{'ttf' if fmt=='truetype' else 'otf'};base64,{b64}) format('{fmt}');
-  font-weight: 400; font-style: normal; font-display: swap;
-}}
-@font-face {{
-  font-family: 'NotoSansTC_Local';
-  src: url(data:font/{'ttf' if fmt=='truetype' else 'otf'};base64,{b64}) format('{fmt}');
-  font-weight: 700; font-style: normal; font-display: swap;
-}}
-html, body, [data-testid="stAppViewContainer"] * {{
-  font-family: 'NotoSansTC_Local','Noto Sans TC','Microsoft JhengHei','PingFang TC',sans-serif !important;
-}}
-</style>
-""",
-                    unsafe_allow_html=True,
-                )
-                return "NotoSansTC_Local"
-            except Exception:
-                pass
-    # 後備
-    st.markdown(
-        """
-<style>
-html, body, [data-testid="stAppViewContainer"] * {
-  font-family: 'Noto Sans TC','Microsoft JhengHei','PingFang TC',sans-serif !important;
-}
-</style>
-""",
-        unsafe_allow_html=True,
-    )
-    return "Noto Sans TC"
-
-PAGE_FONT_FAMILY = _embed_font_css()
-
-# -----------------------------
-# Matplotlib 中文字型（圖表用）
+# Matplotlib 中文字型（圖表用）— 保留避免圖表中文字亂碼
 # -----------------------------
 @st.cache_resource(show_spinner=False)
 def _setup_cjk_font_for_matplotlib() -> str:
@@ -143,7 +89,7 @@ def _setup_cjk_font_for_matplotlib() -> str:
         "C:/Windows/Fonts/msjh.ttc",
     ]
     family_candidates = [
-        "NotoSansTC_Local", "Noto Sans TC", "Noto Sans CJK TC",
+        "Noto Sans TC", "Noto Sans CJK TC",
         "Source Han Sans TC", "Microsoft JhengHei", "PingFang TC"
     ]
     matplotlib.rcParams["axes.unicode_minus"] = False
@@ -177,7 +123,7 @@ def _setup_cjk_font_for_matplotlib() -> str:
 CHOSEN_MPL_FONT = _setup_cjk_font_for_matplotlib()
 
 # -----------------------------
-# 常數與示範資料（示意，非正式稅務建議）
+# 常數與示範資料（示意）
 # -----------------------------
 ASSET_CATS = ["公司股權", "不動產", "金融資產", "保單", "海外資產", "其他資產"]
 TAIWAN_ESTATE_TAX_TABLE = [
@@ -282,11 +228,6 @@ def simulate_with_without_insurance(total_assets: int, insurance_benefit: int) -
 
 # --- 新增：保費現值（躉繳/年繳） ---
 def pv_of_premiums(premium_amount: int, years: int, rate: float, mode: str) -> float:
-    """
-    保費現值（示意）：
-    - mode = '躉繳'：一次繳，PV = premium_amount
-    - mode = '年繳'：每年年末支付，PV = Σ premium_amount / (1+rate)^t
-    """
     premium_amount = max(0, int(premium_amount))
     years = max(0, int(years))
     rate = max(0.0, float(rate))
@@ -296,7 +237,7 @@ def pv_of_premiums(premium_amount: int, years: int, rate: float, mode: str) -> f
         return 0.0
     if rate == 0:
         return float(premium_amount * years)
-    # 年金現值因子 AF = (1 - (1+r)^-n) / r
+    # 年金現值因子
     af = (1 - (1 + rate) ** (-years)) / rate
     return float(premium_amount) * af
 
@@ -334,7 +275,7 @@ def build_summary_html(r: Dict[str, int], logo_src: str, contact_text: str,
 <meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'>
 <title>家族資產 × 策略摘要（示意）</title>
 <style>
-body {{ font-family: '{PAGE_FONT_FAMILY}','Noto Sans TC','Microsoft JhengHei','PingFang TC',sans-serif; line-height:1.6; padding:24px; }}
+body {{ font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Oxygen,Ubuntu,Cantarell,"Noto Sans TC","Microsoft JhengHei","PingFang TC",sans-serif; line-height:1.6; padding:24px; }}
 .section {{ margin-bottom:18px; }}
 .kpi {{ display:flex; gap:16px; flex-wrap:wrap; }}
 .card {{ border:1px solid #eee; border-radius:12px; padding:12px 16px; background:#fafafa; }}
@@ -528,7 +469,6 @@ discount_rate = st.number_input(
 
 if st.button("⚡ 一鍵模擬差異"):
     r = simulate_with_without_insurance(total_assets, insurance_benefit)
-    # 新增：保費現值與淨提升
     pv = pv_of_premiums(premium_amount, years, discount_rate, premium_mode)
     net_gain = r["差異"] - pv
     st.session_state.demo_result = {
@@ -652,7 +592,7 @@ if r:
         story.append(pdf_spacer(6))
         story.append(pdf_p("備註：本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。"))
 
-        pdf_bytes = build_branded_pdf_bytes(story)  # 由你的模組注入品牌頁首/頁尾/LOGO/色票/字型
+        pdf_bytes = build_branded_pdf_bytes(story)
         st.download_button(
             "⬇️ 下載一頁摘要（PDF｜品牌頁首/頁尾）",
             data=pdf_bytes,
