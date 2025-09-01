@@ -8,62 +8,6 @@ import streamlit as st
 import graphviz
 import pandas as pd
 
-
-@st.cache_data(show_spinner=False)
-def _build_graph_cached(tree_json: str) -> str:
-    """以 family_tree 的 JSON 當 key 快取，回傳 DOT 原始字串。"""
-    import graphviz, json as _json
-    data = _json.loads(tree_json)
-
-    g = graphviz.Digraph("G", engine="dot")
-    g.attr(rankdir="TB", splines="line", nodesep="0.5", ranksep="0.9")
-    g.attr("edge", dir="none", penwidth="2")
-
-    persons = data.get("persons", {})
-    marriages = data.get("marriages", {})
-
-    # ----- nodes -----
-    for pid, p in persons.items():
-        name = p.get("name", pid) or pid
-        gender = (p.get("gender") or "").lower()
-        deceased = p.get("deceased", False)
-
-        shape = "box"
-        style = "rounded,filled" if not deceased else "rounded,dashed,filled"
-        fill = "#F0F9FF" if gender in ("女","female","f") else "#F8FAFC"
-
-        g.node(pid, label=name + (" †" if deceased else ""), shape=shape, style=style, fillcolor=fill, color="#374151")
-
-    # ----- marriages (spouse line straight) -----
-    for mid, m in marriages.items():
-        spouses = m.get("spouses", [])
-        order = m.get("order") or spouses
-        children = m.get("children", [])
-        divorced = m.get("divorced", False)
-
-        if len(order) == 2:
-            a, b = order
-            junction = f"j_{mid}"
-            g.node(junction, label="", shape="point", width="0.01", height="0.01")
-            g.edge(a, junction, style="dashed" if divorced else "solid")
-            g.edge(junction, b, style="dashed" if divorced else "solid")
-            for cid in children:
-                g.edge(junction, cid)
-
-        elif len(order) == 1:
-            a = order[0]
-            for cid in children:
-                g.edge(a, cid)
-
-        else:
-            # no spouses but children listed
-            for cid in children:
-                # 直接掛在一個虛擬點，避免孤兒邊
-                junction = f"j_{mid}"
-                g.node(junction, label="", shape="point", width="0.01", height="0.01")
-                g.edge(junction, cid)
-
-    return g.source
 # ----------------------------- State & Helpers -----------------------------
 
 def _uid(prefix: str = "id") -> str:
@@ -475,10 +419,8 @@ def _viewer():
     if not tree["persons"]:
         st.info("尚未建立任何成員。請先於上方區塊新增人員，並建立婚姻與子女。")
         return
-    import json as _json, graphviz as _gv
-    key = _json.dumps(tree, sort_keys=True, ensure_ascii=False)
-    dot = _build_graph_cached(key)
-    st.graphviz_chart(_gv.Source(dot), use_container_width=True)
+    g = render_graph(tree)
+    st.graphviz_chart(g, use_container_width=True)
 
 # ----------------------------- Entry -----------------------------
 
