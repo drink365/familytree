@@ -1,7 +1,8 @@
-# demo.py（寬版｜統一 NotoSansTC｜HTML + 內建品牌PDF｜無引導）
+# demo.py（寬版｜統一 NotoSansTC｜HTML + 內建品牌PDF｜無引導｜含保費現值與淨提升）
 # - 沿用 utils/pdf_utils.build_branded_pdf_bytes（品牌頁首/頁尾/LOGO/色票/字型）
-# - 提供相容墊片：pdf_p/pdf_h2/pdf_title/pdf_spacer，避免 p/h2/title/spacer 不是 callable 時報錯
+# - 相容墊片：pdf_p/pdf_h2/pdf_title/pdf_spacer，避免 p/h2/title/spacer 不是 callable 時報錯
 # - 主標題 h2 粗體、中文字型一致、Email 為 123@gracefo.com
+# - 新增：保費現值（躉繳/年繳＋折現率）與「淨提升（扣保費現值）」指標
 
 from typing import Dict, Optional
 import base64, json, os, math
@@ -21,7 +22,7 @@ HAVE_BRANDED_PDF = False
 build_branded_pdf_bytes = None
 
 try:
-    import utils.pdf_utils as _pdf  # 你的 ZIP 內模組
+    import utils.pdf_utils as _pdf  # 你的專案模組
     build_branded_pdf_bytes = getattr(_pdf, "build_branded_pdf_bytes", None)
     HAVE_BRANDED_PDF = callable(build_branded_pdf_bytes)
 except Exception:
@@ -62,7 +63,7 @@ def pdf_spacer(h: float = 6, **kw):
     if callable(fn):
         return fn(h, **kw)
     from reportlab.platypus import Spacer
-    return Spacer(0, h)  # points 為單位，已足夠
+    return Spacer(0, h)  # 以 points 為單位
 
 # -----------------------------
 # Page Config（若已被其他頁設定，忽略即可）
@@ -279,6 +280,26 @@ def simulate_with_without_insurance(total_assets: int, insurance_benefit: int) -
         "差異": cash_with - cash_without,
     }
 
+# --- 新增：保費現值（躉繳/年繳） ---
+def pv_of_premiums(premium_amount: int, years: int, rate: float, mode: str) -> float:
+    """
+    保費現值（示意）：
+    - mode = '躉繳'：一次繳，PV = premium_amount
+    - mode = '年繳'：每年年末支付，PV = Σ premium_amount / (1+rate)^t
+    """
+    premium_amount = max(0, int(premium_amount))
+    years = max(0, int(years))
+    rate = max(0.0, float(rate))
+    if mode == "躉繳":
+        return float(premium_amount)
+    if years == 0:
+        return 0.0
+    if rate == 0:
+        return float(premium_amount * years)
+    # 年金現值因子 AF = (1 - (1+r)^-n) / r
+    af = (1 - (1 + rate) ** (-years)) / rate
+    return float(premium_amount) * af
+
 # -----------------------------
 # 報告 HTML（下載用，一頁式）
 # -----------------------------
@@ -297,6 +318,17 @@ def build_summary_html(r: Dict[str, int], logo_src: str, contact_text: str,
       <li><strong>建議邏輯：</strong>{scenario_desc.get('建議邏輯','')}</li>
     </ul>
   </div>"""
+    # 若有保費現值與淨提升，組成區塊
+    premium_block = ""
+    if "保費現值" in r and "淨提升" in r:
+        premium_block = f"""
+  <div class='section'>
+    <h4>成本與淨效益</h4>
+    <p>保費成本（現值）：<strong>NT$ {r['保費現值']:,.0f}</strong>
+       （{r.get('繳別','')}，每期 NT$ {r.get('每期保費',0):,.0f}，{r.get('年期',0)} 年，折現率 {r.get('折現率',0.0)*100:.1f}%）</p>
+    <p>淨提升（扣除保費現值）：<strong>NT$ {r['淨提升']:,.0f}</strong></p>
+  </div>"""
+
     return f"""<!DOCTYPE html>
 <html lang='zh-Hant'>
 <head>
@@ -334,6 +366,7 @@ hr {{ border:none; border-top:1px solid #eee; margin:16px 0; }}
     </ul>
     <p><strong>差異：</strong>提升可動用現金 <strong>NT$ {r['差異']:,.0f}</strong></p>
   </div>
+  {premium_block}
   {scenario_block}
   <hr />
   <div class='footer'>
@@ -478,18 +511,47 @@ insurance_benefit = st.number_input(
     "預估保單理賠金（可調）", min_value=0, step=100_000, value=int(pre_tax),
     help="示意用途：假設理賠金直接提供給家人，可提高可動用現金。"
 )
+
+# 新增：保費與折現設定
+st.markdown("**保費與假設（用於扣除成本）**")
+c_p1, c_p2, c_p3 = st.columns([1,1,1.2])
+with c_p1:
+    premium_mode = st.selectbox("繳別", ["躉繳", "年繳"], index=1)
+with c_p2:
+    premium_amount = st.number_input("每期保費（NT$）", min_value=0, step=50_000, value=300_000)
+with c_p3:
+    years = st.number_input("預估持有／繳費年數（年）", min_value=1, max_value=60, step=1, value=10)
+discount_rate = st.number_input(
+    "折現率（年）", min_value=0.0, max_value=0.2, step=0.005, value=0.03,
+    help="用來把未來保費折現回今天，反映資金機會成本（例如 3%）。"
+)
+
 if st.button("⚡ 一鍵模擬差異"):
     r = simulate_with_without_insurance(total_assets, insurance_benefit)
-    st.session_state.demo_result = {**r, "總資產": total_assets, "建議保額": insurance_benefit}
+    # 新增：保費現值與淨提升
+    pv = pv_of_premiums(premium_amount, years, discount_rate, premium_mode)
+    net_gain = r["差異"] - pv
+    st.session_state.demo_result = {
+        **r,
+        "總資產": total_assets,
+        "建議保額": insurance_benefit,
+        "保費現值": int(round(pv)),
+        "淨提升": int(round(net_gain)),
+        "繳別": premium_mode,
+        "每期保費": int(premium_amount),
+        "年期": int(years),
+        "折現率": float(discount_rate),
+    }
     st.success("模擬完成！")
     c1,c2 = st.columns(2)
     with c1:
         st.metric("稅基 (NT$)", f"{r['稅基']:,.0f}")
         st.metric("預估遺產稅 (NT$)", f"{r['遺產稅']:,.0f}")
+        st.metric("保費成本（現值, NT$）", f"{st.session_state.demo_result['保費現值']:,.0f}")
     with c2:
         st.metric("無保單：可用資金 (NT$)", f"{r['無保單_可用資金']:,.0f}")
         st.metric("有保單：可用資金 (NT$)", f"{r['有保單_可用資金']:,.0f}")
-    st.metric("差異（提升的可用現金）(NT$)", f"{r['差異']:,.0f}")
+        st.metric("淨提升（扣保費現值, NT$）", f"{st.session_state.demo_result['淨提升']:,.0f}")
 else:
     st.info("點擊『一鍵模擬差異』查看結果。")
 
@@ -519,6 +581,8 @@ if r:
     <li>有保單（理賠金 NT$ {r['建議保額']:,.0f}）：可用資金 <strong>NT$ {r['有保單_可用資金']:,.0f}</strong></li>
   </ul>
   <p><strong>差異</strong>：提升可動用現金 <strong>NT$ {r['差異']:,.0f}</strong></p>
+  <p><strong>保費成本（現值）</strong>：NT$ {r['保費現值']:,.0f}（{r['繳別']}，每期 NT$ {r['每期保費']:,.0f}，{r['年期']} 年，折現率 {r['折現率']*100:.1f}%）</p>
+  <p><strong>淨提升（扣除保費現值）</strong>：<strong>NT$ {r['淨提升']:,.0f}</strong></p>
   <blockquote style="color:#6b7280; font-size:13px;">本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。</blockquote>
 </div>
 """)
@@ -572,13 +636,20 @@ if r:
 
         story.append(pdf_spacer(6))
 
+        # 成本與淨效益
+        story.append(pdf_p(
+            f"保費成本（現值）：NT$ {r['保費現值']:,.0f}（{r['繳別']}，每期 NT$ {r['每期保費']:,.0f}，{r['年期']} 年，折現率 {r['折現率']*100:.1f}%）"
+        ))
+        story.append(pdf_p(f"淨提升（扣除保費現值）：NT$ {r['淨提升']:,.0f}"))
+
         if scenario_key and desc:
+            story.append(pdf_spacer(6))
             story.append(pdf_h2(f"情境說明｜{scenario_key}"))
             story.append(pdf_p(f"適用對象：{desc.get('適用對象','')}"))
             story.append(pdf_p(f"常見痛點：{desc.get('常見痛點','')}"))
             story.append(pdf_p(f"建議邏輯：{desc.get('建議邏輯','')}"))
-            story.append(pdf_spacer(4))
 
+        story.append(pdf_spacer(6))
         story.append(pdf_p("備註：本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。"))
 
         pdf_bytes = build_branded_pdf_bytes(story)  # 由你的模組注入品牌頁首/頁尾/LOGO/色票/字型
