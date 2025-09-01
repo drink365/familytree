@@ -2,7 +2,18 @@
 import json
 import os
 from datetime import datetime
+
+
 import streamlit as st
+
+# 單頁模式：關閉 Streamlit 自動生成的多頁選單
+st.set_page_config(
+    page_title="永傳家族傳承教練",
+    page_icon="📦",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
 
 # -------------------- App Config --------------------
 st.set_page_config(
