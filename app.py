@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import runpy
 from datetime import datetime
 import streamlit as st
 
@@ -17,7 +18,6 @@ def load_brand():
     try:
         return json.load(open("brand.json", "r", encoding="utf-8"))
     except Exception:
-        # 預設品牌設定
         return {
             "PRIMARY": "#D33B2C",
             "BG": "#F7FAFC",
@@ -39,7 +39,6 @@ if not os.path.exists(LOGO_PATH):
 
 # -------------------- Router helpers --------------------
 def navigate(key: str):
-    """更新網址參數（在 button 頂層呼叫即可觸發 rerun）。"""
     st.query_params.update({"page": key})
 
 def get_page_from_query() -> str:
@@ -88,7 +87,7 @@ def nav_button(label: str, page_key: str, icon: str):
     if st.sidebar.button(f"{icon} {label}", use_container_width=True, key=f"nav_{page_key}"):
         navigate(page_key)
 
-# 這裡全部改成 emoji，避免出現 keyboard_double_arrow_right
+# 全部用 emoji，避免出現 keyboard_double_arrow_right 字樣
 for label, key, icon in [
     ("首頁", "home", "🏠"),
     ("家族樹", "familytree", "🌳"),
@@ -96,7 +95,7 @@ for label, key, icon in [
     ("法稅工具", "tax", "🧾"),
     ("保單策略", "policy", "📦"),
     ("價值觀探索", "values", "💬"),
-    ("互動 Demo", "demo", "➡️"),   # 這裡直接加上 Demo 頁
+    ("互動 Demo", "demo", "➡️"),
     ("聯絡我們", "about", "👩‍💼"),
 ]:
     nav_button(label, key, icon)
@@ -158,14 +157,19 @@ def render_home():
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        if st.button("① 先把關係畫清楚 🌳", use_container_width=True):
+        if st.button("① 先把關係畫清楚 🌳", use_container_width=True, key="go_familytree"):
             navigate("familytree")
     with c2:
-        if st.button("② 看見風險與稅務缺口 🏛️", use_container_width=True):
+        if st.button("② 看見風險與稅務缺口 🏛️", use_container_width=True, key="go_legacy"):
             navigate("legacy")
     with c3:
-        if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True):
+        if st.button("③ 設計可持續的現金節奏 📦", use_container_width=True, key="go_policy"):
             navigate("policy")
+
+    # 額外加一個明顯的 Demo CTA
+    st.markdown("")
+    if st.button("➡️ 先看互動 Demo（3 分鐘）", use_container_width=True, key="go_demo_main"):
+        navigate("demo")
 
     st.divider()
     st.markdown(
@@ -201,7 +205,13 @@ def _page_tax(): _safe_import_and_render("pages_tax")
 def _page_policy(): _safe_import_and_render("pages_policy")
 def _page_values(): _safe_import_and_render("pages_values")
 def _page_about(): _safe_import_and_render("pages_about")
-def _page_demo(): _safe_import_and_render("demo")  # 直接載入 demo.py
+
+# Demo 頁改用 runpy 執行單檔（不用 render()）
+def _page_demo():
+    try:
+        runpy.run_path("demo.py", run_name="__main__")
+    except Exception as e:
+        st.error(f"執行 demo.py 失敗：{e}")
 
 _ROUTES = {
     "home": render_home,
