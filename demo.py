@@ -1,8 +1,8 @@
-# demo.py（寬版｜全站/圖表統一 NotoSansTC｜HTML+PDF 雙下載｜新手引導＋唯一鍵）
-# 變更重點：
-# - 文字與圖表全面套用根目錄/專案字型 NotoSansTC-Regular.ttf（若無則 fonts/、系統字型）
-# - 摘要區改用 HTML 渲染，避免 $ 觸發 LaTeX 導致「NT 變斜體/缺字」
-# - 下載：HTML（保底）＋ 若有 reportlab 自動顯示 PDF
+# demo.py（寬版｜統一 NotoSansTC｜HTML+PDF 雙下載｜無引導）
+# 修正：
+# - 取消新手引導功能（所有操作直接可用）
+# - 摘要區改為純 HTML 渲染並去除縮排，避免被 Markdown 當成程式碼區塊
+# - 全頁與圖表統一使用 NotoSansTC（優先載入根目錄/ fonts/，找不到再用系統字型）
 # - 聯絡信箱：123@gracefo.com
 
 from typing import Dict, Optional
@@ -12,6 +12,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib import font_manager as fm
 import streamlit as st
+from textwrap import dedent
 
 # -----------------------------
 # Page Config（若已被其他頁設定，忽略即可）
@@ -27,7 +28,7 @@ except Exception:
 def _embed_font_css() -> str:
     """
     優先讀取根目錄 / fonts/ 的 NotoSansTC-Regular.ttf（或 .otf），以 data:uri 形式注入 CSS。
-    回傳：可用於 CSS 的 font-family 名稱（NotoSansTC_Local 或後備家族）。
+    回傳：CSS 可用的 font-family 名稱。
     """
     candidates = [
         "NotoSansTC-Regular.ttf", "NotoSansTC-Regular.otf",
@@ -41,22 +42,22 @@ def _embed_font_css() -> str:
                 fmt = "truetype" if p.lower().endswith(".ttf") else "opentype"
                 st.markdown(
                     f"""
-                    <style>
-                    @font-face {{
-                      font-family: 'NotoSansTC_Local';
-                      src: url(data:font/{'ttf' if fmt=='truetype' else 'otf'};base64,{b64}) format('{fmt}');
-                      font-weight: 400; font-style: normal; font-display: swap;
-                    }}
-                    @font-face {{
-                      font-family: 'NotoSansTC_Local';
-                      src: url(data:font/{'ttf' if fmt=='truetype' else 'otf'};base64,{b64}) format('{fmt}');
-                      font-weight: 700; font-style: normal; font-display: swap;
-                    }}
-                    html, body, [data-testid="stAppViewContainer"] * {{
-                      font-family: 'NotoSansTC_Local','Noto Sans TC','Microsoft JhengHei','PingFang TC',sans-serif !important;
-                    }}
-                    </style>
-                    """,
+<style>
+@font-face {{
+  font-family: 'NotoSansTC_Local';
+  src: url(data:font/{'ttf' if fmt=='truetype' else 'otf'};base64,{b64}) format('{fmt}');
+  font-weight: 400; font-style: normal; font-display: swap;
+}}
+@font-face {{
+  font-family: 'NotoSansTC_Local';
+  src: url(data:font/{'ttf' if fmt=='truetype' else 'otf'};base64,{b64}) format('{fmt}');
+  font-weight: 700; font-style: normal; font-display: swap;
+}}
+html, body, [data-testid="stAppViewContainer"] * {{
+  font-family: 'NotoSansTC_Local','Noto Sans TC','Microsoft JhengHei','PingFang TC',sans-serif !important;
+}}
+</style>
+""",
                     unsafe_allow_html=True,
                 )
                 return "NotoSansTC_Local"
@@ -65,12 +66,12 @@ def _embed_font_css() -> str:
     # 後備（若沒找到本地字型檔）
     st.markdown(
         """
-        <style>
-        html, body, [data-testid="stAppViewContainer"] * {
-          font-family: 'Noto Sans TC','Microsoft JhengHei','PingFang TC',sans-serif !important;
-        }
-        </style>
-        """,
+<style>
+html, body, [data-testid="stAppViewContainer"] * {
+  font-family: 'Noto Sans TC','Microsoft JhengHei','PingFang TC',sans-serif !important;
+}
+</style>
+""",
         unsafe_allow_html=True,
     )
     return "Noto Sans TC"
@@ -161,6 +162,7 @@ SCENARIOS = {
         "保單": 5_000_000, "海外資產": 6_000_000, "其他資產": 2_000_000,
     },
 }
+
 SCENARIO_DESCRIPTIONS = {
     "創辦人A｜公司占比高": {
         "適用對象": "第一代創辦人、股權集中、資產波動度高",
@@ -367,8 +369,6 @@ if "demo_brand_contact" not in st.session_state:
     st.session_state.demo_brand_contact = "永傳家族辦公室｜Grace Family Office\nhttps://gracefo.com\n123@gracefo.com"
 if "demo_logo_data_uri" not in st.session_state: st.session_state.demo_logo_data_uri = None
 if "demo_logo_url" not in st.session_state: st.session_state.demo_logo_url = ""
-if "demo_onboarding" not in st.session_state: st.session_state.demo_onboarding = True
-if "demo_step" not in st.session_state: st.session_state.demo_step = 1
 
 # 自動載入品牌設定（brand.json / logo.png / logo2.png）
 _brand = load_brand_config()
@@ -395,74 +395,62 @@ page_logo_src = st.session_state.demo_logo_data_uri or st.session_state.demo_log
 brand_contact_text = st.session_state.demo_brand_contact
 
 # -----------------------------
-# Onboarding 小工具
+# 頁面內容
 # -----------------------------
-def step_enabled(n:int)->bool:
-    return True if not st.session_state.demo_onboarding else (st.session_state.demo_step==n)
-
-def guide_hint(title:str, bullets:list):
-    st.success("✅ " + title); [st.markdown(f"- {b}") for b in bullets]
-
-def step_nav(prefix:str):
-    c1,c2,c3 = st.columns(3)
-    with c1:
-        st.button("⬅ 上一步", key=f"{prefix}_prev",
-                  disabled=st.session_state.demo_step<=1,
-                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step-1))
-    with c2:
-        st.button("略過引導", key=f"{prefix}_skip",
-                  on_click=lambda: st.session_state.update(demo_onboarding=False))
-    with c3:
-        st.button("下一步 ➡", key=f"{prefix}_next",
-                  disabled=st.session_state.demo_step>=3,
-                  on_click=lambda: st.session_state.update(demo_step=st.session_state.demo_step+1))
-
-def onboarding_header():
-    if st.session_state.demo_onboarding:
-        st.progress((st.session_state.demo_step-1)/3, text=f"引導進度：第 {st.session_state.demo_step}/3 步")
-
-# -----------------------------
-# 頁面：三步驟體驗
-# -----------------------------
-st.title("🧭 三步驟 Demo｜家族資產地圖 × 一鍵模擬 × 報告")
-onboarding_header()
-if st.session_state.demo_onboarding:
-    st.info("這是新手引導模式：依提示完成三步驟，就能產生一頁摘要。")
+st.title("🧭 三步驟 Demo｜家族資產地圖 × 一鍵模擬 × 報告（簡化版）")
 if page_logo_src: st.image(page_logo_src, width=150)
 st.caption("3 分鐘看懂、5 分鐘產出成果。示意版，非正式稅務或法律建議。")
-cols = st.columns(3)
-for i,t in enumerate(["① 建立資產地圖","② 一鍵模擬差異","③ 生成一頁摘要"]):
-    with cols[i]:
-        st.markdown(f'<div style="display:inline-block;padding:4px 10px;border-radius:999px;background:#eef;">{t}</div>', unsafe_allow_html=True)
+chips = ["① 建立資產地圖","② 一鍵模擬差異","③ 生成一頁摘要"]
+c1,c2,c3 = st.columns(3)
+for col, text in zip([c1,c2,c3], chips):
+    with col:
+        st.markdown(f'<div style="display:inline-block;padding:4px 10px;border-radius:999px;background:#eef;">{text}</div>', unsafe_allow_html=True)
+
 st.divider()
 
 # Step 1
 st.subheader("① 建立家族資產地圖")
-if step_enabled(1) and st.session_state.demo_onboarding:
-    guide_hint("先建立資產地圖", ["先按「🔎 載入示範數據」或選一個情境。", "再微調下方金額即可。","準備好就按下方「下一步」。"])
 left,right = st.columns([1,1])
 with left:
     st.write("輸入六大資產類別金額（新台幣）：")
     cA,cB = st.columns(2)
     with cA:
-        if st.button("🔎 載入示範數據", disabled=not step_enabled(1)):
-            st.session_state.demo_assets = DEMO_DATA.copy(); st.session_state.demo_used=True; st.session_state.demo_selected_scenario=None
+        if st.button("🔎 載入示範數據"):
+            st.session_state.demo_assets = DEMO_DATA.copy()
+            st.session_state.demo_used = True
+            st.session_state.demo_selected_scenario = None
     with cB:
-        if st.button("🧹 清除/歸零", disabled=not step_enabled(1)):
-            st.session_state.demo_assets = {k:0 for k in ASSET_CATS}; st.session_state.demo_used=False; st.session_state.demo_result=None; st.session_state.demo_selected_scenario=None
+        if st.button("🧹 清除/歸零"):
+            st.session_state.demo_assets = {k: 0 for k in ASSET_CATS}
+            st.session_state.demo_used = False
+            st.session_state.demo_result = None
+            st.session_state.demo_selected_scenario = None
+
     s1,s2,s3 = st.columns(3)
     with s1:
-        if st.button("🏢 創辦人A", disabled=not step_enabled(1)):
-            st.session_state.demo_assets = SCENARIOS["創辦人A｜公司占比高"].copy(); st.session_state.demo_used=True; st.session_state.demo_selected_scenario="創辦人A｜公司占比高"; st.info("已載入情境：創辦人A｜公司占比高")
+        if st.button("🏢 創辦人A"):
+            st.session_state.demo_assets = SCENARIOS["創辦人A｜公司占比高"].copy()
+            st.session_state.demo_used = True
+            st.session_state.demo_selected_scenario = "創辦人A｜公司占比高"
+            st.info("已載入情境：創辦人A｜公司占比高")
     with s2:
-        if st.button("🌏 跨境家庭B", disabled=not step_enabled(1)):
-            st.session_state.demo_assets = SCENARIOS["跨境家庭B｜海外資產高"].copy(); st.session_state.demo_used=True; st.session_state.demo_selected_scenario="跨境家庭B｜海外資產高"; st.info("已載入情境：跨境家庭B｜海外資產高")
+        if st.button("🌏 跨境家庭B"):
+            st.session_state.demo_assets = SCENARIOS["跨境家庭B｜海外資產高"].copy()
+            st.session_state.demo_used = True
+            st.session_state.demo_selected_scenario = "跨境家庭B｜海外資產高"
+            st.info("已載入情境：跨境家庭B｜海外資產高")
     with s3:
-        if st.button("💼 保守型C", disabled=not step_enabled(1)):
-            st.session_state.demo_assets = SCENARIOS["保守型C｜金融資產高"].copy(); st.session_state.demo_used=True; st.session_state.demo_selected_scenario="保守型C｜金融資產高"; st.info("已載入情境：保守型C｜金融資產高")
-    if "demo_assets" not in st.session_state: st.session_state.demo_assets = {k:0 for k in ASSET_CATS}
+        if st.button("💼 保守型C"):
+            st.session_state.demo_assets = SCENARIOS["保守型C｜金融資產高"].copy()
+            st.session_state.demo_used = True
+            st.session_state.demo_selected_scenario = "保守型C｜金融資產高"
+            st.info("已載入情境：保守型C｜金融資產高")
+
     for cat in ASSET_CATS:
-        st.session_state.demo_assets[cat] = st.number_input(f"{cat}", min_value=0, step=100_000, value=int(st.session_state.demo_assets.get(cat,0)), disabled=not step_enabled(1))
+        st.session_state.demo_assets[cat] = st.number_input(
+            f"{cat}", min_value=0, step=100_000, value=int(st.session_state.demo_assets.get(cat, 0))
+        )
+
 with right:
     assets = st.session_state.demo_assets
     df = pd.DataFrame({"類別": list(assets.keys()), "金額": list(assets.values())})
@@ -470,15 +458,16 @@ with right:
     st.write("**資產分布**")
     if total_assets > 0:
         colors = ["#1F4A7A","#C99A2E","#4CAF50","#E64A19","#7E57C2","#455A64"][:len(df)]
-        chart_style = st.radio("圖表樣式", ["甜甜圈圖（建議）","圓餅圖"], horizontal=True, key="style_pie")
+        style = st.radio("圖表樣式", ["甜甜圈圖（建議）","圓餅圖"], horizontal=True, key="style_pie")
         sizes, labels = df["金額"].values, df["類別"].values
         fig, ax = plt.subplots(figsize=(6.8,5.2))
-        wedges, texts, autotexts = ax.pie(sizes, labels=None,
-            autopct=lambda p: f"{p:.1f}%" if p>=3 else "", startangle=90, colors=colors, pctdistance=0.75)
+        wedges, texts, autotexts = ax.pie(
+            sizes, labels=None, autopct=lambda p: f"{p:.1f}%" if p>=3 else "",
+            startangle=90, colors=colors, pctdistance=0.75
+        )
         ax.axis("equal")
-        if chart_style.startswith("甜甜圈"):
+        if style.startswith("甜甜圈"):
             ax.add_artist(plt.Circle((0,0), 0.55, fc="white"))
-        # 套用同一字型到百分比/圖例/標題
         if CHOSEN_MPL_FONT:
             prop = fm.FontProperties(family=CHOSEN_MPL_FONT, size=10)
             for t in autotexts: t.set_fontproperties(prop)
@@ -492,17 +481,17 @@ with right:
     else:
         st.info("請輸入金額或先點『載入示範數據』。")
     st.metric("目前總資產 (NT$)", f"{total_assets:,.0f}")
-if st.session_state.demo_onboarding: step_nav("s1")
+
 st.divider()
 
 # Step 2
 st.subheader("② 一鍵模擬：有保單 vs 無保單")
-if step_enabled(2) and st.session_state.demo_onboarding:
-    guide_hint("模擬有／無保單的差異", ["系統以稅額做為建議保額（可調整）。", "點「⚡ 一鍵模擬差異」後會顯示差異與指標。", "滿意後按下一步產出摘要。"])
 pre_tax = calc_estate_tax(max(0, total_assets - BASIC_EXEMPTION)) if st.session_state.demo_used else 0
-insurance_benefit = st.number_input("預估保單理賠金（可調）", min_value=0, step=100_000, value=int(pre_tax),
-    help="示意用途：假設理賠金直接提供給家人，可提高可動用現金。", disabled=not step_enabled(2))
-if st.button("⚡ 一鍵模擬差異", disabled=not step_enabled(2)):
+insurance_benefit = st.number_input(
+    "預估保單理賠金（可調）", min_value=0, step=100_000, value=int(pre_tax),
+    help="示意用途：假設理賠金直接提供給家人，可提高可動用現金。"
+)
+if st.button("⚡ 一鍵模擬差異"):
     r = simulate_with_without_insurance(total_assets, insurance_benefit)
     st.session_state.demo_result = {**r, "總資產": total_assets, "建議保額": insurance_benefit}
     st.success("模擬完成！")
@@ -516,8 +505,9 @@ if st.button("⚡ 一鍵模擬差異", disabled=not step_enabled(2)):
     st.metric("差異（提升的可用現金）(NT$)", f"{r['差異']:,.0f}")
 else:
     st.info("點擊『一鍵模擬差異』查看結果。")
+
 st.caption("＊法稅提醒：此模擬僅為示意，實務須視受益人、給付方式與最新法令而定。")
-if st.session_state.demo_onboarding: step_nav("s2")
+
 st.divider()
 
 # Step 3
@@ -527,40 +517,41 @@ if r:
     scenario_key = st.session_state.get("demo_selected_scenario")
     desc = SCENARIO_DESCRIPTIONS.get(scenario_key) if scenario_key else None
 
-    # 內頁摘要（改 HTML，杜絕 $ 解析）
-    summary_html = f"""
-    <div class="summary" style="font-size:15px; line-height:1.9;">
-      <p><strong>總資產</strong>：NT$ {r['總資產']:,.0f}</p>
-      <p><strong>稅務簡估</strong></p>
-      <ul>
-        <li>稅基（總資產 − 基本免稅額 NT$ {BASIC_EXEMPTION:,.0f}）： <strong>NT$ {r['稅基']:,.0f}</strong></li>
-        <li>預估遺產稅： <strong>NT$ {r['遺產稅']:,.0f}</strong></li>
-      </ul>
-      <p><strong>情境比較</strong></p>
-      <ul>
-        <li>無保單：可用資金 <strong>NT$ {r['無保單_可用資金']:,.0f}</strong></li>
-        <li>有保單（理賠金 NT$ {r['建議保額']:,.0f}）：可用資金 <strong>NT$ {r['有保單_可用資金']:,.0f}</strong></li>
-      </ul>
-      <p><strong>差異</strong>：提升可動用現金 <strong>NT$ {r['差異']:,.0f}</strong></p>
-      <blockquote style="color:#6b7280; font-size:13px;">本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。</blockquote>
-    </div>
-    """
+    # 內頁摘要（純 HTML，去除縮排，避免被 Markdown 當成 code block）
+    summary_html = dedent(f"""\
+<div class="summary" style="font-size:15px; line-height:1.9;">
+  <p><strong>總資產</strong>：NT$ {r['總資產']:,.0f}</p>
+  <p><strong>稅務簡估</strong></p>
+  <ul>
+    <li>稅基（總資產 − 基本免稅額 NT$ {BASIC_EXEMPTION:,.0f}）： <strong>NT$ {r['稅基']:,.0f}</strong></li>
+    <li>預估遺產稅： <strong>NT$ {r['遺產稅']:,.0f}</strong></li>
+  </ul>
+  <p><strong>情境比較</strong></p>
+  <ul>
+    <li>無保單：可用資金 <strong>NT$ {r['無保單_可用資金']:,.0f}</strong></li>
+    <li>有保單（理賠金 NT$ {r['建議保額']:,.0f}）：可用資金 <strong>NT$ {r['有保單_可用資金']:,.0f}</strong></li>
+  </ul>
+  <p><strong>差異</strong>：提升可動用現金 <strong>NT$ {r['差異']:,.0f}</strong></p>
+  <blockquote style="color:#6b7280; font-size:13px;">本頁為示意，不構成稅務或法律建議；細節以專業顧問與最新法令為準。</blockquote>
+</div>
+""")
     if scenario_key and desc:
-        summary_html += f"""
-        <div style="margin-top:10px;">
-          <p><strong>情境說明｜{scenario_key}</strong></p>
-          <ul>
-            <li>適用對象：{desc.get('適用對象','')}</li>
-            <li>常見痛點：{desc.get('常見痛點','')}</li>
-            <li>建議邏輯：{desc.get('建議邏輯','')}</li>
-          </ul>
-        </div>
-        """
+        summary_html += dedent(f"""\
+<div style="margin-top:10px;">
+  <p><strong>情境說明｜{scenario_key}</strong></p>
+  <ul>
+    <li>適用對象：{desc.get('適用對象','')}</li>
+    <li>常見痛點：{desc.get('常見痛點','')}</li>
+    <li>建議邏輯：{desc.get('建議邏輯','')}</li>
+  </ul>
+</div>
+""")
     st.markdown(summary_html, unsafe_allow_html=True)
 
     # 下載：HTML（保底）
-    html = build_summary_html(r, logo_src=(st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url or ""),
-                              contact_text=brand_contact_text, scenario_title=scenario_key, scenario_desc=desc)
+    logo_src = (st.session_state.demo_logo_data_uri or st.session_state.demo_logo_url or "")
+    html = build_summary_html(r, logo_src=logo_src, contact_text=brand_contact_text,
+                              scenario_title=scenario_key, scenario_desc=desc)
     st.download_button("⬇️ 下載一頁摘要（HTML，可列印成 PDF）", data=html,
                        file_name="家族資產_策略摘要_demo.html", mime="text/html")
 
@@ -576,7 +567,5 @@ if r:
 else:
     st.info("先完成上一步『一鍵模擬差異』，系統會自動生成摘要。")
 
-if st.session_state.demo_onboarding: step_nav("s3")
-
 st.write("---")
-st.info("🚀 專業版（規劃中）：進階稅務模擬、更多情境比較、白標報告與客戶 Viewer。如需試用名單，請與我們聯繫。")
+st.info("🚀 專業版：進階稅務模擬、更多情境比較、白標報告與客戶 Viewer。如需試用名單，請與我們聯繫。")
